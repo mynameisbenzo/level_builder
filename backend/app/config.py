@@ -4,7 +4,7 @@ import os
 class Config:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     SQLALCHEMY_DATABASE_URI = os.environ.get(
-        "DATABASE_URL", "postgresql://localhost/level_builder_dev"
+        "DATABASE_URL", "postgresql+psycopg://localhost/level_builder_dev"
     )
 
 

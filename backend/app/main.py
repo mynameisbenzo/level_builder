@@ -10,7 +10,7 @@ def create_app(config_name: str = "development") -> Flask:
     app.config.from_object(config_by_name[config_name])
 
     db.init_app(app)
-    CORS(app, origins=["http://localhost:5173"])
+    CORS(app, origins=[app.config["FRONTEND_ORIGIN"]])
 
     from app.models import user  # noqa: F401  (registers model with SQLAlchemy)
 

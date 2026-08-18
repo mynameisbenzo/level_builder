@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>Level Builder — API</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap"
+		rel="stylesheet"
+	/>
+	<style>
+		:root {
+			--bg-navy: #1a1a2e;
+			--panel-purple: #2d1b4e;
+			--panel-border: #f4f1de;
+			--text-cream: #f4f1de;
+			--accent-cyan: #00d9ff;
+			--accent-gold: #ffd23f;
+			--accent-coral: #ff6b6b;
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			min-height: 100vh;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			padding: 24px;
+			background: var(--bg-navy);
+			background-image:
+				radial-gradient(circle at 20% 20%, rgba(0, 217, 255, 0.08), transparent 40%),
+				radial-gradient(circle at 80% 70%, rgba(255, 107, 107, 0.08), transparent 40%);
+			font-family: 'VT323', monospace;
+			color: var(--text-cream);
+			position: relative;
+			overflow: hidden;
+		}
+
+		/* Subtle CRT scanline overlay */
+		body::before {
+			content: '';
+			position: fixed;
+			inset: 0;
+			pointer-events: none;
+			background: repeating-linear-gradient(
+				to bottom,
+				rgba(0, 0, 0, 0) 0px,
+				rgba(0, 0, 0, 0) 2px,
+				rgba(0, 0, 0, 0.08) 3px
+			);
+			z-index: 10;
+		}
+
+		.panel {
+			position: relative;
+			max-width: 640px;
+			width: 100%;
+			background: var(--panel-purple);
+			border: 4px solid var(--panel-border);
+			box-shadow:
+				0 0 0 4px var(--bg-navy),
+				0 0 0 8px var(--panel-border),
+				8px 8px 0 rgba(0, 0, 0, 0.5);
+			padding: 40px 32px;
+			image-rendering: pixelated;
+		}
+
+		.sprite-row {
+			display: flex;
+			align-items: flex-end;
+			justify-content: center;
+			height: 48px;
+			margin-bottom: 20px;
+		}
+
+		.sprite {
+			width: 24px;
+			height: 24px;
+			background: #ffffff;
+			box-shadow: 0 0 0 2px var(--bg-navy);
+			animation: hop 0.6s infinite steps(1);
+		}
+
+		@keyframes hop {
+			0%, 100% { transform: translateY(0); }
+			50% { transform: translateY(-16px); }
+		}
+
+		@media (prefers-reduced-motion: reduce) {
+			.sprite {
+				animation: none;
+			}
+		}
+
+		h1 {
+			font-family: 'Press Start 2P', monospace;
+			font-size: 1.5rem;
+			text-align: center;
+			color: var(--accent-gold);
+			text-shadow: 3px 3px 0 var(--bg-navy);
+			margin: 0 0 20px;
+			line-height: 1.6;
+		}
+
+		.tagline {
+			text-align: center;
+			font-size: 1.4rem;
+			color: var(--text-cream);
+			margin: 0 0 32px;
+			line-height: 1.4;
+		}
+
+		.section-label {
+			font-family: 'Press Start 2P', monospace;
+			font-size: 0.7rem;
+			color: var(--accent-cyan);
+			margin: 0 0 12px;
+			letter-spacing: 1px;
+		}
+
+		.stack {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			margin-bottom: 32px;
+		}
+
+		.chip {
+			font-size: 1.1rem;
+			background: var(--bg-navy);
+			border: 2px solid var(--accent-cyan);
+			color: var(--accent-cyan);
+			padding: 4px 10px;
+		}
+
+		.about {
+			font-size: 1.2rem;
+			line-height: 1.5;
+			margin-bottom: 32px;
+			padding: 16px;
+			background: rgba(0, 0, 0, 0.2);
+			border-left: 4px solid var(--accent-gold);
+		}
+
+		.about p {
+			margin: 0;
+		}
+
+		.about .placeholder {
+			color: rgba(244, 241, 222, 0.5);
+			font-style: italic;
+		}
+
+		.actions {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 12px;
+			justify-content: center;
+		}
+
+		.btn {
+			font-family: 'Press Start 2P', monospace;
+			font-size: 0.7rem;
+			text-decoration: none;
+			padding: 14px 18px;
+			border: 3px solid var(--panel-border);
+			color: var(--bg-navy);
+			background: var(--accent-cyan);
+			box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.5);
+			transition: transform 0.1s ease;
+		}
+
+		.btn:hover,
+		.btn:focus-visible {
+			transform: translate(2px, 2px);
+			box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.5);
+		}
+
+		.btn:focus-visible {
+			outline: 3px solid var(--accent-gold);
+			outline-offset: 2px;
+		}
+
+		.btn-primary {
+			background: var(--accent-coral);
+		}
+
+		.btn-secondary {
+			background: var(--accent-gold);
+		}
+
+		.status {
+			text-align: center;
+			font-size: 1rem;
+			color: rgba(244, 241, 222, 0.5);
+			margin-top: 28px;
+		}
+
+		.status::before {
+			content: '● ';
+			color: #4ade80;
+		}
+	</style>
+</head>
+<body>
+	<main class="panel">
+		<div class="sprite-row">
+			<div class="sprite"></div>
+		</div>
+
+		<h1>LEVEL BUILDER</h1>
+		<p class="tagline">
+			An in-browser, Mario Maker–style collaborative level builder — build
+			screens, share levels, play together.
+		</p>
+
+		<div class="section-label">// TECH STACK</div>
+		<div class="stack">
+			{% for tech in tech_stack %}
+			<span class="chip">{{ tech }}</span>
+			{% endfor %}
+		</div>
+
+		<div class="section-label">// ABOUT THE DEV</div>
+		<div class="about">
+			<!-- Lorenzo: replace this with your own bio/blurb -->
+			<p class="placeholder">My name is Lorenzo and I'm building this project to mix together my past software engineering experience and love for gaming.  The project is very early on but I'm excited to get this rolling.  Hoping to get a structured roadmap going forward!</p>
+		</div>
+
+		<div class="actions">
+			<a class="btn btn-primary" href="{{ frontend_url }}">▶ PLAY THE GAME</a>
+			<a class="btn" href="{{ github_url }}">★ VIEW SOURCE</a>
+			{% if portfolio_url %}
+			<a class="btn btn-secondary" href="{{ portfolio_url }}">☺ ABOUT ME</a>
+			{% endif %}
+		</div>
+
+		<p class="status">Backend online</p>
+	</main>
+</body>
+</html>

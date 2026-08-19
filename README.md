@@ -139,10 +139,90 @@ Both run on every push and pull request to `main`.
 
 ## Roadmap
 
-- **Phase 1 — Foundations** (in progress): backend/frontend connectivity,
-  TDD workflow, CI/CD, game engine integration. Remaining: Render
-  deployment.
-- **Phase 2 — Gameplay**: player movement (done), enemies, bosses.
-- **Phase 3 — Level creation IDE**: screen-by-screen editing, screen-to-
-  screen navigation, goals/gates.
-- **Phase 4 — Moderation**: content review for screens and level names.
+### Phase 1 — Foundations ✅ Complete
+
+- [x] Backend skeleton (Flask app factory, config, Flask-SQLAlchemy, TDD workflow)
+- [x] Frontend scaffolded (SvelteKit), connected to backend via CORS
+- [x] CI for both backend (pytest + ruff) and frontend (svelte-check + Vitest + build)
+- [x] Game engine integrated: Phaser 4, basic platforming scene, WASD/arrow/gamepad input
+- [x] Deployed: Render (backend + static frontend) + Neon (Postgres), CI-gated auto-deploy
+- [x] Portfolio-facing landing page at the backend root
+
+### Phase 2 — Gameplay (in progress)
+
+- [x] Player movement (move, jump; keyboard + gamepad)
+- [x] Object architecture decided: interfaces for contracts (`Interactable`,
+      `Damageable`, etc.) + lightweight composition for shared behavior,
+      built on Phaser Sprites/Groups — not deep inheritance, not a full ECS
+- [ ] Interactable objects (coins, keys)
+- [ ] Enemies
+- [ ] Mini-enemies
+- [ ] Bosses
+
+### Phase 3 — Level creation, accounts & persistence (in progress)
+
+Building a level or playing your own in-progress level requires **no
+account** — it's entirely client-side (in-memory + localStorage) until the
+moment someone wants to save or share. An account is only required to
+persist/publish content; playing anyone's *published* level is always
+public, no account needed.
+
+**Accounts (prerequisite for everything below):**
+- [ ] `User` auth: JWT-based (not session cookies — the frontend and
+      backend live on different Render subdomains, which browsers treat as
+      cross-site; Safari/Firefox block third-party cookies by default, so
+      tokens via `Authorization` header are the reliable choice here)
+- [ ] Password hashing via Werkzeug's built-in `generate_password_hash`
+- [ ] `POST /auth/register`, `POST /auth/login`, `GET /auth/me`
+- [ ] Rate limiting on login (`flask-limiter`)
+
+**Screens** — the real unit of authored content, owned by a user, savable
+and playable standalone, and reusable across levels other than the one it
+was created in ("borrowing," open to anyone, no approval step):
+- [ ] `Screen` model + save/load
+- [ ] Screen editor UI (placing platforms/objects — the actual IDE; the
+      Play/Edit mode toggle already built is the groundwork for this)
+
+**Levels** — an ordered composition of screens (a mix of your own and
+borrowed ones), connected via a join model (`LevelScreen`) that carries
+per-placement data (position in sequence, entry/exit connections, goals) so
+the same screen can behave differently depending on which level it's
+placed in:
+- [ ] `Level` model + `LevelScreen` join
+- [ ] Screen-to-screen navigation/connections, goals/gates
+- [ ] Publish workflow: a level must have a set goal and be finishable.
+      The creator must clear their own level before it can publish — this
+      is auto-verified (not manually reviewed) by capturing an input-log
+      trace (`PlaythroughRecording`: just the input sequence, not video) on
+      the clear. Failed attempts only increment a lightweight
+      `attempt_count` counter — no full trace captured on failures.
+- [ ] Level lifecycle: `draft` → `published`, tracking `attempt_count` and
+      `clear_count` (clear rate computed on read)
+
+### Phase 4 — Moderation & community (not started)
+
+- [ ] Content moderation for screens/level names (Flask has no built-in
+      admin panel like Django, so this needs to be hand-built)
+- [ ] Comments and ratings on published levels
+- [ ] User-submitted reports (`Report` model) feeding an admin review queue
+- [ ] System-flagged review: a level with climbing `attempt_count` but a
+      clear rate that stays near zero gets surfaced for admin review
+- [ ] Admin playback of a level's `PlaythroughRecording` input logs to
+      assess whether a clear is legitimate
+- [ ] `tool_assisted` classification: if an admin determines a published
+      level isn't legitimately clearable as submitted, it stays live but
+      gets re-labeled rather than removed (same idea as a TAS label in
+      speedrunning — honest disclosure, not deletion)
+
+### Data model (target shape)
+
+```
+User
+ ├── owns many → Screen (standalone: saveable, playable, borrowable)
+ ├── owns many → Level (draft → published)
+ └── has many → Comment, Rating, Report
+
+Level ──(via LevelScreen: position, connections, goals)──> Screen
+Level ──has many──> PlaythroughRecording (captured on clears only)
+Level ──has many──> Comment, Rating, Report
+```

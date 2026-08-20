@@ -15,7 +15,24 @@
 	});
 </script>
 
-<h1>Level Builder — Playtest</h1>
-<p>WASD or Arrow Keys to move. W or Up to jump. Tab to toggle Play/Edit mode.</p>
+<div class="game-page">
+	<div class="game-container" bind:this={gameContainer}></div>
+</div>
 
-<div bind:this={gameContainer}></div>
+<style>
+	.game-page {
+		width: 100vw;
+		height: 100vh;
+		overflow: hidden;
+		background: #000;
+	}
+
+	.game-container {
+		width: 100%;
+		height: 100%;
+	}
+
+	.game-container :global(canvas) {
+		display: block;
+	}
+</style>

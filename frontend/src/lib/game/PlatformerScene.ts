@@ -1,7 +1,24 @@
 import Phaser from 'phaser';
-import { exceedsDeadzone, getHorizontalVelocity, getJumpVelocity, hasFallenOffScreen } from './movement';
+import {
+	exceedsDeadzone,
+	getHorizontalVelocity,
+	getJumpVelocity,
+	hasFallenOffScreen,
+	hasRisingEdge
+} from './movement';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
-import { ensureCharacterAtlas, ensurePlayerTexture, PLAYER_TEXTURE_KEY } from './textures';
+import {
+	ensureCharacterAtlas,
+	ensurePlayerTexture,
+	ensureTilesAtlas,
+	GROUND_TILE_FRAME,
+	PLAYER_TEXTURE_KEY,
+	TILES_ATLAS_KEY
+} from './textures';
+import { GRID_SIZE } from './gridSnap';
+import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
+import { clearModeTogglePressed, touchInputState } from './touchInput';
+import { currentMode } from './currentMode';
 import {
 	DEFAULT_PLAYER_POSITION,
 	EDITOR_PLAYER_POSITION_KEY,
@@ -27,7 +44,9 @@ export class PlatformerScene extends Phaser.Scene {
 		d: Phaser.Input.Keyboard.Key;
 	};
 	private arrows!: Phaser.Types.Input.Keyboard.CursorKeys;
+	private platforms!: Phaser.Physics.Arcade.StaticGroup;
 	private wasPadJumpButtonDown = false;
+	private wasTouchJumpDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
 	private gamepadStatusTween?: Phaser.Tweens.Tween;
 	private toggleKey!: Phaser.Input.Keyboard.Key;
@@ -41,9 +60,12 @@ export class PlatformerScene extends Phaser.Scene {
 		// Real sprites get swapped in later phases.
 		ensurePlayerTexture(this);
 		ensureCharacterAtlas(this);
+		ensureTilesAtlas(this);
 	}
 
 	create() {
+		currentMode.set(CURRENT_MODE);
+
 		this.physics.world.gravity.y = GRAVITY_Y;
 		// No ground exists yet (real platforms come from actual level/screen
 		// data later) - disable world-bounds collision on the bottom edge only,
@@ -60,6 +82,21 @@ export class PlatformerScene extends Phaser.Scene {
 
 		this.player = this.physics.add.sprite(spawnPosition.x, spawnPosition.y, PLAYER_TEXTURE_KEY);
 		this.player.setCollideWorldBounds(true);
+
+		this.platforms = this.physics.add.staticGroup();
+		const placedObjects =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		for (const object of placedObjects) {
+			const tile = this.platforms.create(
+				object.x,
+				object.y,
+				TILES_ATLAS_KEY,
+				GROUND_TILE_FRAME
+			) as Phaser.Physics.Arcade.Sprite;
+			tile.setDisplaySize(GRID_SIZE, GRID_SIZE);
+			tile.refreshBody();
+		}
+		this.physics.add.collider(this.player, this.platforms);
 
 		if (!this.input.keyboard) {
 			throw new Error('Keyboard input plugin is not available');
@@ -107,7 +144,8 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	update() {
-		if (Phaser.Input.Keyboard.JustDown(this.toggleKey)) {
+		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
+			clearModeTogglePressed();
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;
@@ -125,22 +163,36 @@ export class PlatformerScene extends Phaser.Scene {
 		const padStickLeft = pad ? exceedsDeadzone(pad.leftStick.x, STICK_DEADZONE) && pad.leftStick.x < 0 : false;
 		const padStickRight = pad ? exceedsDeadzone(pad.leftStick.x, STICK_DEADZONE) && pad.leftStick.x > 0 : false;
 
-		const leftDown = this.wasd.a.isDown || this.arrows.left.isDown || (pad?.left ?? false) || padStickLeft;
+		const leftDown =
+			this.wasd.a.isDown ||
+			this.arrows.left.isDown ||
+			(pad?.left ?? false) ||
+			padStickLeft ||
+			touchInputState.left;
 		const rightDown =
-			this.wasd.d.isDown || this.arrows.right.isDown || (pad?.right ?? false) || padStickRight;
+			this.wasd.d.isDown ||
+			this.arrows.right.isDown ||
+			(pad?.right ?? false) ||
+			padStickRight ||
+			touchInputState.right;
 		const velocityX = getHorizontalVelocity({ left: leftDown, right: rightDown }, MOVE_SPEED);
 		this.player.setVelocityX(velocityX);
 
-		// Gamepad buttons don't have Phaser's keyboard-style JustDown() helper,
-		// so we track the previous frame's state ourselves to detect the edge.
+		// Gamepad and touch buttons don't have Phaser's keyboard-style
+		// JustDown() helper, so we track each source's previous-frame state
+		// ourselves to detect the rising edge.
 		const padJumpButtonDown = pad?.A ?? false;
-		const padJumpJustPressed = padJumpButtonDown && !this.wasPadJumpButtonDown;
+		const padJumpJustPressed = hasRisingEdge(padJumpButtonDown, this.wasPadJumpButtonDown);
 		this.wasPadJumpButtonDown = padJumpButtonDown;
+
+		const touchJumpJustPressed = hasRisingEdge(touchInputState.jump, this.wasTouchJumpDown);
+		this.wasTouchJumpDown = touchInputState.jump;
 
 		const jumpJustPressed =
 			Phaser.Input.Keyboard.JustDown(this.wasd.w) ||
 			Phaser.Input.Keyboard.JustDown(this.arrows.up) ||
-			padJumpJustPressed;
+			padJumpJustPressed ||
+			touchJumpJustPressed;
 		const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
 		if (velocityY !== null) {
 			this.player.setVelocityY(velocityY);

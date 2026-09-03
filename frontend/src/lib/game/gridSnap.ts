@@ -1,3 +1,5 @@
+export const GRID_SIZE = 32;
+
 /**
  * Snaps a raw coordinate to the center of whichever grid cell it falls
  * within - not to the nearest grid line intersection. This means a

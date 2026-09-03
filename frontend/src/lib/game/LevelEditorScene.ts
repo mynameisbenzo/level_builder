@@ -1,15 +1,24 @@
 import Phaser from 'phaser';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
-import { ensureCharacterAtlas, ensurePlayerTexture, PLAYER_TEXTURE_KEY } from './textures';
+import {
+	ensureCharacterAtlas,
+	ensurePlayerTexture,
+	ensureTilesAtlas,
+	GROUND_TILE_FRAME,
+	PLAYER_TEXTURE_KEY,
+	TILES_ATLAS_KEY
+} from './textures';
 import {
 	EDITOR_PLAYER_POSITION_KEY,
 	resolveInitialPlayerPosition,
 	type PlayerPosition
 } from './playerState';
-import { snapToGrid } from './gridSnap';
+import { snapToGrid, GRID_SIZE } from './gridSnap';
+import { isPositionOccupied, PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
+import { clearModeTogglePressed, touchInputState } from './touchInput';
+import { currentMode } from './currentMode';
 
 const CURRENT_MODE: GameMode = 'edit';
-const GRID_SIZE = 32;
 const GRID_COLOR = 0x333344;
 const BACKGROUND_COLOR = 0x14141f;
 
@@ -24,9 +33,11 @@ export class LevelEditorScene extends Phaser.Scene {
 	preload() {
 		ensurePlayerTexture(this);
 		ensureCharacterAtlas(this);
+		ensureTilesAtlas(this);
 	}
 
 	create() {
+		currentMode.set(CURRENT_MODE);
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
@@ -38,6 +49,40 @@ export class LevelEditorScene extends Phaser.Scene {
 			font: '14px monospace',
 			color: '#aaaaaa'
 		});
+		this.add.text(10, 50, 'Click empty space to place ground', {
+			font: '14px monospace',
+			color: '#aaaaaa'
+		});
+
+		const placedObjects =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		for (const object of placedObjects) {
+			this.renderGroundTile(object.x, object.y);
+		}
+
+		this.input.on(
+			'pointerdown',
+			(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
+				if (currentlyOver.length > 0) {
+					// Clicked an existing object (e.g. the player) - let its own
+					// handlers (like dragging) deal with it, don't place a tile.
+					return;
+				}
+
+				const x = snapToGrid(pointer.x, GRID_SIZE);
+				const y = snapToGrid(pointer.y, GRID_SIZE);
+				const existing =
+					(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+
+				if (isPositionOccupied(existing, x, y)) {
+					return;
+				}
+
+				const updated: PlacedObject[] = [...existing, { type: 'ground', x, y }];
+				this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
+				this.renderGroundTile(x, y);
+			}
+		);
 
 		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as
 			| PlayerPosition
@@ -63,7 +108,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	update() {
-		if (Phaser.Input.Keyboard.JustDown(this.toggleKey)) {
+		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
+			clearModeTogglePressed();
 			this.registry.set(EDITOR_PLAYER_POSITION_KEY, {
 				x: this.playerObject.x,
 				y: this.playerObject.y
@@ -71,6 +117,10 @@ export class LevelEditorScene extends Phaser.Scene {
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 		}
+	}
+
+	private renderGroundTile(x: number, y: number) {
+		this.add.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME).setDisplaySize(GRID_SIZE, GRID_SIZE);
 	}
 
 	private drawGrid() {

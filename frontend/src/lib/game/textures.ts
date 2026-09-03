@@ -3,6 +3,8 @@ import type Phaser from 'phaser';
 export const PLAYER_TEXTURE_KEY = 'player-square';
 export const PLAYER_TEXTURE_SIZE = 32;
 export const CHARACTERS_ATLAS_KEY = 'characters';
+export const TILES_ATLAS_KEY = 'tiles';
+export const GROUND_TILE_FRAME = 'terrain_dirt_block_center';
 
 /**
  * Generates the placeholder player square texture if it doesn't already
@@ -37,5 +39,21 @@ export function ensureCharacterAtlas(scene: Phaser.Scene) {
 		CHARACTERS_ATLAS_KEY,
 		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-characters-default.png',
 		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-characters-default.xml'
+	);
+}
+
+/**
+ * Queues the Kenney tile spritesheet atlas for loading if it isn't already
+ * registered. Same guarded pattern as ensureCharacterAtlas.
+ */
+export function ensureTilesAtlas(scene: Phaser.Scene) {
+	if (scene.textures.exists(TILES_ATLAS_KEY)) {
+		return;
+	}
+
+	scene.load.atlasXML(
+		TILES_ATLAS_KEY,
+		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-tiles-default.png',
+		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-tiles-default.xml'
 	);
 }

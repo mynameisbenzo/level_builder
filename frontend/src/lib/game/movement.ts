@@ -54,3 +54,13 @@ export function hasFallenOffScreen(
 ): boolean {
 	return playerY > screenHeight + threshold;
 }
+
+/**
+ * Detects a "just pressed" rising edge (was up last frame, is down this
+ * frame) for input sources without a native JustDown helper - gamepad
+ * buttons and touch buttons both need this same manual comparison.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function hasRisingEdge(isDownNow: boolean, wasDownLastFrame: boolean): boolean {
+	return isDownNow && !wasDownLastFrame;
+}

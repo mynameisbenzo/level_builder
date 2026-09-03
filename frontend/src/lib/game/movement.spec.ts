@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge } from './movement';
 
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
@@ -77,5 +77,20 @@ describe('hasFallenOffScreen', () => {
 
 	it('returns true once past the threshold below the screen', () => {
 		expect(hasFallenOffScreen(701, 600, 100)).toBe(true);
+	});
+});
+
+describe('hasRisingEdge', () => {
+	it('returns true when down now but was up last frame', () => {
+		expect(hasRisingEdge(true, false)).toBe(true);
+	});
+
+	it('returns false when down now and was already down last frame (held)', () => {
+		expect(hasRisingEdge(true, true)).toBe(false);
+	});
+
+	it('returns false when up now, regardless of last frame', () => {
+		expect(hasRisingEdge(false, true)).toBe(false);
+		expect(hasRisingEdge(false, false)).toBe(false);
 	});
 });

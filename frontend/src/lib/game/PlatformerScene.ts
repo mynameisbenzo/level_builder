@@ -11,10 +11,10 @@ import {
 	ensureCharacterAtlas,
 	ensurePlayerTexture,
 	ensureTilesAtlas,
-	GROUND_TILE_FRAME,
 	PLAYER_TEXTURE_KEY,
 	TILES_ATLAS_KEY
 } from './textures';
+import { getRowTileFrames } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
@@ -86,15 +86,23 @@ export class PlatformerScene extends Phaser.Scene {
 		this.platforms = this.physics.add.staticGroup();
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		const rowXPositionsByY = new Map<number, number[]>();
 		for (const object of placedObjects) {
-			const tile = this.platforms.create(
-				object.x,
-				object.y,
-				TILES_ATLAS_KEY,
-				GROUND_TILE_FRAME
-			) as Phaser.Physics.Arcade.Sprite;
-			tile.setDisplaySize(GRID_SIZE, GRID_SIZE);
-			tile.refreshBody();
+			const xs = rowXPositionsByY.get(object.y) ?? [];
+			xs.push(object.x);
+			rowXPositionsByY.set(object.y, xs);
+		}
+		for (const [y, xs] of rowXPositionsByY) {
+			for (const { x, frame } of getRowTileFrames(xs, GRID_SIZE)) {
+				const tile = this.platforms.create(
+					x,
+					y,
+					TILES_ATLAS_KEY,
+					frame
+				) as Phaser.Physics.Arcade.Sprite;
+				tile.setDisplaySize(GRID_SIZE, GRID_SIZE);
+				tile.refreshBody();
+			}
 		}
 		this.physics.add.collider(this.player, this.platforms);
 

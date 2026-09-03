@@ -4,17 +4,18 @@ import {
 	ensureCharacterAtlas,
 	ensurePlayerTexture,
 	ensureTilesAtlas,
-	GROUND_TILE_FRAME,
 	PLAYER_TEXTURE_KEY,
 	TILES_ATLAS_KEY
 } from './textures';
+import { getRowTileFrames } from './groundTiling';
 import {
 	EDITOR_PLAYER_POSITION_KEY,
 	resolveInitialPlayerPosition,
 	type PlayerPosition
 } from './playerState';
-import { snapToGrid, GRID_SIZE } from './gridSnap';
-import { isPositionOccupied, PLACED_OBJECTS_REGISTRY_KEY, removePosition, type PlacedObject } from './placedObjects';import { clearModeTogglePressed, touchInputState } from './touchInput';
+import { snapToGrid, GRID_SIZE, getColumnRange } from './gridSnap';
+import { isPositionOccupied, PLACED_OBJECTS_REGISTRY_KEY, removePosition, type PlacedObject } from './placedObjects';
+import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
 
 const CURRENT_MODE: GameMode = 'edit';
@@ -26,6 +27,10 @@ export class LevelEditorScene extends Phaser.Scene {
 	private playerObject!: Phaser.GameObjects.Image;
 	private instructionsVisible = true;
 	private instructionTexts: Phaser.GameObjects.Text[] = [];
+	private isDragPlacing = false;
+	private dragOriginY = 0;
+	private dragLastX = 0;
+	private tileImagesByRow = new Map<number, Phaser.GameObjects.Image[]>();
 
 	constructor() {
 		super('LevelEditorScene');
@@ -39,6 +44,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	create() {
 		currentMode.set(CURRENT_MODE);
+
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
@@ -73,8 +79,9 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		for (const object of placedObjects) {
-			this.renderGroundTile(object.x, object.y);
+		const initialRows = new Set(placedObjects.map((object) => object.y));
+		for (const y of initialRows) {
+			this.refreshRow(y);
 		}
 
 		this.input.on(
@@ -88,18 +95,35 @@ export class LevelEditorScene extends Phaser.Scene {
 
 				const x = snapToGrid(pointer.x, GRID_SIZE);
 				const y = snapToGrid(pointer.y, GRID_SIZE);
-				const existing =
-					(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 
-				if (isPositionOccupied(existing, x, y)) {
-					return;
-				}
-
-				const updated: PlacedObject[] = [...existing, { type: 'ground', x, y }];
-				this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
-				this.renderGroundTile(x, y);
+				this.isDragPlacing = true;
+				this.dragOriginY = y;
+				this.dragLastX = x;
+				this.placeTileIfEmpty(x, y);
 			}
 		);
+
+		this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+			if (!this.isDragPlacing || !pointer.isDown) {
+				return;
+			}
+
+			// X-axis only for now: the row is fixed at wherever the drag
+			// started (dragOriginY), regardless of how far the pointer moves
+			// vertically. Filling the whole column range (not just the
+			// current x) avoids gaps if a fast drag skips past a cell
+			// between two pointermove events.
+			const currentX = snapToGrid(pointer.x, GRID_SIZE);
+			const columns = getColumnRange(this.dragLastX, currentX, GRID_SIZE);
+			for (const x of columns) {
+				this.placeTileIfEmpty(x, this.dragOriginY);
+			}
+			this.dragLastX = currentX;
+		});
+
+		this.input.on('pointerup', () => {
+			this.isDragPlacing = false;
+		});
 
 		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as
 			| PlayerPosition
@@ -136,18 +160,55 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
-	private renderGroundTile(x: number, y: number) {
-		const tile = this.add
-			.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME)
-			.setDisplaySize(GRID_SIZE, GRID_SIZE)
-			.setInteractive({ useHandCursor: true });
+	private placeTileIfEmpty(x: number, y: number) {
+		const existing =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 
-		tile.on('pointerdown', () => {
-			const existing =
-				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(existing, x, y));
-			tile.destroy();
-		});
+		if (isPositionOccupied(existing, x, y)) {
+			return;
+		}
+
+		const updated: PlacedObject[] = [...existing, { type: 'ground', x, y }];
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
+		this.refreshRow(y);
+	}
+
+	/**
+	 * Destroys and re-renders every tile on the given row, recomputing each
+	 * one's frame (single/left/center/right) from the current full set of
+	 * tiles on that row. Adding or removing one tile can change what frame
+	 * its neighbors should show (e.g. a single block becomes a left-cap
+	 * once a second tile is added next to it), so the whole row is
+	 * refreshed rather than just the one tile that changed.
+	 */
+	private refreshRow(y: number) {
+		const existingImages = this.tileImagesByRow.get(y) ?? [];
+		for (const image of existingImages) {
+			image.destroy();
+		}
+
+		const allObjects =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		const rowXPositions = allObjects.filter((object) => object.y === y).map((object) => object.x);
+		const frameAssignments = getRowTileFrames(rowXPositions, GRID_SIZE);
+
+		const newImages: Phaser.GameObjects.Image[] = [];
+		for (const { x, frame } of frameAssignments) {
+			const tile = this.add
+				.image(x, y, TILES_ATLAS_KEY, frame)
+				.setDisplaySize(GRID_SIZE, GRID_SIZE)
+				.setInteractive({ useHandCursor: true });
+
+			tile.on('pointerdown', () => {
+				const current =
+					(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+				this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(current, x, y));
+				this.refreshRow(y);
+			});
+
+			newImages.push(tile);
+		}
+		this.tileImagesByRow.set(y, newImages);
 	}
 
 	private drawGrid() {

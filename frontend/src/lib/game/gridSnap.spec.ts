@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { snapToGrid } from './gridSnap';
+import { getColumnRange, snapToGrid } from './gridSnap';
 
 describe('snapToGrid', () => {
 	it('snaps a value near the start of a cell to that cell\'s center', () => {
@@ -25,5 +25,23 @@ describe('snapToGrid', () => {
 	it('works with a different grid size', () => {
 		expect(snapToGrid(12, 16)).toBe(8);
 		expect(snapToGrid(20, 16)).toBe(24);
+	});
+});
+
+describe('getColumnRange', () => {
+	it('returns a single column when start and end are the same', () => {
+		expect(getColumnRange(48, 48, 32)).toEqual([48]);
+	});
+
+	it('returns every column between start and end, dragging rightward', () => {
+		expect(getColumnRange(16, 112, 32)).toEqual([16, 48, 80, 112]);
+	});
+
+	it('returns every column between start and end, dragging leftward', () => {
+		expect(getColumnRange(112, 16, 32)).toEqual([16, 48, 80, 112]);
+	});
+
+	it('returns adjacent columns for a one-cell drag', () => {
+		expect(getColumnRange(16, 48, 32)).toEqual([16, 48]);
 	});
 });

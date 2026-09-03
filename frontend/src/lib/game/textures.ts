@@ -4,7 +4,6 @@ export const PLAYER_TEXTURE_KEY = 'player-square';
 export const PLAYER_TEXTURE_SIZE = 32;
 export const CHARACTERS_ATLAS_KEY = 'characters';
 export const TILES_ATLAS_KEY = 'tiles';
-export const GROUND_TILE_FRAME = 'terrain_dirt_block_center';
 
 /**
  * Generates the placeholder player square texture if it doesn't already

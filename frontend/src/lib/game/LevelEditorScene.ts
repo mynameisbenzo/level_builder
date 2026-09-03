@@ -14,8 +14,7 @@ import {
 	type PlayerPosition
 } from './playerState';
 import { snapToGrid, GRID_SIZE } from './gridSnap';
-import { isPositionOccupied, PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
-import { clearModeTogglePressed, touchInputState } from './touchInput';
+import { isPositionOccupied, PLACED_OBJECTS_REGISTRY_KEY, removePosition, type PlacedObject } from './placedObjects';import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
 
 const CURRENT_MODE: GameMode = 'edit';
@@ -50,6 +49,10 @@ export class LevelEditorScene extends Phaser.Scene {
 			color: '#aaaaaa'
 		});
 		this.add.text(10, 50, 'Click empty space to place ground', {
+			font: '14px monospace',
+			color: '#aaaaaa'
+		});
+		this.add.text(10, 50, 'Click empty space to place ground, click a tile to remove it', {
 			font: '14px monospace',
 			color: '#aaaaaa'
 		});
@@ -120,9 +123,19 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private renderGroundTile(x: number, y: number) {
-		this.add.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME).setDisplaySize(GRID_SIZE, GRID_SIZE);
-	}
+		const tile = this.add
+			.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME)
+			.setDisplaySize(GRID_SIZE, GRID_SIZE)
+			.setInteractive({ useHandCursor: true });
 
+		tile.on('pointerdown', () => {
+			const existing =
+				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(existing, x, y));
+			tile.destroy();
+		});
+	}
+	
 	private drawGrid() {
 		const { width, height } = this.scale;
 		const graphics = this.add.graphics();

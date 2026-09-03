@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPositionOccupied, type PlacedObject } from './placedObjects';
+import { isPositionOccupied, removePosition, type PlacedObject } from './placedObjects';
 
 describe('isPositionOccupied', () => {
 	it('returns false for an empty list', () => {
@@ -22,5 +22,25 @@ describe('isPositionOccupied', () => {
 			{ type: 'ground', x: 96, y: 96 }
 		];
 		expect(isPositionOccupied(existing, 96, 96)).toBe(true);
+	});
+});
+
+describe('removePosition', () => {
+	it('removes the matching object', () => {
+		const existing: PlacedObject[] = [{ type: 'ground', x: 32, y: 32 }];
+		expect(removePosition(existing, 32, 32)).toEqual([]);
+	});
+
+	it('returns an unchanged (but new) list when nothing matches', () => {
+		const existing: PlacedObject[] = [{ type: 'ground', x: 32, y: 32 }];
+		expect(removePosition(existing, 64, 64)).toEqual(existing);
+	});
+
+	it('only removes the exact match, keeping the rest', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 0, y: 0 },
+			{ type: 'ground', x: 96, y: 96 }
+		];
+		expect(removePosition(existing, 0, 0)).toEqual([{ type: 'ground', x: 96, y: 96 }]);
 	});
 });

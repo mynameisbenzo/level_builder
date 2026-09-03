@@ -15,3 +15,12 @@ export const PLACED_OBJECTS_REGISTRY_KEY = 'placedObjects';
 export function isPositionOccupied(existing: PlacedObject[], x: number, y: number): boolean {
 	return existing.some((object) => object.x === x && object.y === y);
 }
+
+/**
+ * Removes the placed object at the exact given position, if one exists.
+ * Returns a new array either way (unchanged if nothing matched).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function removePosition(existing: PlacedObject[], x: number, y: number): PlacedObject[] {
+	return existing.filter((object) => !(object.x === x && object.y === y));
+}

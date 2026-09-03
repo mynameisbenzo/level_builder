@@ -39,3 +39,18 @@ export function getJumpVelocity(input: JumpInput, jumpVelocity: number): number 
 export function exceedsDeadzone(axisValue: number, deadzone: number): boolean {
 	return Math.abs(axisValue) > deadzone;
 }
+
+/**
+ * Detects whether the player has fallen far enough below the bottom of the
+ * screen to count as "fallen off" - with no ground currently in Play mode,
+ * this is what sends the player back to the Level Editor rather than
+ * letting them fall forever.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function hasFallenOffScreen(
+	playerY: number,
+	screenHeight: number,
+	threshold: number
+): boolean {
+	return playerY > screenHeight + threshold;
+}

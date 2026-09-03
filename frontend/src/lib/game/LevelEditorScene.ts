@@ -1,12 +1,12 @@
 import Phaser from 'phaser';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
-import { ensurePlayerTexture, PLAYER_TEXTURE_KEY } from './textures';
+import { ensureCharacterAtlas, ensurePlayerTexture, PLAYER_TEXTURE_KEY } from './textures';
 import {
-	DEFAULT_PLAYER_POSITION,
-	PLAYER_POSITION_REGISTRY_KEY,
+	EDITOR_PLAYER_POSITION_KEY,
 	resolveInitialPlayerPosition,
 	type PlayerPosition
 } from './playerState';
+import { snapToGrid } from './gridSnap';
 
 const CURRENT_MODE: GameMode = 'edit';
 const GRID_SIZE = 32;
@@ -23,6 +23,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	preload() {
 		ensurePlayerTexture(this);
+		ensureCharacterAtlas(this);
 	}
 
 	create() {
@@ -38,10 +39,11 @@ export class LevelEditorScene extends Phaser.Scene {
 			color: '#aaaaaa'
 		});
 
-		const storedPosition = this.registry.get(PLAYER_POSITION_REGISTRY_KEY) as
+		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as
 			| PlayerPosition
 			| undefined;
-		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
+		const screenCenter = { x: this.scale.width / 2, y: this.scale.height / 2 };
+		const spawnPosition = resolveInitialPlayerPosition(storedPosition, screenCenter);
 
 		this.playerObject = this.add
 			.image(spawnPosition.x, spawnPosition.y, PLAYER_TEXTURE_KEY)
@@ -50,7 +52,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.playerObject.on(
 			'drag',
 			(_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
-				this.playerObject.setPosition(dragX, dragY);
+				this.playerObject.setPosition(snapToGrid(dragX, GRID_SIZE), snapToGrid(dragY, GRID_SIZE));
 			}
 		);
 
@@ -62,7 +64,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	update() {
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey)) {
-			this.registry.set(PLAYER_POSITION_REGISTRY_KEY, {
+			this.registry.set(EDITOR_PLAYER_POSITION_KEY, {
 				x: this.playerObject.x,
 				y: this.playerObject.y
 			} satisfies PlayerPosition);

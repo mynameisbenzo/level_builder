@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen } from './movement';
 
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
@@ -59,5 +59,23 @@ describe('exceedsDeadzone', () => {
 
 	it('returns false exactly at the deadzone boundary', () => {
 		expect(exceedsDeadzone(0.2, 0.2)).toBe(false);
+	});
+});
+
+describe('hasFallenOffScreen', () => {
+	it('returns false while still above the bottom of the screen', () => {
+		expect(hasFallenOffScreen(300, 600, 100)).toBe(false);
+	});
+
+	it('returns false while within the threshold below the screen', () => {
+		expect(hasFallenOffScreen(650, 600, 100)).toBe(false);
+	});
+
+	it('returns false exactly at the threshold boundary', () => {
+		expect(hasFallenOffScreen(700, 600, 100)).toBe(false);
+	});
+
+	it('returns true once past the threshold below the screen', () => {
+		expect(hasFallenOffScreen(701, 600, 100)).toBe(true);
 	});
 });

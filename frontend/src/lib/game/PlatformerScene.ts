@@ -1,10 +1,10 @@
 import Phaser from 'phaser';
-import { exceedsDeadzone, getHorizontalVelocity, getJumpVelocity } from './movement';
+import { exceedsDeadzone, getHorizontalVelocity, getJumpVelocity, hasFallenOffScreen } from './movement';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
-import { ensurePlayerTexture, PLAYER_TEXTURE_KEY } from './textures';
+import { ensureCharacterAtlas, ensurePlayerTexture, PLAYER_TEXTURE_KEY } from './textures';
 import {
 	DEFAULT_PLAYER_POSITION,
-	PLAYER_POSITION_REGISTRY_KEY,
+	EDITOR_PLAYER_POSITION_KEY,
 	resolveInitialPlayerPosition,
 	type PlayerPosition
 } from './playerState';
@@ -16,6 +16,7 @@ const GRAVITY_Y = 900;
 const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
 const GAMEPAD_MESSAGE_FADE_MS = 800;
+const FALL_OFF_SCREEN_THRESHOLD_PX = 100;
 
 export class PlatformerScene extends Phaser.Scene {
 	private player!: Phaser.Physics.Arcade.Sprite;
@@ -26,7 +27,6 @@ export class PlatformerScene extends Phaser.Scene {
 		d: Phaser.Input.Keyboard.Key;
 	};
 	private arrows!: Phaser.Types.Input.Keyboard.CursorKeys;
-	private platforms!: Phaser.Physics.Arcade.StaticGroup;
 	private wasPadJumpButtonDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
 	private gamepadStatusTween?: Phaser.Tweens.Tween;
@@ -40,30 +40,26 @@ export class PlatformerScene extends Phaser.Scene {
 		// Generate a simple white square texture for the player.
 		// Real sprites get swapped in later phases.
 		ensurePlayerTexture(this);
-
-		// Ground platform texture.
-		const groundGraphics = this.make.graphics({ x: 0, y: 0 });
-		groundGraphics.fillStyle(0x4a4a4a, 1);
-		groundGraphics.fillRect(0, 0, 400, 32);
-		groundGraphics.generateTexture('ground', 400, 32);
-		groundGraphics.destroy();
+		ensureCharacterAtlas(this);
 	}
 
 	create() {
 		this.physics.world.gravity.y = GRAVITY_Y;
+		// No ground exists yet (real platforms come from actual level/screen
+		// data later) - disable world-bounds collision on the bottom edge only,
+		// so the player can fall through it, while still being contained on
+		// the sides and top. This is a world-level setting, separate from a
+		// body's own checkCollision (which governs body-to-body collisions,
+		// not world-bounds collisions).
+		this.physics.world.checkCollision.down = false;
 
-		this.platforms = this.physics.add.staticGroup();
-		this.platforms.create(400, 568, 'ground').setScale(2, 1).refreshBody();
-
-		const storedPosition = this.registry.get(PLAYER_POSITION_REGISTRY_KEY) as
+		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as
 			| PlayerPosition
 			| undefined;
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
 		this.player = this.physics.add.sprite(spawnPosition.x, spawnPosition.y, PLAYER_TEXTURE_KEY);
 		this.player.setCollideWorldBounds(true);
-
-		this.physics.add.collider(this.player, this.platforms);
 
 		if (!this.input.keyboard) {
 			throw new Error('Keyboard input plugin is not available');
@@ -112,10 +108,12 @@ export class PlatformerScene extends Phaser.Scene {
 
 	update() {
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey)) {
-			this.registry.set(PLAYER_POSITION_REGISTRY_KEY, {
-				x: this.player.x,
-				y: this.player.y
-			} satisfies PlayerPosition);
+			const nextMode = toggleMode(CURRENT_MODE);
+			this.scene.start(getSceneKeyForMode(nextMode));
+			return;
+		}
+
+		if (hasFallenOffScreen(this.player.y, this.scale.height, FALL_OFF_SCREEN_THRESHOLD_PX)) {
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;

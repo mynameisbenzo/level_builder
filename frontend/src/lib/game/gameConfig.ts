@@ -23,6 +23,6 @@ export function createGameConfig(parent: HTMLElement): Phaser.Types.Core.GameCon
 		input: {
 			gamepad: true
 		},
-		scene: [PlatformerScene, LevelEditorScene]
+		scene: [LevelEditorScene, PlatformerScene]
 	};
 }

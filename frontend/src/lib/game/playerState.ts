@@ -4,7 +4,7 @@ export interface PlayerPosition {
 }
 
 export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 450 };
-export const PLAYER_POSITION_REGISTRY_KEY = 'playerPosition';
+export const EDITOR_PLAYER_POSITION_KEY = 'editorPlayerPosition';
 
 /**
  * Resolves the position a scene should spawn the player at: the carried-over

@@ -24,6 +24,8 @@ const BACKGROUND_COLOR = 0x14141f;
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
 	private playerObject!: Phaser.GameObjects.Image;
+	private instructionsVisible = true;
+	private instructionTexts: Phaser.GameObjects.Text[] = [];
 
 	constructor() {
 		super('LevelEditorScene');
@@ -40,22 +42,34 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
-		this.add.text(10, 10, 'Level Editor (placeholder) — Tab to return to Play Mode', {
-			font: '14px monospace',
-			color: '#ffffff'
+		const toggleInstructionsButton = this.add
+			.text(10, 10, '[?] Hide Instructions', { font: '14px monospace', color: '#ffffff' })
+			.setInteractive({ useHandCursor: true });
+
+		toggleInstructionsButton.on('pointerdown', () => {
+			this.instructionsVisible = !this.instructionsVisible;
+			for (const text of this.instructionTexts) {
+				text.setVisible(this.instructionsVisible);
+			}
+			toggleInstructionsButton.setText(
+				this.instructionsVisible ? '[?] Hide Instructions' : '[?] Show Instructions'
+			);
 		});
-		this.add.text(10, 30, 'Drag the square to reposition it', {
-			font: '14px monospace',
-			color: '#aaaaaa'
-		});
-		this.add.text(10, 50, 'Click empty space to place ground', {
-			font: '14px monospace',
-			color: '#aaaaaa'
-		});
-		this.add.text(10, 50, 'Click empty space to place ground, click a tile to remove it', {
-			font: '14px monospace',
-			color: '#aaaaaa'
-		});
+
+		this.instructionTexts = [
+			this.add.text(10, 30, 'Level Editor (placeholder) — Tab to return to Play Mode', {
+				font: '14px monospace',
+				color: '#ffffff'
+			}),
+			this.add.text(10, 50, 'Drag the square to reposition it', {
+				font: '14px monospace',
+				color: '#aaaaaa'
+			}),
+			this.add.text(10, 70, 'Click empty space to place ground, click a tile to remove it', {
+				font: '14px monospace',
+				color: '#aaaaaa'
+			})
+		];
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -135,7 +149,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			tile.destroy();
 		});
 	}
-	
+
 	private drawGrid() {
 		const { width, height } = this.scale;
 		const graphics = this.add.graphics();

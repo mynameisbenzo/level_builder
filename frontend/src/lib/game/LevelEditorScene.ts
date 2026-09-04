@@ -13,7 +13,8 @@ import {
 	GROUND_TILE_FRAME_SETS,
 	GROUND_TILE_STYLE_REGISTRY_KEY,
 	GROUND_TILE_STYLES,
-	type GroundTileStyle
+	type GroundTileStyle,
+	type PositionedTile
 } from './groundTiling';
 import {
 	EDITOR_PLAYER_POSITION_KEY,
@@ -21,7 +22,17 @@ import {
 	type PlayerPosition
 } from './playerState';
 import { snapToGrid, GRID_SIZE, getColumnRange } from './gridSnap';
-import { isPositionOccupied, PLACED_OBJECTS_REGISTRY_KEY, removePosition, type PlacedObject } from './placedObjects';
+import {
+	getNextActiveGroupKeys,
+	getSameGroupTileKeys,
+	isPositionOccupied,
+	PLACED_OBJECTS_REGISTRY_KEY,
+	tileKey,
+	updateObjectStyle,
+	mergeGroupIds,
+	resolveGroupIdForPlacement,
+	type PlacedObject
+} from './placedObjects';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
 
@@ -29,14 +40,17 @@ const CURRENT_MODE: GameMode = 'edit';
 const GRID_COLOR = 0x333344;
 const BACKGROUND_COLOR = 0x14141f;
 
+/**
+ * Generates a fresh id to use as the fallback when a newly placed tile has
+ * no matching-style neighbor to join. crypto.randomUUID() is broadly
+ * supported in evergreen browsers.
+ */
+function createGroupId(): string {
+	return crypto.randomUUID();
+}
+
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
-	private styleIndicatorText!: Phaser.GameObjects.Text;
-	private styleSwatches: {
-		style: GroundTileStyle;
-		image: Phaser.GameObjects.Image;
-		border: Phaser.GameObjects.Rectangle;
-	}[] = [];
 	private playerObject!: Phaser.GameObjects.Image;
 	private instructionsVisible = true;
 	private instructionTexts: Phaser.GameObjects.Text[] = [];
@@ -44,6 +58,13 @@ export class LevelEditorScene extends Phaser.Scene {
 	private dragOriginY = 0;
 	private dragLastX = 0;
 	private tileImagesByRow = new Map<number, Phaser.GameObjects.Image[]>();
+	private activeGroupKeys: string[] | null = null;
+	private activeTileBorders: Phaser.GameObjects.Rectangle[] = [];
+	private styleSwatches: {
+		style: GroundTileStyle;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
 
 	constructor() {
 		super('LevelEditorScene');
@@ -57,6 +78,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	create() {
 		currentMode.set(CURRENT_MODE);
+		this.activeGroupKeys = null;
 
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
@@ -84,19 +106,25 @@ export class LevelEditorScene extends Phaser.Scene {
 				font: '14px monospace',
 				color: '#aaaaaa'
 			}),
-			this.add.text(10, 70, 'Click empty space to place ground, click a tile to remove it', {
-				font: '14px monospace',
-				color: '#aaaaaa'
-			})
+			this.add.text(
+				10,
+				70,
+				'Click-drag empty space to place a platform. Click a platform to select it, click again to deselect.',
+				{
+					font: '14px monospace',
+					color: '#aaaaaa'
+				}
+			),
+			this.add.text(
+				10,
+				90,
+				'Style palette: sets the selected platform\u2019s style, or the default for new platforms',
+				{
+					font: '14px monospace',
+					color: '#aaaaaa'
+				}
+			)
 		];
-
-		const currentStyle =
-			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
-			DEFAULT_GROUND_TILE_STYLE;
-		this.styleIndicatorText = this.add.text(10, 90, `Tile style: ${currentStyle}`, {
-			font: '14px monospace',
-			color: '#ffd23f'
-		});
 
 		this.createStyleToolbar();
 
@@ -111,8 +139,18 @@ export class LevelEditorScene extends Phaser.Scene {
 			'pointerdown',
 			(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
 				if (currentlyOver.length > 0) {
+					// Clicked an existing object (e.g. the player) - let its own
+					// handlers (like dragging) deal with it, don't place a tile.
 					return;
 				}
+
+				// Starting a new placement always clears any active (selected)
+				// group - you're placing something new, not editing what was
+				// selected before.
+				this.setActiveGroup(null);
+
+				// Every click-and-drag placement gesture is its own platform,
+				// even if it ends up touching an existing one.
 
 				const x = snapToGrid(pointer.x, GRID_SIZE);
 				const y = snapToGrid(pointer.y, GRID_SIZE);
@@ -129,6 +167,11 @@ export class LevelEditorScene extends Phaser.Scene {
 				return;
 			}
 
+			// X-axis only for now: the row is fixed at wherever the drag
+			// started (dragOriginY), regardless of how far the pointer moves
+			// vertically. Filling the whole column range (not just the
+			// current x) avoids gaps if a fast drag skips past a cell
+			// between two pointermove events.
 			const currentX = snapToGrid(pointer.x, GRID_SIZE);
 			const columns = getColumnRange(this.dragLastX, currentX, GRID_SIZE);
 			for (const x of columns) {
@@ -184,48 +227,113 @@ export class LevelEditorScene extends Phaser.Scene {
 		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
 		const y = this.scale.height - 40;
 
-		const currentStyle =
-			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
-			DEFAULT_GROUND_TILE_STYLE;
-
 		this.styleSwatches = GROUND_TILE_STYLES.map((style, index) => {
 			const x = startX + index * (swatchSize + spacing);
 
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, style === currentStyle ? 0xffd23f : 0x666666);
+				.setStrokeStyle(3, 0x666666);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true });
 
-			image.on('pointerdown', () => {
-				this.registry.set(GROUND_TILE_STYLE_REGISTRY_KEY, style);
-				this.styleIndicatorText.setText(`Tile style: ${style}`);
-				this.refreshAllRows();
-				this.highlightSelectedSwatch(style);
-			});
+			image.on('pointerdown', () => this.applyStyleFromToolbar(style));
 
 			return { style, image, border };
 		});
+
+		this.refreshSwatchHighlight();
 	}
 
-	private highlightSelectedSwatch(selectedStyle: GroundTileStyle) {
+	/**
+	 * Clicking a toolbar swatch means different things depending on whether
+	 * a platform is currently active (selected): with a group active, it
+	 * restyles every tile in that platform; with nothing active, it sets
+	 * the default style used for newly placed tiles.
+	 */
+	private applyStyleFromToolbar(style: GroundTileStyle) {
+		if (this.activeGroupKeys !== null) {
+			let existing =
+				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+			const affectedRows = new Set<number>();
+
+			for (const key of this.activeGroupKeys) {
+				const [xStr, yStr] = key.split(',');
+				const x = Number(xStr);
+				const y = Number(yStr);
+				existing = updateObjectStyle(existing, x, y, style);
+				affectedRows.add(y);
+			}
+
+			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
+			for (const y of affectedRows) {
+				this.refreshRow(y);
+			}
+		} else {
+			this.registry.set(GROUND_TILE_STYLE_REGISTRY_KEY, style);
+		}
+		this.refreshSwatchHighlight();
+	}
+
+	/**
+	 * The swatch highlight reflects the style relevant to the current
+	 * selection state: the active platform's style (all its tiles should
+	 * match, so the first is representative) if one is selected, otherwise
+	 * the default style that will be used for new placements.
+	 */
+	private refreshSwatchHighlight() {
+		const displayedStyle = this.getDisplayedStyle();
 		for (const swatch of this.styleSwatches) {
-			swatch.border.setStrokeStyle(3, swatch.style === selectedStyle ? 0xffd23f : 0x666666);
+			swatch.border.setStrokeStyle(3, swatch.style === displayedStyle ? 0xffd23f : 0x666666);
 		}
 	}
 
-	private refreshAllRows() {
-		const allObjects =
-			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const rows = new Set(allObjects.map((object) => object.y));
-		for (const y of rows) {
-			this.refreshRow(y);
+	private getDisplayedStyle(): GroundTileStyle {
+		if (this.activeGroupKeys !== null && this.activeGroupKeys.length > 0) {
+			const [xStr, yStr] = this.activeGroupKeys[0].split(',');
+			const x = Number(xStr);
+			const y = Number(yStr);
+			const existing =
+				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+			const activeObject = existing.find((object) => object.x === x && object.y === y);
+			if (activeObject) {
+				return activeObject.style;
+			}
 		}
+		return (
+			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
+			DEFAULT_GROUND_TILE_STYLE
+		);
 	}
 
+	private setActiveGroup(keys: string[] | null) {
+		this.activeGroupKeys = keys;
+		this.refreshSwatchHighlight();
+		this.refreshActiveGroupBorders();
+	}
+
+	private refreshActiveGroupBorders() {
+		for (const border of this.activeTileBorders) {
+			border.destroy();
+		}
+		this.activeTileBorders = [];
+
+		if (this.activeGroupKeys === null) {
+			return;
+		}
+
+		for (const key of this.activeGroupKeys) {
+			const [xStr, yStr] = key.split(',');
+			const x = Number(xStr);
+			const y = Number(yStr);
+			const border = this.add
+				.rectangle(x, y, GRID_SIZE + 4, GRID_SIZE + 4)
+				.setStrokeStyle(3, 0xffd23f);
+			this.activeTileBorders.push(border);
+		}
+	}
 	private placeTileIfEmpty(x: number, y: number) {
 		const existing =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -234,11 +342,40 @@ export class LevelEditorScene extends Phaser.Scene {
 			return;
 		}
 
-		const updated: PlacedObject[] = [...existing, { type: 'ground', x, y }];
+		const style =
+			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
+			DEFAULT_GROUND_TILE_STYLE;
+
+		const rowObjects = existing.filter((object) => object.y === y);
+		const groupId = resolveGroupIdForPlacement(rowObjects, x, style, GRID_SIZE, createGroupId());
+
+		let updated: PlacedObject[] = [...existing, { type: 'ground', x, y, style, groupId }];
+
+		// If the new tile sits between two existing same-style neighbors that
+		// belonged to different platforms, it bridges them into one.
+		const leftNeighbor = rowObjects.find((object) => object.x === x - GRID_SIZE);
+		const rightNeighbor = rowObjects.find((object) => object.x === x + GRID_SIZE);
+		if (
+			leftNeighbor &&
+			rightNeighbor &&
+			leftNeighbor.style === style &&
+			rightNeighbor.style === style &&
+			leftNeighbor.groupId !== rightNeighbor.groupId
+		) {
+			updated = mergeGroupIds(updated, rightNeighbor.groupId, groupId);
+		}
+
 		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
 		this.refreshRow(y);
 	}
 
+	/**
+	 * Destroys and re-renders every tile on the given row, recomputing each
+	 * one's frame (single/left/center/right) from the current full set of
+	 * tiles on that row. Adding, removing, or restyling a tile can change
+	 * what frame its neighbors should show, so the whole row is refreshed
+	 * rather than just the one tile that changed.
+	 */
 	private refreshRow(y: number) {
 		const existingImages = this.tileImagesByRow.get(y) ?? [];
 		for (const image of existingImages) {
@@ -247,11 +384,13 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const allObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const rowXPositions = allObjects.filter((object) => object.y === y).map((object) => object.x);
-		const currentStyle =
-			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
-			DEFAULT_GROUND_TILE_STYLE;
-		const frameAssignments = getRowTileFrames(rowXPositions, GRID_SIZE, currentStyle);
+		const rowObjects = allObjects.filter((object) => object.y === y);
+		const rowTiles: PositionedTile[] = rowObjects.map((object) => ({
+			x: object.x,
+			style: object.style,
+			groupId: object.groupId
+		}));
+		const frameAssignments = getRowTileFrames(rowTiles, GRID_SIZE);
 
 		const newImages: Phaser.GameObjects.Image[] = [];
 		for (const { x, frame } of frameAssignments) {
@@ -261,15 +400,27 @@ export class LevelEditorScene extends Phaser.Scene {
 				.setInteractive({ useHandCursor: true });
 
 			tile.on('pointerdown', () => {
-				const current =
+				const clickedKey = tileKey(x, y);
+				const currentObjects =
 					(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-				this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(current, x, y));
-				this.refreshRow(y);
+				const clickedObject = currentObjects.find(
+					(object) => object.x === x && object.y === y
+				);
+				if (!clickedObject) {
+					return;
+				}
+				const groupKeys = getSameGroupTileKeys(currentObjects, clickedObject.groupId);
+				const nextActive = getNextActiveGroupKeys(this.activeGroupKeys, clickedKey, groupKeys);
+				this.setActiveGroup(nextActive);
 			});
 
 			newImages.push(tile);
 		}
 		this.tileImagesByRow.set(y, newImages);
+
+		// The active group's highlight borders sit above the tile images, so
+		// redraw them after re-rendering in case this row contains any.
+		this.refreshActiveGroupBorders();
 	}
 
 	private drawGrid() {

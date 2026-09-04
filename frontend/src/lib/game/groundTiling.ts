@@ -50,24 +50,36 @@ export function getPreviousGroundTileStyle(current: GroundTileStyle): GroundTile
 	return GROUND_TILE_STYLES[previousIndex];
 }
 
+export interface PositionedTile {
+	x: number;
+	style: GroundTileStyle;
+	groupId: string;
+}
+
 /**
- * Groups a sorted list of grid-aligned x positions into contiguous runs -
- * a gap larger than one grid cell starts a new run. Each run gets its own
- * left/right end caps, so two separate platform segments on the same row
- * (with a gap between them) are visually distinct platforms, not one long
- * platform with a hole in it.
+ * Groups a sorted list of tiles into contiguous VISUAL runs - a run breaks
+ * not only at a physical gap, but also whenever the platform (groupId)
+ * changes between two physically adjacent tiles. Two platforms placed as
+ * separate click-and-drag actions get their own end caps even when they
+ * end up touching - physical adjacency alone no longer means "same
+ * platform".
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function groupIntoContiguousRuns(sortedXPositions: number[], gridSize: number): number[][] {
-	if (sortedXPositions.length === 0) {
+export function groupIntoContiguousRuns(
+	sortedTiles: PositionedTile[],
+	gridSize: number
+): PositionedTile[][] {
+	if (sortedTiles.length === 0) {
 		return [];
 	}
 
-	const runs: number[][] = [[sortedXPositions[0]]];
-	for (let i = 1; i < sortedXPositions.length; i++) {
-		const previous = sortedXPositions[i - 1];
-		const current = sortedXPositions[i];
-		if (current - previous === gridSize) {
+	const runs: PositionedTile[][] = [[sortedTiles[0]]];
+	for (let i = 1; i < sortedTiles.length; i++) {
+		const previous = sortedTiles[i - 1];
+		const current = sortedTiles[i];
+		const isPhysicallyAdjacent = current.x - previous.x === gridSize;
+		const sameGroup = current.groupId === previous.groupId;
+		if (isPhysicallyAdjacent && sameGroup) {
 			runs[runs.length - 1].push(current);
 		} else {
 			runs.push([current]);
@@ -84,7 +96,7 @@ export function groupIntoContiguousRuns(sortedXPositions: number[], gridSize: nu
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function getFrameForPositionInRun(
-	run: number[],
+	run: PositionedTile[],
 	x: number,
 	style: GroundTileStyle
 ): string {
@@ -94,7 +106,7 @@ export function getFrameForPositionInRun(
 		return frames.single;
 	}
 
-	const index = run.indexOf(x);
+	const index = run.findIndex((tile) => tile.x === x);
 	if (index === 0) {
 		return frames.left;
 	}
@@ -110,23 +122,21 @@ export interface TileFrameAssignment {
 }
 
 /**
- * Computes the correct tile frame for every x position on a single row, in
- * the given style, accounting for gaps (separate platform segments) via
- * groupIntoContiguousRuns.
+ * Computes the correct tile frame for every tile on a single row,
+ * accounting for both physical gaps AND platform (groupId) boundaries via
+ * groupIntoContiguousRuns. Each tile's left/center/right/single ROLE is
+ * determined by its position within its run; the actual frame drawn uses
+ * that specific tile's own style.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function getRowTileFrames(
-	xPositions: number[],
-	gridSize: number,
-	style: GroundTileStyle
-): TileFrameAssignment[] {
-	const sorted = [...xPositions].sort((a, b) => a - b);
-	const runs = groupIntoContiguousRuns(sorted, gridSize);
+export function getRowTileFrames(tiles: PositionedTile[], gridSize: number): TileFrameAssignment[] {
+	const sortedTiles = [...tiles].sort((a, b) => a.x - b.x);
+	const runs = groupIntoContiguousRuns(sortedTiles, gridSize);
 
 	const assignments: TileFrameAssignment[] = [];
 	for (const run of runs) {
-		for (const x of run) {
-			assignments.push({ x, frame: getFrameForPositionInRun(run, x, style) });
+		for (const tile of run) {
+			assignments.push({ x: tile.x, frame: getFrameForPositionInRun(run, tile.x, tile.style) });
 		}
 	}
 	return assignments;

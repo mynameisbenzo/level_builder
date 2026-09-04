@@ -7,94 +7,179 @@ import {
 	groupIntoContiguousRuns,
 	GROUND_TILE_FRAME_SETS,
 	GROUND_TILE_STYLES,
-	type GroundTileStyle
+	type GroundTileStyle,
+	type PositionedTile
 } from './groundTiling';
 
 describe('groupIntoContiguousRuns', () => {
-	it('returns an empty array for no positions', () => {
+	it('returns an empty array for no tiles', () => {
 		expect(groupIntoContiguousRuns([], 32)).toEqual([]);
 	});
 
-	it('groups adjacent positions into a single run', () => {
-		expect(groupIntoContiguousRuns([16, 48, 80], 32)).toEqual([[16, 48, 80]]);
+	it('groups physically adjacent tiles from the same platform into one run', () => {
+		const tiles: PositionedTile[] = [
+			{ x: 16, style: 'grass', groupId: 'a' },
+			{ x: 48, style: 'grass', groupId: 'a' },
+			{ x: 80, style: 'grass', groupId: 'a' }
+		];
+		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([tiles]);
 	});
 
-	it('splits into separate runs when there is a gap', () => {
-		expect(groupIntoContiguousRuns([16, 48, 144, 176], 32)).toEqual([
-			[16, 48],
-			[144, 176]
+	it('splits into separate runs when there is a physical gap', () => {
+		const tiles: PositionedTile[] = [
+			{ x: 16, style: 'grass', groupId: 'a' },
+			{ x: 48, style: 'grass', groupId: 'a' },
+			{ x: 144, style: 'grass', groupId: 'a' },
+			{ x: 176, style: 'grass', groupId: 'a' }
+		];
+		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([
+			[tiles[0], tiles[1]],
+			[tiles[2], tiles[3]]
 		]);
 	});
 
-	it('treats a single isolated position as its own run', () => {
-		expect(groupIntoContiguousRuns([16], 32)).toEqual([[16]]);
+	it('splits into separate runs when two physically touching tiles belong to different platforms', () => {
+		const tiles: PositionedTile[] = [
+			{ x: 16, style: 'grass', groupId: 'a' },
+			{ x: 48, style: 'grass', groupId: 'a' },
+			{ x: 80, style: 'stone', groupId: 'b' },
+			{ x: 112, style: 'stone', groupId: 'b' }
+		];
+		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([
+			[tiles[0], tiles[1]],
+			[tiles[2], tiles[3]]
+		]);
+	});
+
+	it('treats a single isolated tile as its own run', () => {
+		const tiles: PositionedTile[] = [{ x: 16, style: 'grass', groupId: 'a' }];
+		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([tiles]);
 	});
 });
 
 describe('getFrameForPositionInRun', () => {
+	const run = (xs: number[]): PositionedTile[] =>
+		xs.map((x) => ({ x, style: 'grass', groupId: 'a' }));
+
 	it('uses the single-block frame for a run of one', () => {
-		expect(getFrameForPositionInRun([16], 16, 'grass')).toBe(
+		expect(getFrameForPositionInRun(run([16]), 16, 'grass')).toBe(
 			GROUND_TILE_FRAME_SETS.grass.single
 		);
 	});
 
 	it('uses left/right end caps for a run of two, no center', () => {
-		const run = [16, 48];
-		expect(getFrameForPositionInRun(run, 16, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.left);
-		expect(getFrameForPositionInRun(run, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.right);
+		const tiles = run([16, 48]);
+		expect(getFrameForPositionInRun(tiles, 16, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.left);
+		expect(getFrameForPositionInRun(tiles, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.right);
 	});
 
 	it('uses left/center/right for a run of three', () => {
-		const run = [16, 48, 80];
-		expect(getFrameForPositionInRun(run, 16, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.left);
-		expect(getFrameForPositionInRun(run, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.center);
-		expect(getFrameForPositionInRun(run, 80, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.right);
-	});
-
-	it('uses center for every interior tile in a longer run', () => {
-		const run = [16, 48, 80, 112, 144];
-		expect(getFrameForPositionInRun(run, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.center);
-		expect(getFrameForPositionInRun(run, 80, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.center);
-		expect(getFrameForPositionInRun(run, 112, 'grass')).toBe(
-			GROUND_TILE_FRAME_SETS.grass.center
-		);
+		const tiles = run([16, 48, 80]);
+		expect(getFrameForPositionInRun(tiles, 16, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.left);
+		expect(getFrameForPositionInRun(tiles, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.center);
+		expect(getFrameForPositionInRun(tiles, 80, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.right);
 	});
 
 	it('uses the correct frames for a non-default style', () => {
-		const run = [16, 48];
-		expect(getFrameForPositionInRun(run, 16, 'stone')).toBe(GROUND_TILE_FRAME_SETS.stone.left);
-		expect(getFrameForPositionInRun(run, 48, 'stone')).toBe(GROUND_TILE_FRAME_SETS.stone.right);
+		const tiles = run([16, 48]);
+		expect(getFrameForPositionInRun(tiles, 16, 'stone')).toBe(GROUND_TILE_FRAME_SETS.stone.left);
+		expect(getFrameForPositionInRun(tiles, 48, 'stone')).toBe(GROUND_TILE_FRAME_SETS.stone.right);
 	});
 });
 
 describe('getRowTileFrames', () => {
 	it('handles a single tile', () => {
-		expect(getRowTileFrames([16], 32, 'grass')).toEqual([
+		expect(getRowTileFrames([{ x: 16, style: 'grass', groupId: 'a' }], 32)).toEqual([
 			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.single }
 		]);
 	});
 
-	it('handles two tiles', () => {
-		expect(getRowTileFrames([48, 16], 32, 'grass')).toEqual([
+	it('handles two tiles of the same platform', () => {
+		expect(
+			getRowTileFrames(
+				[
+					{ x: 48, style: 'grass', groupId: 'a' },
+					{ x: 16, style: 'grass', groupId: 'a' }
+				],
+				32
+			)
+		).toEqual([
 			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
 			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right }
 		]);
 	});
 
-	it('handles three or more tiles with center pieces in between', () => {
-		expect(getRowTileFrames([80, 16, 48], 32, 'grass')).toEqual([
+	it('handles three or more tiles of the same platform with a center piece', () => {
+		expect(
+			getRowTileFrames(
+				[
+					{ x: 80, style: 'grass', groupId: 'a' },
+					{ x: 16, style: 'grass', groupId: 'a' },
+					{ x: 48, style: 'grass', groupId: 'a' }
+				],
+				32
+			)
+		).toEqual([
 			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
 			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.center },
 			{ x: 80, frame: GROUND_TILE_FRAME_SETS.grass.right }
 		]);
 	});
 
-	it('gives each side of a gap its own end caps', () => {
-		expect(getRowTileFrames([16, 48, 144, 176], 32, 'grass')).toEqual([
+	it('gives each side of a physical gap its own end caps', () => {
+		expect(
+			getRowTileFrames(
+				[
+					{ x: 16, style: 'grass', groupId: 'a' },
+					{ x: 48, style: 'grass', groupId: 'a' },
+					{ x: 144, style: 'grass', groupId: 'a' },
+					{ x: 176, style: 'grass', groupId: 'a' }
+				],
+				32
+			)
+		).toEqual([
 			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
 			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right },
 			{ x: 144, frame: GROUND_TILE_FRAME_SETS.grass.left },
 			{ x: 176, frame: GROUND_TILE_FRAME_SETS.grass.right }
+		]);
+	});
+
+	it('gives two touching platforms (different groupIds) their own end caps, even with the same style', () => {
+		expect(
+			getRowTileFrames(
+				[
+					{ x: 16, style: 'grass', groupId: 'a' },
+					{ x: 48, style: 'grass', groupId: 'a' },
+					{ x: 80, style: 'grass', groupId: 'b' },
+					{ x: 112, style: 'grass', groupId: 'b' }
+				],
+				32
+			)
+		).toEqual([
+			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
+			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right },
+			{ x: 80, frame: GROUND_TILE_FRAME_SETS.grass.left },
+			{ x: 112, frame: GROUND_TILE_FRAME_SETS.grass.right }
+		]);
+	});
+
+	it('gives two touching platforms of different styles their own end caps', () => {
+		expect(
+			getRowTileFrames(
+				[
+					{ x: 16, style: 'grass', groupId: 'a' },
+					{ x: 48, style: 'grass', groupId: 'a' },
+					{ x: 80, style: 'stone', groupId: 'b' },
+					{ x: 112, style: 'stone', groupId: 'b' }
+				],
+				32
+			)
+		).toEqual([
+			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
+			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right },
+			{ x: 80, frame: GROUND_TILE_FRAME_SETS.stone.left },
+			{ x: 112, frame: GROUND_TILE_FRAME_SETS.stone.right }
 		]);
 	});
 });

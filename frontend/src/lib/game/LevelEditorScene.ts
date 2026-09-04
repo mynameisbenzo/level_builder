@@ -9,9 +9,10 @@ import {
 } from './textures';
 import {
 	DEFAULT_GROUND_TILE_STYLE,
-	getNextGroundTileStyle,
 	getRowTileFrames,
+	GROUND_TILE_FRAME_SETS,
 	GROUND_TILE_STYLE_REGISTRY_KEY,
+	GROUND_TILE_STYLES,
 	type GroundTileStyle
 } from './groundTiling';
 import {
@@ -30,8 +31,12 @@ const BACKGROUND_COLOR = 0x14141f;
 
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
-	private styleKey!: Phaser.Input.Keyboard.Key;
 	private styleIndicatorText!: Phaser.GameObjects.Text;
+	private styleSwatches: {
+		style: GroundTileStyle;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
 	private playerObject!: Phaser.GameObjects.Image;
 	private instructionsVisible = true;
 	private instructionTexts: Phaser.GameObjects.Text[] = [];
@@ -82,20 +87,18 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.add.text(10, 70, 'Click empty space to place ground, click a tile to remove it', {
 				font: '14px monospace',
 				color: '#aaaaaa'
-			}),
-			this.add.text(10, 90, 'S to swap ground tile style', {
-				font: '14px monospace',
-				color: '#aaaaaa'
 			})
 		];
 
 		const currentStyle =
 			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
 			DEFAULT_GROUND_TILE_STYLE;
-		this.styleIndicatorText = this.add.text(10, 110, `Tile style: ${currentStyle}`, {
+		this.styleIndicatorText = this.add.text(10, 90, `Tile style: ${currentStyle}`, {
 			font: '14px monospace',
 			color: '#ffd23f'
 		});
+
+		this.createStyleToolbar();
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -108,8 +111,6 @@ export class LevelEditorScene extends Phaser.Scene {
 			'pointerdown',
 			(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
 				if (currentlyOver.length > 0) {
-					// Clicked an existing object (e.g. the player) - let its own
-					// handlers (like dragging) deal with it, don't place a tile.
 					return;
 				}
 
@@ -128,11 +129,6 @@ export class LevelEditorScene extends Phaser.Scene {
 				return;
 			}
 
-			// X-axis only for now: the row is fixed at wherever the drag
-			// started (dragOriginY), regardless of how far the pointer moves
-			// vertically. Filling the whole column range (not just the
-			// current x) avoids gaps if a fast drag skips past a cell
-			// between two pointermove events.
 			const currentX = snapToGrid(pointer.x, GRID_SIZE);
 			const columns = getColumnRange(this.dragLastX, currentX, GRID_SIZE);
 			for (const x of columns) {
@@ -166,26 +162,9 @@ export class LevelEditorScene extends Phaser.Scene {
 			throw new Error('Keyboard input plugin is not available');
 		}
 		this.toggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
-		this.styleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
 	}
 
 	update() {
-		if (Phaser.Input.Keyboard.JustDown(this.styleKey)) {
-			const currentStyle =
-				(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
-				DEFAULT_GROUND_TILE_STYLE;
-			const nextStyle = getNextGroundTileStyle(currentStyle);
-			this.registry.set(GROUND_TILE_STYLE_REGISTRY_KEY, nextStyle);
-			this.styleIndicatorText.setText(`Tile style: ${nextStyle}`);
-
-			const allObjects =
-				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-			const rows = new Set(allObjects.map((object) => object.y));
-			for (const y of rows) {
-				this.refreshRow(y);
-			}
-		}
-
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
 			clearModeTogglePressed();
 			this.registry.set(EDITOR_PLAYER_POSITION_KEY, {
@@ -194,6 +173,56 @@ export class LevelEditorScene extends Phaser.Scene {
 			} satisfies PlayerPosition);
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
+		}
+	}
+
+	private createStyleToolbar() {
+		const swatchSize = 40;
+		const spacing = 10;
+		const totalWidth =
+			GROUND_TILE_STYLES.length * swatchSize + (GROUND_TILE_STYLES.length - 1) * spacing;
+		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
+		const y = this.scale.height - 40;
+
+		const currentStyle =
+			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
+			DEFAULT_GROUND_TILE_STYLE;
+
+		this.styleSwatches = GROUND_TILE_STYLES.map((style, index) => {
+			const x = startX + index * (swatchSize + spacing);
+
+			const border = this.add
+				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+				.setStrokeStyle(3, style === currentStyle ? 0xffd23f : 0x666666);
+
+			const image = this.add
+				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
+				.setDisplaySize(swatchSize, swatchSize)
+				.setInteractive({ useHandCursor: true });
+
+			image.on('pointerdown', () => {
+				this.registry.set(GROUND_TILE_STYLE_REGISTRY_KEY, style);
+				this.styleIndicatorText.setText(`Tile style: ${style}`);
+				this.refreshAllRows();
+				this.highlightSelectedSwatch(style);
+			});
+
+			return { style, image, border };
+		});
+	}
+
+	private highlightSelectedSwatch(selectedStyle: GroundTileStyle) {
+		for (const swatch of this.styleSwatches) {
+			swatch.border.setStrokeStyle(3, swatch.style === selectedStyle ? 0xffd23f : 0x666666);
+		}
+	}
+
+	private refreshAllRows() {
+		const allObjects =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		const rows = new Set(allObjects.map((object) => object.y));
+		for (const y of rows) {
+			this.refreshRow(y);
 		}
 	}
 
@@ -210,14 +239,6 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.refreshRow(y);
 	}
 
-	/**
-	 * Destroys and re-renders every tile on the given row, recomputing each
-	 * one's frame (single/left/center/right) from the current full set of
-	 * tiles on that row. Adding or removing one tile can change what frame
-	 * its neighbors should show (e.g. a single block becomes a left-cap
-	 * once a second tile is added next to it), so the whole row is
-	 * refreshed rather than just the one tile that changed.
-	 */
 	private refreshRow(y: number) {
 		const existingImages = this.tileImagesByRow.get(y) ?? [];
 		for (const image of existingImages) {

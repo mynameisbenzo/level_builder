@@ -40,6 +40,17 @@ export function getNextGroundTileStyle(current: GroundTileStyle): GroundTileStyl
 }
 
 /**
+ * Returns the previous style in the cycle, wrapping around to the last
+ * after the first.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getPreviousGroundTileStyle(current: GroundTileStyle): GroundTileStyle {
+	const index = GROUND_TILE_STYLES.indexOf(current);
+	const previousIndex = (index - 1 + GROUND_TILE_STYLES.length) % GROUND_TILE_STYLES.length;
+	return GROUND_TILE_STYLES[previousIndex];
+}
+
+/**
  * Groups a sorted list of grid-aligned x positions into contiguous runs -
  * a gap larger than one grid cell starts a new run. Each run gets its own
  * left/right end caps, so two separate platform segments on the same row

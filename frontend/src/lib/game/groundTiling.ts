@@ -1,9 +1,43 @@
-export const GROUND_TILE_FRAMES = {
-	single: 'terrain_grass_block',
-	left: 'terrain_grass_horizontal_left',
-	right: 'terrain_grass_horizontal_right',
-	center: 'terrain_grass_horizontal_middle'
-} as const;
+export const GROUND_TILE_STYLES = ['grass', 'dirt', 'sand', 'snow', 'stone', 'purple'] as const;
+export type GroundTileStyle = (typeof GROUND_TILE_STYLES)[number];
+export const GROUND_TILE_STYLE_REGISTRY_KEY = 'groundTileStyle';
+export const DEFAULT_GROUND_TILE_STYLE: GroundTileStyle = 'grass';
+
+export interface GroundTileFrameSet {
+	single: string;
+	left: string;
+	right: string;
+	center: string;
+}
+
+/**
+ * Every style in the Kenney tileset follows the same naming convention, so
+ * each style's frame set can be derived from its name rather than
+ * hand-written four times per style.
+ */
+function buildFrameSet(style: GroundTileStyle): GroundTileFrameSet {
+	return {
+		single: `terrain_${style}_block`,
+		left: `terrain_${style}_horizontal_left`,
+		right: `terrain_${style}_horizontal_right`,
+		center: `terrain_${style}_horizontal_middle`
+	};
+}
+
+export const GROUND_TILE_FRAME_SETS: Record<GroundTileStyle, GroundTileFrameSet> = Object.fromEntries(
+	GROUND_TILE_STYLES.map((style) => [style, buildFrameSet(style)])
+) as Record<GroundTileStyle, GroundTileFrameSet>;
+
+/**
+ * Returns the next style in the cycle, wrapping back to the first after
+ * the last.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getNextGroundTileStyle(current: GroundTileStyle): GroundTileStyle {
+	const index = GROUND_TILE_STYLES.indexOf(current);
+	const nextIndex = (index + 1) % GROUND_TILE_STYLES.length;
+	return GROUND_TILE_STYLES[nextIndex];
+}
 
 /**
  * Groups a sorted list of grid-aligned x positions into contiguous runs -
@@ -33,24 +67,30 @@ export function groupIntoContiguousRuns(sortedXPositions: number[], gridSize: nu
 
 /**
  * Picks the correct tile frame for one x position within a single
- * contiguous run: the only tile in a run of one gets the plain block, the
- * two ends of a longer run get the matching end-cap, and everything
- * between gets the center frame.
+ * contiguous run, in the given style: the only tile in a run of one gets
+ * the plain block, the two ends of a longer run get the matching end-cap,
+ * and everything between gets the center frame.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function getFrameForPositionInRun(run: number[], x: number): string {
+export function getFrameForPositionInRun(
+	run: number[],
+	x: number,
+	style: GroundTileStyle
+): string {
+	const frames = GROUND_TILE_FRAME_SETS[style];
+
 	if (run.length === 1) {
-		return GROUND_TILE_FRAMES.single;
+		return frames.single;
 	}
 
 	const index = run.indexOf(x);
 	if (index === 0) {
-		return GROUND_TILE_FRAMES.left;
+		return frames.left;
 	}
 	if (index === run.length - 1) {
-		return GROUND_TILE_FRAMES.right;
+		return frames.right;
 	}
-	return GROUND_TILE_FRAMES.center;
+	return frames.center;
 }
 
 export interface TileFrameAssignment {
@@ -59,19 +99,23 @@ export interface TileFrameAssignment {
 }
 
 /**
- * Computes the correct tile frame for every x position on a single row,
- * accounting for gaps (separate platform segments) via
+ * Computes the correct tile frame for every x position on a single row, in
+ * the given style, accounting for gaps (separate platform segments) via
  * groupIntoContiguousRuns.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function getRowTileFrames(xPositions: number[], gridSize: number): TileFrameAssignment[] {
+export function getRowTileFrames(
+	xPositions: number[],
+	gridSize: number,
+	style: GroundTileStyle
+): TileFrameAssignment[] {
 	const sorted = [...xPositions].sort((a, b) => a - b);
 	const runs = groupIntoContiguousRuns(sorted, gridSize);
 
 	const assignments: TileFrameAssignment[] = [];
 	for (const run of runs) {
 		for (const x of run) {
-			assignments.push({ x, frame: getFrameForPositionInRun(run, x) });
+			assignments.push({ x, frame: getFrameForPositionInRun(run, x, style) });
 		}
 	}
 	return assignments;

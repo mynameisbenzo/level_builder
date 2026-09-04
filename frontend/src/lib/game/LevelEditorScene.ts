@@ -7,7 +7,13 @@ import {
 	PLAYER_TEXTURE_KEY,
 	TILES_ATLAS_KEY
 } from './textures';
-import { getRowTileFrames } from './groundTiling';
+import {
+	DEFAULT_GROUND_TILE_STYLE,
+	getNextGroundTileStyle,
+	getRowTileFrames,
+	GROUND_TILE_STYLE_REGISTRY_KEY,
+	type GroundTileStyle
+} from './groundTiling';
 import {
 	EDITOR_PLAYER_POSITION_KEY,
 	resolveInitialPlayerPosition,
@@ -24,6 +30,8 @@ const BACKGROUND_COLOR = 0x14141f;
 
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
+	private styleKey!: Phaser.Input.Keyboard.Key;
+	private styleIndicatorText!: Phaser.GameObjects.Text;
 	private playerObject!: Phaser.GameObjects.Image;
 	private instructionsVisible = true;
 	private instructionTexts: Phaser.GameObjects.Text[] = [];
@@ -74,8 +82,20 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.add.text(10, 70, 'Click empty space to place ground, click a tile to remove it', {
 				font: '14px monospace',
 				color: '#aaaaaa'
+			}),
+			this.add.text(10, 90, 'S to swap ground tile style', {
+				font: '14px monospace',
+				color: '#aaaaaa'
 			})
 		];
+
+		const currentStyle =
+			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
+			DEFAULT_GROUND_TILE_STYLE;
+		this.styleIndicatorText = this.add.text(10, 110, `Tile style: ${currentStyle}`, {
+			font: '14px monospace',
+			color: '#ffd23f'
+		});
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -146,9 +166,26 @@ export class LevelEditorScene extends Phaser.Scene {
 			throw new Error('Keyboard input plugin is not available');
 		}
 		this.toggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
+		this.styleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.S);
 	}
 
 	update() {
+		if (Phaser.Input.Keyboard.JustDown(this.styleKey)) {
+			const currentStyle =
+				(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
+				DEFAULT_GROUND_TILE_STYLE;
+			const nextStyle = getNextGroundTileStyle(currentStyle);
+			this.registry.set(GROUND_TILE_STYLE_REGISTRY_KEY, nextStyle);
+			this.styleIndicatorText.setText(`Tile style: ${nextStyle}`);
+
+			const allObjects =
+				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+			const rows = new Set(allObjects.map((object) => object.y));
+			for (const y of rows) {
+				this.refreshRow(y);
+			}
+		}
+
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
 			clearModeTogglePressed();
 			this.registry.set(EDITOR_PLAYER_POSITION_KEY, {
@@ -190,7 +227,10 @@ export class LevelEditorScene extends Phaser.Scene {
 		const allObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 		const rowXPositions = allObjects.filter((object) => object.y === y).map((object) => object.x);
-		const frameAssignments = getRowTileFrames(rowXPositions, GRID_SIZE);
+		const currentStyle =
+			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
+			DEFAULT_GROUND_TILE_STYLE;
+		const frameAssignments = getRowTileFrames(rowXPositions, GRID_SIZE, currentStyle);
 
 		const newImages: Phaser.GameObjects.Image[] = [];
 		for (const { x, frame } of frameAssignments) {

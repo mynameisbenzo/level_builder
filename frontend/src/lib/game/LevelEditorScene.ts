@@ -26,12 +26,12 @@ import {
 	getNextActiveGroupKeys,
 	getSameGroupTileKeys,
 	isPositionOccupied,
+	mergeAdjacentSameStyleGroups,
+	mergeGroupIds,
 	PLACED_OBJECTS_REGISTRY_KEY,
+	resolveGroupIdForPlacement,
 	tileKey,
 	updateObjectStyle,
-	mergeGroupIds,
-	resolveGroupIdForPlacement,
-	mergeAdjacentSameStyleGroups,
 	type PlacedObject
 } from './placedObjects';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
@@ -40,6 +40,14 @@ import { currentMode } from './currentMode';
 const CURRENT_MODE: GameMode = 'edit';
 const GRID_COLOR = 0x333344;
 const BACKGROUND_COLOR = 0x14141f;
+
+/**
+ * Which UI the user prefers for changing a selected platform's style.
+ * Stored in the registry so it persists across Play/Edit toggles.
+ */
+type StylePickerMode = 'toolbar' | 'radial';
+const STYLE_PICKER_MODE_REGISTRY_KEY = 'stylePickerMode';
+const DEFAULT_STYLE_PICKER_MODE: StylePickerMode = 'toolbar';
 
 /**
  * Generates a fresh id to use as the fallback when a newly placed tile has
@@ -61,11 +69,24 @@ export class LevelEditorScene extends Phaser.Scene {
 	private tileImagesByRow = new Map<number, Phaser.GameObjects.Image[]>();
 	private activeGroupKeys: string[] | null = null;
 	private activeTileBorders: Phaser.GameObjects.Rectangle[] = [];
+
+	// Toolbar UI
 	private styleSwatches: {
 		style: GroundTileStyle;
 		image: Phaser.GameObjects.Image;
 		border: Phaser.GameObjects.Rectangle;
 	}[] = [];
+
+	// Radial menu UI
+	private radialMenuCenter?: Phaser.GameObjects.Arc;
+	private radialMenuOptions: {
+		style: GroundTileStyle;
+		swatch: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Arc;
+	}[] = [];
+
+	// UI mode toggle
+	private uiModeToggleButton!: Phaser.GameObjects.Text;
 
 	constructor() {
 		super('LevelEditorScene');
@@ -119,7 +140,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.add.text(
 				10,
 				90,
-				'Style palette: Select a platform to reveal the style palette and change its appearance.',
+				'Select a platform to reveal the style picker and change its appearance',
 				{
 					font: '14px monospace',
 					color: '#aaaaaa'
@@ -127,7 +148,9 @@ export class LevelEditorScene extends Phaser.Scene {
 			)
 		];
 
+		this.createUiModeToggle();
 		this.createStyleToolbar();
+		this.refreshStylePickerVisibility();
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -149,9 +172,6 @@ export class LevelEditorScene extends Phaser.Scene {
 				// group - you're placing something new, not editing what was
 				// selected before.
 				this.setActiveGroup(null);
-
-				// Every click-and-drag placement gesture is its own platform,
-				// even if it ends up touching an existing one.
 
 				const x = snapToGrid(pointer.x, GRID_SIZE);
 				const y = snapToGrid(pointer.y, GRID_SIZE);
@@ -220,6 +240,79 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
+	// ── UI mode toggle (top-right) ──────────────────────────────────────
+
+	private createUiModeToggle() {
+		const mode = this.getStylePickerMode();
+		this.uiModeToggleButton = this.add
+			.text(this.scale.width - 10, 10, this.uiModeLabel(mode), {
+				font: '14px monospace',
+				color: '#00d9ff'
+			})
+			.setOrigin(1, 0)
+			.setInteractive({ useHandCursor: true });
+
+		this.uiModeToggleButton.on('pointerdown', () => {
+			const current = this.getStylePickerMode();
+			const next: StylePickerMode = current === 'toolbar' ? 'radial' : 'toolbar';
+			this.registry.set(STYLE_PICKER_MODE_REGISTRY_KEY, next);
+			this.uiModeToggleButton.setText(this.uiModeLabel(next));
+			// Switching UI while the radial menu happens to be open would
+			// leave it orphaned on screen with no way to reach it again.
+			this.closeRadialMenu();
+			this.refreshStylePickerVisibility();
+		});
+	}
+
+	private uiModeLabel(mode: StylePickerMode): string {
+		return mode === 'toolbar' ? 'Style UI: Toolbar' : 'Style UI: Radial';
+	}
+
+	private getStylePickerMode(): StylePickerMode {
+		return (
+			(this.registry.get(STYLE_PICKER_MODE_REGISTRY_KEY) as StylePickerMode | undefined) ??
+			DEFAULT_STYLE_PICKER_MODE
+		);
+	}
+
+	/**
+	 * Shows/enables whichever style-selection UI matches the current
+	 * preference, and only while a platform is actually selected - neither
+	 * UI makes sense with nothing to apply a style change to.
+	 */
+	private refreshStylePickerVisibility() {
+		const hasSelection = this.activeGroupKeys !== null && this.activeGroupKeys.length > 0;
+		const mode = this.getStylePickerMode();
+
+		const toolbarVisible = hasSelection && mode === 'toolbar';
+		for (const swatch of this.styleSwatches) {
+			swatch.image.setVisible(toolbarVisible);
+			swatch.border.setVisible(toolbarVisible);
+			if (toolbarVisible) {
+				swatch.image.setInteractive({ useHandCursor: true });
+			} else {
+				swatch.image.disableInteractive();
+			}
+		}
+		if (toolbarVisible) {
+			this.refreshSwatchHighlight();
+		}
+
+		const radialVisible = hasSelection && mode === 'radial';
+		if (radialVisible) {
+			// Always close-then-reopen rather than leaving a stale instance
+			// in place, so the highlighted style is never out of date after
+			// a restyle or a merge.
+			this.closeRadialMenu();
+			const [xStr, yStr] = this.activeGroupKeys![0].split(',');
+			this.openRadialMenu(Number(xStr), Number(yStr));
+		} else {
+			this.closeRadialMenu();
+		}
+	}
+
+	// ── Toolbar UI ───────────────────────────────────────────────────────
+
 	private createStyleToolbar() {
 		const swatchSize = 40;
 		const spacing = 10;
@@ -240,22 +333,88 @@ export class LevelEditorScene extends Phaser.Scene {
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true });
 
-			image.on('pointerdown', () => this.applyStyleFromToolbar(style));
+			image.on('pointerdown', () => this.applyStyleToActiveGroup(style));
 
 			return { style, image, border };
 		});
-
-		this.refreshSwatchHighlight();
-		this.refreshToolbarVisibility();
 	}
 
 	/**
-	 * Clicking a toolbar swatch restyles every tile in the currently
-	 * active (selected) platform. The toolbar is only visible/interactive
-	 * when something is selected (see refreshToolbarVisibility), so this
-	 * is never reachable with nothing active - the guard is defensive.
+	 * The swatch highlight reflects the active platform's current style
+	 * (all its tiles should match, so the first is representative). Only
+	 * meaningful while the toolbar is actually visible.
 	 */
-	private applyStyleFromToolbar(style: GroundTileStyle) {
+	private refreshSwatchHighlight() {
+		const displayedStyle = this.getDisplayedStyle();
+		for (const swatch of this.styleSwatches) {
+			swatch.border.setStrokeStyle(3, swatch.style === displayedStyle ? 0xffd23f : 0x666666);
+		}
+	}
+
+	/**
+	 * A simplified radial menu: all six styles arranged in a circle, each
+	 * clickable directly, applying to the currently active platform.
+	 */
+	private openRadialMenu(centerX: number, centerY: number) {
+		this.radialMenuCenter = this.add
+			.circle(centerX, centerY, 10, 0xffd23f, 0.9)
+			.setInteractive({ useHandCursor: true });
+		// Clicking the center deselects, same as clicking an already-active
+		// tile directly would - this closes the menu via the same selection
+		// state the toolbar's visibility already depends on.
+		this.radialMenuCenter.on('pointerdown', () => this.setActiveGroup(null));
+
+		const currentStyle = this.getDisplayedStyle();
+		const radius = 70;
+		const angleStep = (Math.PI * 2) / GROUND_TILE_STYLES.length;
+		const startAngle = -Math.PI / 2;
+
+		this.radialMenuOptions = GROUND_TILE_STYLES.map((style, index) => {
+			const angle = startAngle + index * angleStep;
+			const x = centerX + radius * Math.cos(angle);
+			const y = centerY + radius * Math.sin(angle);
+
+			const border = this.add
+				.circle(x, y, 26, 0x000000, 0)
+				.setStrokeStyle(3, style === currentStyle ? 0xffd23f : 0x666666);
+
+			const swatch = this.add
+				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
+				.setDisplaySize(44, 44)
+				.setInteractive({ useHandCursor: true });
+
+				swatch.on('pointerdown', () => {
+					// Menu stays open, mirroring the toolbar staying visible
+					// after a click - applyStyleToActiveGroup's own visibility
+					// refresh will close-and-reopen this menu with the updated
+					// highlight, so further style changes can be made right away.
+					this.applyStyleToActiveGroup(style);
+				});
+
+			return { style, swatch, border };
+		});
+	}
+
+	private closeRadialMenu() {
+		this.isRadialMenuOpen = false;
+		this.radialMenuCenter?.destroy();
+		this.radialMenuCenter = undefined;
+		for (const option of this.radialMenuOptions) {
+			option.swatch.destroy();
+			option.border.destroy();
+		}
+		this.radialMenuOptions = [];
+	}
+
+	// ── Shared restyle logic (called by both UIs) ───────────────────────
+
+	/**
+	 * Restyles every tile in the currently active (selected) platform.
+	 * Shared by both the toolbar and the radial menu - neither UI is
+	 * visible/interactive with nothing selected, so this is never reached
+	 * with an empty selection; the guard is defensive.
+	 */
+	private applyStyleToActiveGroup(style: GroundTileStyle) {
 		if (this.activeGroupKeys === null || this.activeGroupKeys.length === 0) {
 			return;
 		}
@@ -272,6 +431,8 @@ export class LevelEditorScene extends Phaser.Scene {
 			affectedRows.add(y);
 		}
 
+		// The restyled platform's own id doesn't change - look it up from
+		// any of its tiles now that the style update has been applied.
 		const [firstXStr, firstYStr] = this.activeGroupKeys[0].split(',');
 		const activeObject = existing.find(
 			(object) => object.x === Number(firstXStr) && object.y === Number(firstYStr)
@@ -279,9 +440,14 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		if (activeObject) {
 			const groupId = activeObject.groupId;
+			// Restyling can now make this platform match a directly
+			// touching different platform - placement-time merging
+			// doesn't retroactively apply, so check for that here.
 			for (const y of affectedRows) {
 				existing = mergeAdjacentSameStyleGroups(existing, groupId, y, GRID_SIZE);
 			}
+			// Reflect the merge (if any) in the current selection, so the
+			// highlight covers the whole newly-combined platform.
 			this.activeGroupKeys = getSameGroupTileKeys(existing, groupId);
 		}
 
@@ -289,20 +455,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		for (const y of affectedRows) {
 			this.refreshRow(y);
 		}
-		this.refreshSwatchHighlight();
-	}
-
-	/**
-	 * The swatch highlight reflects the style relevant to the current
-	 * selection state: the active platform's style (all its tiles should
-	 * match, so the first is representative) if one is selected, otherwise
-	 * the default style that will be used for new placements.
-	 */
-	private refreshSwatchHighlight() {
-		const displayedStyle = this.getDisplayedStyle();
-		for (const swatch of this.styleSwatches) {
-			swatch.border.setStrokeStyle(3, swatch.style === displayedStyle ? 0xffd23f : 0x666666);
-		}
+		this.refreshStylePickerVisibility();
 	}
 
 	private getDisplayedStyle(): GroundTileStyle {
@@ -325,28 +478,8 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private setActiveGroup(keys: string[] | null) {
 		this.activeGroupKeys = keys;
-		this.refreshSwatchHighlight();
 		this.refreshActiveGroupBorders();
-		this.refreshToolbarVisibility();
-	}
-	
-	/**
-	 * The style toolbar only makes sense as a "restyle what's selected"
-	 * tool, so it's only shown (and only clickable) while something is
-	 * actually selected. setVisible() alone wouldn't stop clicks/taps from
-	 * still hitting a hidden swatch, so interactivity is toggled too.
-	 */
-	private refreshToolbarVisibility() {
-		const visible = this.activeGroupKeys !== null && this.activeGroupKeys.length > 0;
-		for (const swatch of this.styleSwatches) {
-			swatch.image.setVisible(visible);
-			swatch.border.setVisible(visible);
-			if (visible) {
-				swatch.image.setInteractive({ useHandCursor: true });
-			} else {
-				swatch.image.disableInteractive();
-			}
-		}
+		this.refreshStylePickerVisibility();
 	}
 
 	private refreshActiveGroupBorders() {
@@ -369,6 +502,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.activeTileBorders.push(border);
 		}
 	}
+
 	private placeTileIfEmpty(x: number, y: number) {
 		const existing =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];

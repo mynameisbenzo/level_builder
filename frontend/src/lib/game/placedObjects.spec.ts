@@ -8,7 +8,8 @@ import {
 	updateObjectStyle,
 	resolveGroupIdForPlacement,
 	mergeGroupIds,
-	type PlacedObject
+	type PlacedObject,
+	mergeAdjacentSameStyleGroups
 } from './placedObjects';
 
 describe('isPositionOccupied', () => {
@@ -199,5 +200,81 @@ describe('mergeGroupIds', () => {
 			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'z' },
 			{ type: 'ground', x: 48, y: 0, style: 'stone', groupId: 'c' }
 		]);
+	});
+});
+
+describe('mergeAdjacentSameStyleGroups', () => {
+	it('merges a touching same-style neighbor on the right after a restyle', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'b' }
+		];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual([
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' }
+		]);
+	});
+
+	it('merges a touching same-style neighbor on the left after a restyle', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'b' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' }
+		];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual([
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' }
+		]);
+	});
+
+	it('merges neighbors on both sides at once', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'left' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'right' }
+		];
+		expect(mergeAdjacentSameStyleGroups(existing, 'active', 0, 32)).toEqual([
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'active' }
+		]);
+	});
+
+	it('does not merge when the touching neighbor is a different style', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
+			{ type: 'ground', x: 48, y: 0, style: 'stone', groupId: 'b' }
+		];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual(existing);
+	});
+
+	it('does nothing when there is no neighbor at all', () => {
+		const existing: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual(existing);
+	});
+
+	it('checks the edges of a multi-tile group, not just one tile', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'neighbor' }
+		];
+		expect(mergeAdjacentSameStyleGroups(existing, 'active', 0, 32)).toEqual([
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
+			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'active' }
+		]);
+	});
+
+	it('is unaffected by tiles on other rows', () => {
+		const existing: PlacedObject[] = [
+			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
+			{ type: 'ground', x: 48, y: 32, style: 'grass', groupId: 'b' }
+		];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual(existing);
+	});
+
+	it('returns the input unchanged when the group has no tiles on that row', () => {
+		const existing: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
+		expect(mergeAdjacentSameStyleGroups(existing, 'nonexistent', 0, 32)).toEqual(existing);
 	});
 });

@@ -31,6 +31,7 @@ import {
 	updateObjectStyle,
 	mergeGroupIds,
 	resolveGroupIdForPlacement,
+	mergeAdjacentSameStyleGroups,
 	type PlacedObject
 } from './placedObjects';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
@@ -254,11 +255,11 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * the default style used for newly placed tiles.
 	 */
 	private applyStyleFromToolbar(style: GroundTileStyle) {
-		if (this.activeGroupKeys !== null) {
+		if (this.activeGroupKeys !== null && this.activeGroupKeys.length > 0) {
 			let existing =
 				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 			const affectedRows = new Set<number>();
-
+	
 			for (const key of this.activeGroupKeys) {
 				const [xStr, yStr] = key.split(',');
 				const x = Number(xStr);
@@ -266,7 +267,27 @@ export class LevelEditorScene extends Phaser.Scene {
 				existing = updateObjectStyle(existing, x, y, style);
 				affectedRows.add(y);
 			}
-
+	
+			// The restyled platform's own id doesn't change - look it up from
+			// any of its tiles now that the style update has been applied.
+			const [firstXStr, firstYStr] = this.activeGroupKeys[0].split(',');
+			const activeObject = existing.find(
+				(object) => object.x === Number(firstXStr) && object.y === Number(firstYStr)
+			);
+	
+			if (activeObject) {
+				const groupId = activeObject.groupId;
+				// Restyling can now make this platform match a directly
+				// touching different platform - placement-time merging
+				// doesn't retroactively apply, so check for that here.
+				for (const y of affectedRows) {
+					existing = mergeAdjacentSameStyleGroups(existing, groupId, y, GRID_SIZE);
+				}
+				// Reflect the merge (if any) in the current selection, so the
+				// highlight covers the whole newly-combined platform.
+				this.activeGroupKeys = getSameGroupTileKeys(existing, groupId);
+			}
+	
 			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
 			for (const y of affectedRows) {
 				this.refreshRow(y);

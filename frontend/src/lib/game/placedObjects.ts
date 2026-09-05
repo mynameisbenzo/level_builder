@@ -135,3 +135,44 @@ export function mergeGroupIds(
 		object.groupId === fromGroupId ? { ...object, groupId: toGroupId } : object
 	);
 }
+
+/**
+ * Checks whether the given platform's left or right edge now touches a
+ * DIFFERENT platform of the same style - which can happen after a
+ * restyle, since placement-time merging doesn't retroactively apply. If
+ * so, merges the neighboring platform into this one. A no-op if the
+ * group has no tiles, or neither edge has a matching same-style neighbor.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function mergeAdjacentSameStyleGroups(
+	existing: PlacedObject[],
+	groupId: string,
+	y: number,
+	gridSize: number
+): PlacedObject[] {
+	const rowObjects = existing.filter((object) => object.y === y);
+	const groupTilesOnRow = rowObjects.filter((object) => object.groupId === groupId);
+
+	if (groupTilesOnRow.length === 0) {
+		return existing;
+	}
+
+	const style = groupTilesOnRow[0].style;
+	const xs = groupTilesOnRow.map((object) => object.x);
+	const minX = Math.min(...xs);
+	const maxX = Math.max(...xs);
+
+	let updated = existing;
+
+	const leftNeighbor = rowObjects.find((object) => object.x === minX - gridSize);
+	if (leftNeighbor && leftNeighbor.style === style && leftNeighbor.groupId !== groupId) {
+		updated = mergeGroupIds(updated, leftNeighbor.groupId, groupId);
+	}
+
+	const rightNeighbor = rowObjects.find((object) => object.x === maxX + gridSize);
+	if (rightNeighbor && rightNeighbor.style === style && rightNeighbor.groupId !== groupId) {
+		updated = mergeGroupIds(updated, rightNeighbor.groupId, groupId);
+	}
+
+	return updated;
+}

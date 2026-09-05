@@ -110,6 +110,15 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.add.text(
 				10,
 				70,
+				'Select a platform to reveal the style palette and change its appearance.',
+				{
+					font: '14px monospace',
+					color: '#aaaaaa'
+				}
+			),
+			this.add.text(
+				10,
+				70,
 				'Click-drag empty space to place a platform. Click a platform to select it, click again to deselect.',
 				{
 					font: '14px monospace',
@@ -246,54 +255,48 @@ export class LevelEditorScene extends Phaser.Scene {
 		});
 
 		this.refreshSwatchHighlight();
+		this.refreshToolbarVisibility();
 	}
 
 	/**
-	 * Clicking a toolbar swatch means different things depending on whether
-	 * a platform is currently active (selected): with a group active, it
-	 * restyles every tile in that platform; with nothing active, it sets
-	 * the default style used for newly placed tiles.
+	 * Clicking a toolbar swatch restyles every tile in the currently
+	 * active (selected) platform. The toolbar is only visible/interactive
+	 * when something is selected (see refreshToolbarVisibility), so this
+	 * is never reachable with nothing active - the guard is defensive.
 	 */
 	private applyStyleFromToolbar(style: GroundTileStyle) {
-		if (this.activeGroupKeys !== null && this.activeGroupKeys.length > 0) {
-			let existing =
-				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-			const affectedRows = new Set<number>();
-	
-			for (const key of this.activeGroupKeys) {
-				const [xStr, yStr] = key.split(',');
-				const x = Number(xStr);
-				const y = Number(yStr);
-				existing = updateObjectStyle(existing, x, y, style);
-				affectedRows.add(y);
-			}
-	
-			// The restyled platform's own id doesn't change - look it up from
-			// any of its tiles now that the style update has been applied.
-			const [firstXStr, firstYStr] = this.activeGroupKeys[0].split(',');
-			const activeObject = existing.find(
-				(object) => object.x === Number(firstXStr) && object.y === Number(firstYStr)
-			);
-	
-			if (activeObject) {
-				const groupId = activeObject.groupId;
-				// Restyling can now make this platform match a directly
-				// touching different platform - placement-time merging
-				// doesn't retroactively apply, so check for that here.
-				for (const y of affectedRows) {
-					existing = mergeAdjacentSameStyleGroups(existing, groupId, y, GRID_SIZE);
-				}
-				// Reflect the merge (if any) in the current selection, so the
-				// highlight covers the whole newly-combined platform.
-				this.activeGroupKeys = getSameGroupTileKeys(existing, groupId);
-			}
-	
-			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
+		if (this.activeGroupKeys === null || this.activeGroupKeys.length === 0) {
+			return;
+		}
+
+		let existing =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		const affectedRows = new Set<number>();
+
+		for (const key of this.activeGroupKeys) {
+			const [xStr, yStr] = key.split(',');
+			const x = Number(xStr);
+			const y = Number(yStr);
+			existing = updateObjectStyle(existing, x, y, style);
+			affectedRows.add(y);
+		}
+
+		const [firstXStr, firstYStr] = this.activeGroupKeys[0].split(',');
+		const activeObject = existing.find(
+			(object) => object.x === Number(firstXStr) && object.y === Number(firstYStr)
+		);
+
+		if (activeObject) {
+			const groupId = activeObject.groupId;
 			for (const y of affectedRows) {
-				this.refreshRow(y);
+				existing = mergeAdjacentSameStyleGroups(existing, groupId, y, GRID_SIZE);
 			}
-		} else {
-			this.registry.set(GROUND_TILE_STYLE_REGISTRY_KEY, style);
+			this.activeGroupKeys = getSameGroupTileKeys(existing, groupId);
+		}
+
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
+		for (const y of affectedRows) {
+			this.refreshRow(y);
 		}
 		this.refreshSwatchHighlight();
 	}
@@ -333,6 +336,26 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.activeGroupKeys = keys;
 		this.refreshSwatchHighlight();
 		this.refreshActiveGroupBorders();
+		this.refreshToolbarVisibility();
+	}
+	
+	/**
+	 * The style toolbar only makes sense as a "restyle what's selected"
+	 * tool, so it's only shown (and only clickable) while something is
+	 * actually selected. setVisible() alone wouldn't stop clicks/taps from
+	 * still hitting a hidden swatch, so interactivity is toggled too.
+	 */
+	private refreshToolbarVisibility() {
+		const visible = this.activeGroupKeys !== null && this.activeGroupKeys.length > 0;
+		for (const swatch of this.styleSwatches) {
+			swatch.image.setVisible(visible);
+			swatch.border.setVisible(visible);
+			if (visible) {
+				swatch.image.setInteractive({ useHandCursor: true });
+			} else {
+				swatch.image.disableInteractive();
+			}
+		}
 	}
 
 	private refreshActiveGroupBorders() {

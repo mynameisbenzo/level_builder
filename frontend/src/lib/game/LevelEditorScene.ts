@@ -396,7 +396,6 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private closeRadialMenu() {
-		this.isRadialMenuOpen = false;
 		this.radialMenuCenter?.destroy();
 		this.radialMenuCenter = undefined;
 		for (const option of this.radialMenuOptions) {

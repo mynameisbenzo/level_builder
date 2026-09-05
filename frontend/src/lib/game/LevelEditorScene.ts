@@ -110,15 +110,6 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.add.text(
 				10,
 				70,
-				'Select a platform to reveal the style palette and change its appearance.',
-				{
-					font: '14px monospace',
-					color: '#aaaaaa'
-				}
-			),
-			this.add.text(
-				10,
-				70,
 				'Click-drag empty space to place a platform. Click a platform to select it, click again to deselect.',
 				{
 					font: '14px monospace',
@@ -128,7 +119,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.add.text(
 				10,
 				90,
-				'Style palette: sets the selected platform\u2019s style, or the default for new platforms',
+				'Style palette: Select a platform to reveal the style palette and change its appearance.',
 				{
 					font: '14px monospace',
 					color: '#aaaaaa'

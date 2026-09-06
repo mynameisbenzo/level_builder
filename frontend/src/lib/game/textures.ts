@@ -4,6 +4,8 @@ export const PLAYER_TEXTURE_KEY = 'player-square';
 export const PLAYER_TEXTURE_SIZE = 32;
 export const CHARACTERS_ATLAS_KEY = 'characters';
 export const TILES_ATLAS_KEY = 'tiles';
+export const ERASER_ICON_KEY = 'eraser-icon';
+export const ERASER_ICON_PATH = '/assets/icons/eraser.png';
 
 /**
  * Generates the placeholder player square texture if it doesn't already
@@ -55,4 +57,16 @@ export function ensureTilesAtlas(scene: Phaser.Scene) {
 		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-tiles-default.png',
 		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-tiles-default.xml'
 	);
+}
+
+/**
+ * Queues the eraser tool icon for loading if it isn't already registered.
+ * Same guarded pattern as the other ensure* loaders.
+ */
+export function ensureEraserIcon(scene: Phaser.Scene) {
+	if (scene.textures.exists(ERASER_ICON_KEY)) {
+		return;
+	}
+
+	scene.load.image(ERASER_ICON_KEY, ERASER_ICON_PATH);
 }

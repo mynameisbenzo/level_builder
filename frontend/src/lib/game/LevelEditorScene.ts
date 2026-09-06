@@ -2,8 +2,11 @@ import Phaser from 'phaser';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import {
 	ensureCharacterAtlas,
+	ensureEraserIcon,
 	ensurePlayerTexture,
 	ensureTilesAtlas,
+	ERASER_ICON_KEY,
+	ERASER_ICON_PATH,
 	PLAYER_TEXTURE_KEY,
 	TILES_ATLAS_KEY
 } from './textures';
@@ -29,11 +32,13 @@ import {
 	mergeAdjacentSameStyleGroups,
 	mergeGroupIds,
 	PLACED_OBJECTS_REGISTRY_KEY,
+	removePosition,
 	resolveGroupIdForPlacement,
 	tileKey,
 	updateObjectStyle,
 	type PlacedObject
 } from './placedObjects';
+import { DEFAULT_EDITOR_TOOL, EDITOR_TOOL_REGISTRY_KEY, EDITOR_TOOLS, type EditorTool } from './tools';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
 
@@ -70,7 +75,14 @@ export class LevelEditorScene extends Phaser.Scene {
 	private activeGroupKeys: string[] | null = null;
 	private activeTileBorders: Phaser.GameObjects.Rectangle[] = [];
 
-	// Toolbar UI
+	// Tools toolbar (top-center)
+	private toolButtons: {
+		tool: EditorTool;
+		hitArea: Phaser.GameObjects.GameObject;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
+
+	// Style toolbar UI
 	private styleSwatches: {
 		style: GroundTileStyle;
 		image: Phaser.GameObjects.Image;
@@ -78,6 +90,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	}[] = [];
 
 	// Radial menu UI
+	private isRadialMenuOpen = false;
 	private radialMenuCenter?: Phaser.GameObjects.Arc;
 	private radialMenuOptions: {
 		style: GroundTileStyle;
@@ -96,6 +109,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		ensurePlayerTexture(this);
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
+		ensureEraserIcon(this);
 	}
 
 	create() {
@@ -145,9 +159,15 @@ export class LevelEditorScene extends Phaser.Scene {
 					font: '14px monospace',
 					color: '#aaaaaa'
 				}
-			)
+			),
+			this.add.text(10, 110, 'Eraser tool: click or click-drag a tile to remove it', {
+				font: '14px monospace',
+				color: '#aaaaaa'
+			})
 		];
 
+		this.createToolsToolbar();
+		this.applyCursorForTool(this.getEditorTool());
 		this.createUiModeToggle();
 		this.createStyleToolbar();
 		this.refreshStylePickerVisibility();
@@ -163,8 +183,14 @@ export class LevelEditorScene extends Phaser.Scene {
 			'pointerdown',
 			(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
 				if (currentlyOver.length > 0) {
-					// Clicked an existing object (e.g. the player) - let its own
-					// handlers (like dragging) deal with it, don't place a tile.
+					// Clicked an existing object (e.g. the player, a tile, a
+					// button) - let its own handlers deal with it.
+					return;
+				}
+
+				if (this.getEditorTool() !== 'select') {
+					// The eraser (and any future non-placement tool) has
+					// nothing useful to do on empty space.
 					return;
 				}
 
@@ -184,6 +210,13 @@ export class LevelEditorScene extends Phaser.Scene {
 		);
 
 		this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+			if (this.getEditorTool() === 'eraser') {
+				if (pointer.isDown) {
+					this.eraseAtPointer(pointer);
+				}
+				return;
+			}
+
 			if (!this.isDragPlacing || !pointer.isDown) {
 				return;
 			}
@@ -240,6 +273,97 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
+	// ── Tools toolbar (top-center) ──────────────────────────────────────
+
+	private createToolsToolbar() {
+		const spacing = 56;
+		const startX = this.scale.width / 2 - spacing / 2;
+		const y = 24;
+
+		const selectBorder = this.add
+			.rectangle(startX, y, 70, 32)
+			.setStrokeStyle(2, 0x666666);
+		const selectLabel = this.add
+			.text(startX, y, 'Select', { font: '12px monospace', color: '#ffffff' })
+			.setOrigin(0.5)
+			.setInteractive({ useHandCursor: true });
+		selectLabel.on('pointerdown', () => this.setEditorTool('select'));
+		this.toolButtons.push({ tool: 'select', hitArea: selectLabel, border: selectBorder });
+
+		const eraserX = startX + spacing;
+		const eraserBorder = this.add.rectangle(eraserX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		const eraserIcon = this.add
+			.image(eraserX, y, ERASER_ICON_KEY)
+			.setDisplaySize(24, 24)
+			.setInteractive({ useHandCursor: true });
+		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
+		this.toolButtons.push({ tool: 'eraser', hitArea: eraserIcon, border: eraserBorder });
+
+		this.refreshToolHighlight();
+	}
+
+	private refreshToolHighlight() {
+		const current = this.getEditorTool();
+		for (const button of this.toolButtons) {
+			button.border.setStrokeStyle(2, button.tool === current ? 0xffd23f : 0x666666);
+		}
+	}
+
+	private getEditorTool(): EditorTool {
+		return (
+			(this.registry.get(EDITOR_TOOL_REGISTRY_KEY) as EditorTool | undefined) ??
+			DEFAULT_EDITOR_TOOL
+		);
+	}
+
+	private setEditorTool(tool: EditorTool) {
+		if (!EDITOR_TOOLS.includes(tool)) {
+			return;
+		}
+		this.registry.set(EDITOR_TOOL_REGISTRY_KEY, tool);
+		this.refreshToolHighlight();
+		this.applyCursorForTool(tool);
+		if (tool !== 'select') {
+			// Switching to a non-placement tool clears any selection, so a
+			// leftover style picker doesn't linger while erasing.
+			this.setActiveGroup(null);
+		}
+	}
+
+	/**
+	 * Sets the browser cursor shown while hovering the canvas. The eraser
+	 * uses the same icon as its toolbar button; the default/select tool
+	 * currently uses a built-in cursor distinct from the plain browser
+	 * arrow as a placeholder - swap in a custom image here if one is ever
+	 * provided for it.
+	 */
+	private applyCursorForTool(tool: EditorTool) {
+		if (tool === 'eraser') {
+			this.input.setDefaultCursor(`url(${ERASER_ICON_PATH}) 16 16, auto`);
+		} else {
+			this.input.setDefaultCursor('crosshair');
+		}
+	}
+
+	/**
+	 * Erases whatever tile (if any) sits exactly under the pointer. Used
+	 * for both the initial click and for dragging across multiple tiles.
+	 * Unlike placement, this isn't locked to a single row or gap-filled
+	 * for fast movement - it simply checks the current pointer position
+	 * each time it's called.
+	 */
+	private eraseAtPointer(pointer: Phaser.Input.Pointer) {
+		const x = snapToGrid(pointer.x, GRID_SIZE);
+		const y = snapToGrid(pointer.y, GRID_SIZE);
+		const existing =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		if (!isPositionOccupied(existing, x, y)) {
+			return;
+		}
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(existing, x, y));
+		this.refreshRow(y);
+	}
+
 	// ── UI mode toggle (top-right) ──────────────────────────────────────
 
 	private createUiModeToggle() {
@@ -278,7 +402,10 @@ export class LevelEditorScene extends Phaser.Scene {
 	/**
 	 * Shows/enables whichever style-selection UI matches the current
 	 * preference, and only while a platform is actually selected - neither
-	 * UI makes sense with nothing to apply a style change to.
+	 * UI makes sense with nothing to apply a style change to. The radial
+	 * menu opens/closes here directly, mirroring how the toolbar's
+	 * visibility is tied to selection rather than a separate open/close
+	 * action.
 	 */
 	private refreshStylePickerVisibility() {
 		const hasSelection = this.activeGroupKeys !== null && this.activeGroupKeys.length > 0;
@@ -311,7 +438,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
-	// ── Toolbar UI ───────────────────────────────────────────────────────
+	// ── Style toolbar UI ─────────────────────────────────────────────────
 
 	private createStyleToolbar() {
 		const swatchSize = 40;
@@ -351,11 +478,21 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
+	// ── Radial menu UI ───────────────────────────────────────────────────
+
 	/**
 	 * A simplified radial menu: all six styles arranged in a circle, each
-	 * clickable directly, applying to the currently active platform.
+	 * clickable directly, applying to the currently active platform. Opens
+	 * automatically whenever a platform is selected in radial mode (see
+	 * refreshStylePickerVisibility) - there's no separate "open" trigger,
+	 * it mirrors the toolbar's own always-shown-while-selected behavior.
 	 */
 	private openRadialMenu(centerX: number, centerY: number) {
+		if (this.isRadialMenuOpen) {
+			return;
+		}
+		this.isRadialMenuOpen = true;
+
 		this.radialMenuCenter = this.add
 			.circle(centerX, centerY, 10, 0xffd23f, 0.9)
 			.setInteractive({ useHandCursor: true });
@@ -383,19 +520,20 @@ export class LevelEditorScene extends Phaser.Scene {
 				.setDisplaySize(44, 44)
 				.setInteractive({ useHandCursor: true });
 
-				swatch.on('pointerdown', () => {
-					// Menu stays open, mirroring the toolbar staying visible
-					// after a click - applyStyleToActiveGroup's own visibility
-					// refresh will close-and-reopen this menu with the updated
-					// highlight, so further style changes can be made right away.
-					this.applyStyleToActiveGroup(style);
-				});
+			swatch.on('pointerdown', () => {
+				// Menu stays open, mirroring the toolbar staying visible
+				// after a click - applyStyleToActiveGroup's own visibility
+				// refresh will close-and-reopen this menu with the updated
+				// highlight, so further style changes can be made right away.
+				this.applyStyleToActiveGroup(style);
+			});
 
 			return { style, swatch, border };
 		});
 	}
 
 	private closeRadialMenu() {
+		this.isRadialMenuOpen = false;
 		this.radialMenuCenter?.destroy();
 		this.radialMenuCenter = undefined;
 		for (const option of this.radialMenuOptions) {
@@ -568,6 +706,14 @@ export class LevelEditorScene extends Phaser.Scene {
 				.setInteractive({ useHandCursor: true });
 
 			tile.on('pointerdown', () => {
+				if (this.getEditorTool() === 'eraser') {
+					const current =
+						(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+					this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(current, x, y));
+					this.refreshRow(y);
+					return;
+				}
+
 				const clickedKey = tileKey(x, y);
 				const currentObjects =
 					(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];

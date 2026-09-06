@@ -4,10 +4,13 @@ import {
 	ensureCharacterAtlas,
 	ensureEraserIcon,
 	ensurePlayerTexture,
+	ensureSelectCursorIcon,
 	ensureTilesAtlas,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
 	PLAYER_TEXTURE_KEY,
+	SELECT_CURSOR_ICON_KEY,
+	SELECT_CURSOR_ICON_PATH,
 	TILES_ATLAS_KEY
 } from './textures';
 import {
@@ -110,6 +113,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
 		ensureEraserIcon(this);
+		ensureSelectCursorIcon(this);
 	}
 
 	create() {
@@ -279,17 +283,15 @@ export class LevelEditorScene extends Phaser.Scene {
 		const spacing = 56;
 		const startX = this.scale.width / 2 - spacing / 2;
 		const y = 24;
-
-		const selectBorder = this.add
-			.rectangle(startX, y, 70, 32)
-			.setStrokeStyle(2, 0x666666);
-		const selectLabel = this.add
-			.text(startX, y, 'Select', { font: '12px monospace', color: '#ffffff' })
-			.setOrigin(0.5)
+	
+		const selectBorder = this.add.rectangle(startX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		const selectIcon = this.add
+			.image(startX, y, SELECT_CURSOR_ICON_KEY)
+			.setDisplaySize(24, 24)
 			.setInteractive({ useHandCursor: true });
-		selectLabel.on('pointerdown', () => this.setEditorTool('select'));
-		this.toolButtons.push({ tool: 'select', hitArea: selectLabel, border: selectBorder });
-
+		selectIcon.on('pointerdown', () => this.setEditorTool('select'));
+		this.toolButtons.push({ tool: 'select', hitArea: selectIcon, border: selectBorder });
+	
 		const eraserX = startX + spacing;
 		const eraserBorder = this.add.rectangle(eraserX, y, 40, 32).setStrokeStyle(2, 0x666666);
 		const eraserIcon = this.add
@@ -298,7 +300,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setInteractive({ useHandCursor: true });
 		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
 		this.toolButtons.push({ tool: 'eraser', hitArea: eraserIcon, border: eraserBorder });
-
+	
 		this.refreshToolHighlight();
 	}
 
@@ -331,17 +333,16 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	/**
-	 * Sets the browser cursor shown while hovering the canvas. The eraser
-	 * uses the same icon as its toolbar button; the default/select tool
-	 * currently uses a built-in cursor distinct from the plain browser
-	 * arrow as a placeholder - swap in a custom image here if one is ever
-	 * provided for it.
+	 * Sets the browser cursor shown while hovering the canvas, matching
+	 * whichever tool is active. The hotspot (8, 2) targets roughly the
+	 * fingertip of the select cursor's pointing-hand icon; the eraser's
+	 * hotspot (16, 16) is just its center.
 	 */
 	private applyCursorForTool(tool: EditorTool) {
 		if (tool === 'eraser') {
 			this.input.setDefaultCursor(`url(${ERASER_ICON_PATH}) 16 16, auto`);
 		} else {
-			this.input.setDefaultCursor('crosshair');
+			this.input.setDefaultCursor(`url(${SELECT_CURSOR_ICON_PATH}) 8 2, auto`);
 		}
 	}
 

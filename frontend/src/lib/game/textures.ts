@@ -6,6 +6,8 @@ export const CHARACTERS_ATLAS_KEY = 'characters';
 export const TILES_ATLAS_KEY = 'tiles';
 export const ERASER_ICON_KEY = 'eraser-icon';
 export const ERASER_ICON_PATH = '/assets/icons/eraser.png';
+export const SELECT_CURSOR_ICON_KEY = 'select-cursor-icon';
+export const SELECT_CURSOR_ICON_PATH = '/assets/icons/select-cursor.png';
 
 /**
  * Generates the placeholder player square texture if it doesn't already
@@ -69,4 +71,16 @@ export function ensureEraserIcon(scene: Phaser.Scene) {
 	}
 
 	scene.load.image(ERASER_ICON_KEY, ERASER_ICON_PATH);
+}
+
+/**
+ * Queues the select-tool cursor/button icon for loading if it isn't
+ * already registered. Same guarded pattern as the other ensure* loaders.
+ */
+export function ensureSelectCursorIcon(scene: Phaser.Scene) {
+	if (scene.textures.exists(SELECT_CURSOR_ICON_KEY)) {
+		return;
+	}
+
+	scene.load.image(SELECT_CURSOR_ICON_KEY, SELECT_CURSOR_ICON_PATH);
 }

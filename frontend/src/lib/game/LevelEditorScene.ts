@@ -69,8 +69,8 @@ function createGroupId(): string {
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
 	private playerObject!: Phaser.GameObjects.Image;
-	private instructionsVisible = true;
-	private instructionTexts: Phaser.GameObjects.Text[] = [];
+	private isInstructionsModalOpen = false;
+	private instructionsModalElements: Phaser.GameObjects.GameObject[] = [];
 	private isDragPlacing = false;
 	private dragOriginY = 0;
 	private dragLastX = 0;
@@ -123,52 +123,11 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
-		const toggleInstructionsButton = this.add
-			.text(10, 10, '[?] Hide Instructions', { font: '14px monospace', color: '#ffffff' })
+		const openInstructionsButton = this.add
+			.text(10, 10, '[?] Instructions', { font: '14px monospace', color: '#ffffff' })
 			.setInteractive({ useHandCursor: true });
 
-		toggleInstructionsButton.on('pointerdown', () => {
-			this.instructionsVisible = !this.instructionsVisible;
-			for (const text of this.instructionTexts) {
-				text.setVisible(this.instructionsVisible);
-			}
-			toggleInstructionsButton.setText(
-				this.instructionsVisible ? '[?] Hide Instructions' : '[?] Show Instructions'
-			);
-		});
-
-		this.instructionTexts = [
-			this.add.text(10, 30, 'Level Editor (placeholder) — Tab to return to Play Mode', {
-				font: '14px monospace',
-				color: '#ffffff'
-			}),
-			this.add.text(10, 50, 'Drag the square to reposition it', {
-				font: '14px monospace',
-				color: '#aaaaaa'
-			}),
-			this.add.text(
-				10,
-				70,
-				'Click-drag empty space to place a platform. Click a platform to select it, click again to deselect.',
-				{
-					font: '14px monospace',
-					color: '#aaaaaa'
-				}
-			),
-			this.add.text(
-				10,
-				90,
-				'Select a platform to reveal the style picker and change its appearance',
-				{
-					font: '14px monospace',
-					color: '#aaaaaa'
-				}
-			),
-			this.add.text(10, 110, 'Eraser tool: click or click-drag a tile to remove it', {
-				font: '14px monospace',
-				color: '#aaaaaa'
-			})
-		];
+		openInstructionsButton.on('pointerdown', () => this.openInstructionsModal());
 
 		this.createToolsToolbar();
 		this.applyCursorForTool(this.getEditorTool());
@@ -277,13 +236,87 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
+	// ── Instructions modal ───────────────────────────────────────────────
+
+	/**
+	 * A short, in-editor cheat-sheet. Kept intentionally brief - if this
+	 * grows much further, it probably belongs on its own dedicated page
+	 * rather than a modal (see README TODOs).
+	 */
+	private openInstructionsModal() {
+		if (this.isInstructionsModalOpen) {
+			return;
+		}
+		this.isInstructionsModalOpen = true;
+
+		const centerX = this.scale.width / 2;
+		const centerY = this.scale.height / 2;
+		const panelWidth = Math.min(this.scale.width - 40, 640);
+		const panelHeight = 240;
+
+		const backdrop = this.add.rectangle(
+			centerX,
+			centerY,
+			this.scale.width,
+			this.scale.height,
+			0x000000,
+			0.6
+		);
+
+		const panelBg = this.add
+			.rectangle(centerX, centerY, panelWidth, panelHeight, 0x2d1b4e, 1)
+			.setStrokeStyle(3, 0xffd23f);
+
+		const title = this.add
+			.text(centerX, centerY - panelHeight / 2 + 20, 'Instructions', {
+				font: '16px monospace',
+				color: '#ffd23f'
+			})
+			.setOrigin(0.5);
+
+		const closeButton = this.add
+			.text(centerX + panelWidth / 2 - 24, centerY - panelHeight / 2 + 14, '[X]', {
+				font: '14px monospace',
+				color: '#ff6b6b'
+			})
+			.setInteractive({ useHandCursor: true });
+		closeButton.on('pointerdown', () => this.closeInstructionsModal());
+
+		const lines = [
+			'Drag the square to reposition it',
+			'Click-drag empty space to place a platform',
+			'Click a platform to select it, click again to deselect',
+			'Select a platform to reveal the style picker and change its appearance',
+			'Eraser tool: click or click-drag a tile to remove it',
+			'Tab, or the mobile \u21c4 button, switches to Play Mode'
+		];
+		const lineTexts = lines.map((line, index) =>
+			this.add.text(
+				centerX - panelWidth / 2 + 20,
+				centerY - panelHeight / 2 + 50 + index * 22,
+				line,
+				{ font: '13px monospace', color: '#ffffff' }
+			)
+		);
+
+		this.instructionsModalElements = [backdrop, panelBg, title, closeButton, ...lineTexts];
+	}
+
+	private closeInstructionsModal() {
+		this.isInstructionsModalOpen = false;
+		for (const element of this.instructionsModalElements) {
+			element.destroy();
+		}
+		this.instructionsModalElements = [];
+	}
+
 	// ── Tools toolbar (top-center) ──────────────────────────────────────
 
 	private createToolsToolbar() {
 		const spacing = 56;
 		const startX = this.scale.width / 2 - spacing / 2;
 		const y = 24;
-	
+
 		const selectBorder = this.add.rectangle(startX, y, 40, 32).setStrokeStyle(2, 0x666666);
 		const selectIcon = this.add
 			.image(startX, y, SELECT_CURSOR_ICON_KEY)
@@ -291,7 +324,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setInteractive({ useHandCursor: true });
 		selectIcon.on('pointerdown', () => this.setEditorTool('select'));
 		this.toolButtons.push({ tool: 'select', hitArea: selectIcon, border: selectBorder });
-	
+
 		const eraserX = startX + spacing;
 		const eraserBorder = this.add.rectangle(eraserX, y, 40, 32).setStrokeStyle(2, 0x666666);
 		const eraserIcon = this.add
@@ -300,7 +333,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setInteractive({ useHandCursor: true });
 		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
 		this.toolButtons.push({ tool: 'eraser', hitArea: eraserIcon, border: eraserBorder });
-	
+
 		this.refreshToolHighlight();
 	}
 

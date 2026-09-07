@@ -204,7 +204,11 @@ until the moment someone wants to save or share.
       resetting *any* sprite (not just the player) that leaves the
       playable bounds, once there are other objects (enemies, etc.) that
       need the same handling.
-
+- [ ] **Instructions as a dedicated page** — the modal works for a short
+      cheat-sheet, but if the instructions grow much further (more tools,
+      more mechanics), they'd be better served as their own page/route
+      than a Phaser-rendered modal.
+      
 **Accounts (prerequisite for saving/sharing, not yet built):**
 - [ ] `User` auth: JWT-based (not session cookies — frontend and backend
       live on different Render subdomains, which browsers treat as

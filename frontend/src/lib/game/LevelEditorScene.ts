@@ -209,7 +209,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		this.playerObject = this.add
 			.image(spawnPosition.x, spawnPosition.y, PLAYER_TEXTURE_KEY)
-			.setInteractive({ draggable: true, useHandCursor: true });
+			.setInteractive({ draggable: true });
 
 		this.playerObject.on(
 			'drag',
@@ -737,7 +737,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			const tile = this.add
 				.image(x, y, TILES_ATLAS_KEY, frame)
 				.setDisplaySize(GRID_SIZE, GRID_SIZE)
-				.setInteractive({ useHandCursor: true });
+				.setInteractive();
 
 			tile.on('pointerdown', () => {
 				if (this.getEditorTool() === 'eraser') {

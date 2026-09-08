@@ -12,19 +12,21 @@ export function snapToGrid(value: number, gridSize: number): number {
 }
 
 /**
- * Returns every grid-cell-center x value between two already-snapped x
- * values, inclusive, stepping by gridSize. Used to fill in every cell a
- * drag passed through - a fast drag can skip cells between two consecutive
- * pointermove events, so filling the whole range (not just the endpoint)
- * avoids gaps in a dragged line of tiles.
+ * Returns every grid-cell-center value between two already-snapped values
+ * (inclusive, stepping by gridSize), along whichever axis the caller is
+ * using it for - the math is identical whether the values represent x or
+ * y. Used to fill in every cell a drag passed through: a fast drag can
+ * skip cells between two consecutive pointermove events, so filling the
+ * whole range (not just the endpoint) avoids gaps in a dragged line of
+ * tiles, regardless of whether that line runs horizontally or vertically.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function getColumnRange(startX: number, endX: number, gridSize: number): number[] {
-	const from = Math.min(startX, endX);
-	const to = Math.max(startX, endX);
-	const columns: number[] = [];
-	for (let x = from; x <= to; x += gridSize) {
-		columns.push(x);
+export function getFillRange(start: number, end: number, gridSize: number): number[] {
+	const from = Math.min(start, end);
+	const to = Math.max(start, end);
+	const values: number[] = [];
+	for (let value = from; value <= to; value += gridSize) {
+		values.push(value);
 	}
-	return columns;
+	return values;
 }

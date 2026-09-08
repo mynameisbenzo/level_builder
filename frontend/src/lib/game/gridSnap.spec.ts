@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getColumnRange, snapToGrid } from './gridSnap';
+import { getFillRange, snapToGrid } from './gridSnap';
 
 describe('snapToGrid', () => {
 	it('snaps a value near the start of a cell to that cell\'s center', () => {
@@ -28,20 +28,26 @@ describe('snapToGrid', () => {
 	});
 });
 
-describe('getColumnRange', () => {
-	it('returns a single column when start and end are the same', () => {
-		expect(getColumnRange(48, 48, 32)).toEqual([48]);
+describe('getFillRange', () => {
+	it('returns a single value when start and end are the same', () => {
+		expect(getFillRange(48, 48, 32)).toEqual([48]);
 	});
 
-	it('returns every column between start and end, dragging rightward', () => {
-		expect(getColumnRange(16, 112, 32)).toEqual([16, 48, 80, 112]);
+	it('returns every value between start and end, moving forward', () => {
+		expect(getFillRange(16, 112, 32)).toEqual([16, 48, 80, 112]);
 	});
 
-	it('returns every column between start and end, dragging leftward', () => {
-		expect(getColumnRange(112, 16, 32)).toEqual([16, 48, 80, 112]);
+	it('returns every value between start and end, moving backward', () => {
+		expect(getFillRange(112, 16, 32)).toEqual([16, 48, 80, 112]);
 	});
 
-	it('returns adjacent columns for a one-cell drag', () => {
-		expect(getColumnRange(16, 48, 32)).toEqual([16, 48]);
+	it('returns adjacent values for a one-cell move', () => {
+		expect(getFillRange(16, 48, 32)).toEqual([16, 48]);
+	});
+
+	it('works identically regardless of which axis the values represent', () => {
+		// Same math either way - this is what lets one function serve both
+		// horizontal (x) and vertical (y) drag fills.
+		expect(getFillRange(0, 96, 32)).toEqual([0, 32, 64, 96]);
 	});
 });

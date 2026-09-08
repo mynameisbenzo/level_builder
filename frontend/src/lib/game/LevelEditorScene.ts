@@ -15,11 +15,12 @@ import {
 } from './textures';
 import {
 	DEFAULT_GROUND_TILE_STYLE,
-	getRowTileFrames,
+	getGroupFrames,
 	GROUND_TILE_FRAME_SETS,
 	GROUND_TILE_STYLE_REGISTRY_KEY,
 	GROUND_TILE_STYLES,
 	type GroundTileStyle,
+	type PlatformOrientation,
 	type PositionedTile
 } from './groundTiling';
 import {
@@ -27,13 +28,13 @@ import {
 	resolveInitialPlayerPosition,
 	type PlayerPosition
 } from './playerState';
-import { snapToGrid, GRID_SIZE, getColumnRange } from './gridSnap';
+import { snapToGrid, GRID_SIZE, getFillRange } from './gridSnap';
 import {
+	bridgeIfBetweenTwoGroups,
 	getNextActiveGroupKeys,
 	getSameGroupTileKeys,
 	isPositionOccupied,
 	mergeAdjacentSameStyleGroups,
-	mergeGroupIds,
 	PLACED_OBJECTS_REGISTRY_KEY,
 	removePosition,
 	resolveGroupIdForPlacement,
@@ -71,10 +72,25 @@ export class LevelEditorScene extends Phaser.Scene {
 	private playerObject!: Phaser.GameObjects.Image;
 	private isInstructionsModalOpen = false;
 	private instructionsModalElements: Phaser.GameObjects.GameObject[] = [];
+
+	// Drag placement state. Orientation is undetermined at the start of a
+	// gesture and locks to whichever axis the pointer first moves along -
+	// a plain click (no movement) stays 'horizontal' by default, matching
+	// pre-Y-axis behavior exactly for a single tile.
 	private isDragPlacing = false;
+	private dragOrientation: PlatformOrientation = 'horizontal';
+	private dragOrientationLocked = false;
+	private dragOriginX = 0;
 	private dragOriginY = 0;
 	private dragLastX = 0;
-	private tileImagesByRow = new Map<number, Phaser.GameObjects.Image[]>();
+	private dragLastY = 0;
+
+	// Rendering is per-group (a vertical platform spans multiple rows, so
+	// per-row tracking can't correctly compute its top/middle/bottom
+	// roles) - keyed by "x,y" so any specific tile's image can be found
+	// and destroyed directly regardless of which group it belongs to.
+	private tileImagesByKey = new Map<string, Phaser.GameObjects.Image>();
+
 	private activeGroupKeys: string[] | null = null;
 	private activeTileBorders: Phaser.GameObjects.Rectangle[] = [];
 
@@ -137,9 +153,9 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const initialRows = new Set(placedObjects.map((object) => object.y));
-		for (const y of initialRows) {
-			this.refreshRow(y);
+		const initialGroupIds = new Set(placedObjects.map((object) => object.groupId));
+		for (const groupId of initialGroupIds) {
+			this.refreshGroup(groupId);
 		}
 
 		this.input.on(
@@ -166,9 +182,13 @@ export class LevelEditorScene extends Phaser.Scene {
 				const y = snapToGrid(pointer.y, GRID_SIZE);
 
 				this.isDragPlacing = true;
+				this.dragOrientation = 'horizontal';
+				this.dragOrientationLocked = false;
+				this.dragOriginX = x;
 				this.dragOriginY = y;
 				this.dragLastX = x;
-				this.placeTileIfEmpty(x, y);
+				this.dragLastY = y;
+				this.placeTileIfEmpty(x, y, this.dragOrientation);
 			}
 		);
 
@@ -184,17 +204,41 @@ export class LevelEditorScene extends Phaser.Scene {
 				return;
 			}
 
-			// X-axis only for now: the row is fixed at wherever the drag
-			// started (dragOriginY), regardless of how far the pointer moves
-			// vertically. Filling the whole column range (not just the
-			// current x) avoids gaps if a fast drag skips past a cell
-			// between two pointermove events.
 			const currentX = snapToGrid(pointer.x, GRID_SIZE);
-			const columns = getColumnRange(this.dragLastX, currentX, GRID_SIZE);
-			for (const x of columns) {
-				this.placeTileIfEmpty(x, this.dragOriginY);
+			const currentY = snapToGrid(pointer.y, GRID_SIZE);
+
+			// The drag's axis locks in on whichever direction the pointer
+			// first moves away from the anchor point - once locked, it stays
+			// that way for the rest of the gesture, same as the anchor tile
+			// locked a single row/column before Y-axis support existed.
+			if (!this.dragOrientationLocked) {
+				if (currentX !== this.dragOriginX) {
+					this.dragOrientation = 'horizontal';
+					this.dragOrientationLocked = true;
+				} else if (currentY !== this.dragOriginY) {
+					this.dragOrientation = 'vertical';
+					this.dragOrientationLocked = true;
+				} else {
+					return;
+				}
 			}
-			this.dragLastX = currentX;
+
+			if (this.dragOrientation === 'horizontal') {
+				// Filling the whole range (not just the current x) avoids
+				// gaps if a fast drag skips past a cell between two
+				// pointermove events.
+				const columns = getFillRange(this.dragLastX, currentX, GRID_SIZE);
+				for (const x of columns) {
+					this.placeTileIfEmpty(x, this.dragOriginY, 'horizontal');
+				}
+				this.dragLastX = currentX;
+			} else {
+				const rows = getFillRange(this.dragLastY, currentY, GRID_SIZE);
+				for (const y of rows) {
+					this.placeTileIfEmpty(this.dragOriginX, y, 'vertical');
+				}
+				this.dragLastY = currentY;
+			}
 		});
 
 		this.input.on('pointerup', () => {
@@ -252,7 +296,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const centerX = this.scale.width / 2;
 		const centerY = this.scale.height / 2;
 		const panelWidth = Math.min(this.scale.width - 40, 640);
-		const panelHeight = 240;
+		const panelHeight = 260;
 
 		const backdrop = this.add.rectangle(
 			centerX,
@@ -285,6 +329,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const lines = [
 			'Drag the square to reposition it',
 			'Click-drag empty space to place a platform',
+			'Drag horizontally or vertically - the platform follows whichever way you move first',
 			'Click a platform to select it, click again to deselect',
 			'Select a platform to reveal the style picker and change its appearance',
 			'Eraser tool: click or click-drag a tile to remove it',
@@ -382,20 +427,33 @@ export class LevelEditorScene extends Phaser.Scene {
 	/**
 	 * Erases whatever tile (if any) sits exactly under the pointer. Used
 	 * for both the initial click and for dragging across multiple tiles.
-	 * Unlike placement, this isn't locked to a single row or gap-filled
+	 * Unlike placement, this isn't locked to a single axis or gap-filled
 	 * for fast movement - it simply checks the current pointer position
 	 * each time it's called.
 	 */
 	private eraseAtPointer(pointer: Phaser.Input.Pointer) {
 		const x = snapToGrid(pointer.x, GRID_SIZE);
 		const y = snapToGrid(pointer.y, GRID_SIZE);
+		this.eraseTile(x, y);
+	}
+
+	private eraseTile(x: number, y: number) {
 		const existing =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		if (!isPositionOccupied(existing, x, y)) {
+		const erasedObject = existing.find((object) => object.x === x && object.y === y);
+		if (!erasedObject) {
 			return;
 		}
 		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(existing, x, y));
-		this.refreshRow(y);
+
+		const key = tileKey(x, y);
+		this.tileImagesByKey.get(key)?.destroy();
+		this.tileImagesByKey.delete(key);
+
+		// Whatever remains of the erased tile's group may need its end
+		// caps recomputed (e.g. the tile next to it is now an end, not a
+		// middle piece).
+		this.refreshGroup(erasedObject.groupId);
 	}
 
 	// ── UI mode toggle (top-right) ──────────────────────────────────────
@@ -592,14 +650,12 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		let existing =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const affectedRows = new Set<number>();
 
 		for (const key of this.activeGroupKeys) {
 			const [xStr, yStr] = key.split(',');
 			const x = Number(xStr);
 			const y = Number(yStr);
 			existing = updateObjectStyle(existing, x, y, style);
-			affectedRows.add(y);
 		}
 
 		// The restyled platform's own id doesn't change - look it up from
@@ -614,18 +670,16 @@ export class LevelEditorScene extends Phaser.Scene {
 			// Restyling can now make this platform match a directly
 			// touching different platform - placement-time merging
 			// doesn't retroactively apply, so check for that here.
-			for (const y of affectedRows) {
-				existing = mergeAdjacentSameStyleGroups(existing, groupId, y, GRID_SIZE);
-			}
+			existing = mergeAdjacentSameStyleGroups(existing, groupId, GRID_SIZE);
 			// Reflect the merge (if any) in the current selection, so the
 			// highlight covers the whole newly-combined platform.
 			this.activeGroupKeys = getSameGroupTileKeys(existing, groupId);
+			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
+			this.refreshGroup(groupId);
+		} else {
+			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
 		}
 
-		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
-		for (const y of affectedRows) {
-			this.refreshRow(y);
-		}
 		this.refreshStylePickerVisibility();
 	}
 
@@ -674,7 +728,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 	}
 
-	private placeTileIfEmpty(x: number, y: number) {
+	private placeTileIfEmpty(x: number, y: number, orientation: PlatformOrientation) {
 		const existing =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 
@@ -686,54 +740,56 @@ export class LevelEditorScene extends Phaser.Scene {
 			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
 			DEFAULT_GROUND_TILE_STYLE;
 
-		const rowObjects = existing.filter((object) => object.y === y);
-		const groupId = resolveGroupIdForPlacement(rowObjects, x, style, GRID_SIZE, createGroupId());
+		const groupId = resolveGroupIdForPlacement(
+			existing,
+			x,
+			y,
+			orientation,
+			style,
+			GRID_SIZE,
+			createGroupId()
+		);
 
 		let updated: PlacedObject[] = [...existing, { type: 'ground', x, y, style, groupId }];
 
-		// If the new tile sits between two existing same-style neighbors that
-		// belonged to different platforms, it bridges them into one.
-		const leftNeighbor = rowObjects.find((object) => object.x === x - GRID_SIZE);
-		const rightNeighbor = rowObjects.find((object) => object.x === x + GRID_SIZE);
-		if (
-			leftNeighbor &&
-			rightNeighbor &&
-			leftNeighbor.style === style &&
-			rightNeighbor.style === style &&
-			leftNeighbor.groupId !== rightNeighbor.groupId
-		) {
-			updated = mergeGroupIds(updated, rightNeighbor.groupId, groupId);
-		}
+		// If the new tile sits between two existing same-style,
+		// orientation-compatible neighbors that belonged to different
+		// platforms, it bridges them into one.
+		updated = bridgeIfBetweenTwoGroups(updated, x, y, orientation, style, GRID_SIZE, groupId);
 
 		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
-		this.refreshRow(y);
+		this.refreshGroup(groupId);
 	}
 
 	/**
-	 * Destroys and re-renders every tile on the given row, recomputing each
-	 * one's frame (single/left/center/right) from the current full set of
-	 * tiles on that row. Adding, removing, or restyling a tile can change
-	 * what frame its neighbors should show, so the whole row is refreshed
-	 * rather than just the one tile that changed.
+	 * Destroys and re-renders every tile belonging to one platform (group),
+	 * recomputing each one's frame (single/left-right-center or
+	 * top-middle-bottom, depending on the group's own orientation) from the
+	 * current full set of its tiles. Adding, removing, or restyling a tile
+	 * can change what frame its neighbors within the same group should
+	 * show, so the whole group is refreshed rather than just the one tile
+	 * that changed.
 	 */
-	private refreshRow(y: number) {
-		const existingImages = this.tileImagesByRow.get(y) ?? [];
-		for (const image of existingImages) {
-			image.destroy();
-		}
-
+	private refreshGroup(groupId: string) {
 		const allObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const rowObjects = allObjects.filter((object) => object.y === y);
-		const rowTiles: PositionedTile[] = rowObjects.map((object) => ({
+		const groupObjects = allObjects.filter((object) => object.groupId === groupId);
+
+		for (const object of groupObjects) {
+			const key = tileKey(object.x, object.y);
+			this.tileImagesByKey.get(key)?.destroy();
+			this.tileImagesByKey.delete(key);
+		}
+
+		const groupTiles: PositionedTile[] = groupObjects.map((object) => ({
 			x: object.x,
+			y: object.y,
 			style: object.style,
 			groupId: object.groupId
 		}));
-		const frameAssignments = getRowTileFrames(rowTiles, GRID_SIZE);
+		const frameAssignments = getGroupFrames(groupTiles, GRID_SIZE);
 
-		const newImages: Phaser.GameObjects.Image[] = [];
-		for (const { x, frame } of frameAssignments) {
+		for (const { x, y, frame } of frameAssignments) {
 			const tile = this.add
 				.image(x, y, TILES_ATLAS_KEY, frame)
 				.setDisplaySize(GRID_SIZE, GRID_SIZE)
@@ -741,10 +797,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 			tile.on('pointerdown', () => {
 				if (this.getEditorTool() === 'eraser') {
-					const current =
-						(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-					this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, removePosition(current, x, y));
-					this.refreshRow(y);
+					this.eraseTile(x, y);
 					return;
 				}
 
@@ -762,12 +815,11 @@ export class LevelEditorScene extends Phaser.Scene {
 				this.setActiveGroup(nextActive);
 			});
 
-			newImages.push(tile);
+			this.tileImagesByKey.set(tileKey(x, y), tile);
 		}
-		this.tileImagesByRow.set(y, newImages);
 
 		// The active group's highlight borders sit above the tile images, so
-		// redraw them after re-rendering in case this row contains any.
+		// redraw them after re-rendering in case this group contains any.
 		this.refreshActiveGroupBorders();
 	}
 

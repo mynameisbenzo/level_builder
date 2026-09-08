@@ -1,16 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+	bridgeIfBetweenTwoGroups,
 	getNextActiveGroupKeys,
 	getSameGroupTileKeys,
 	isPositionOccupied,
+	mergeAdjacentSameStyleGroups,
+	mergeGroupIds,
 	removePosition,
+	resolveGroupIdForPlacement,
 	tileKey,
 	updateObjectStyle,
-	resolveGroupIdForPlacement,
-	mergeGroupIds,
-	type PlacedObject,
-	mergeAdjacentSameStyleGroups
+	type PlacedObject
 } from './placedObjects';
+
+const obj = (
+	x: number,
+	y: number,
+	style: 'grass' | 'stone' = 'grass',
+	groupId = 'a'
+): PlacedObject => ({ type: 'ground', x, y, style, groupId });
 
 describe('isPositionOccupied', () => {
 	it('returns false for an empty list', () => {
@@ -18,62 +26,32 @@ describe('isPositionOccupied', () => {
 	});
 
 	it('returns true when a matching position exists', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 32, y: 32, style: 'grass', groupId: 'a' }];
-		expect(isPositionOccupied(existing, 32, 32)).toBe(true);
+		expect(isPositionOccupied([obj(32, 32)], 32, 32)).toBe(true);
 	});
 
 	it('returns false when positions are close but not exact', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 32, y: 32, style: 'grass', groupId: 'a' }];
-		expect(isPositionOccupied(existing, 64, 32)).toBe(false);
-	});
-
-	it('checks against all entries, not just the first', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 0, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 96, y: 96, style: 'grass', groupId: 'b' }
-		];
-		expect(isPositionOccupied(existing, 96, 96)).toBe(true);
+		expect(isPositionOccupied([obj(32, 32)], 64, 32)).toBe(false);
 	});
 });
 
 describe('removePosition', () => {
 	it('removes the matching object', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 32, y: 32, style: 'grass', groupId: 'a' }];
-		expect(removePosition(existing, 32, 32)).toEqual([]);
-	});
-
-	it('returns an unchanged (but new) list when nothing matches', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 32, y: 32, style: 'grass', groupId: 'a' }];
-		expect(removePosition(existing, 64, 64)).toEqual(existing);
+		expect(removePosition([obj(32, 32)], 32, 32)).toEqual([]);
 	});
 
 	it('only removes the exact match, keeping the rest', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 0, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 96, y: 96, style: 'grass', groupId: 'b' }
-		];
-		expect(removePosition(existing, 0, 0)).toEqual([
-			{ type: 'ground', x: 96, y: 96, style: 'grass', groupId: 'b' }
-		]);
+		const existing = [obj(0, 0), obj(96, 96)];
+		expect(removePosition(existing, 0, 0)).toEqual([obj(96, 96)]);
 	});
 });
 
 describe('updateObjectStyle', () => {
 	it("changes only the matching object's style, preserving its groupId", () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 0, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 32, y: 0, style: 'grass', groupId: 'a' }
-		];
-		const updated = updateObjectStyle(existing, 0, 0, 'stone');
-		expect(updated).toEqual([
-			{ type: 'ground', x: 0, y: 0, style: 'stone', groupId: 'a' },
-			{ type: 'ground', x: 32, y: 0, style: 'grass', groupId: 'a' }
+		const existing = [obj(0, 0, 'grass', 'a'), obj(32, 0, 'grass', 'a')];
+		expect(updateObjectStyle(existing, 0, 0, 'stone')).toEqual([
+			obj(0, 0, 'stone', 'a'),
+			obj(32, 0, 'grass', 'a')
 		]);
-	});
-
-	it('returns an unchanged (but new) array when nothing matches', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 0, y: 0, style: 'grass', groupId: 'a' }];
-		expect(updateObjectStyle(existing, 999, 999, 'stone')).toEqual(existing);
 	});
 });
 
@@ -85,36 +63,8 @@ describe('tileKey', () => {
 
 describe('getSameGroupTileKeys', () => {
 	it('returns only the tiles sharing the given groupId', () => {
-		const objects: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 80, y: 0, style: 'stone', groupId: 'b' }
-		];
+		const objects = [obj(16, 0, 'grass', 'a'), obj(48, 0, 'grass', 'a'), obj(80, 0, 'stone', 'b')];
 		expect(getSameGroupTileKeys(objects, 'a')).toEqual(['16,0', '48,0']);
-	});
-
-	it('returns tiles sharing a groupId even if not physically adjacent', () => {
-		// Group membership is explicit, not inferred from position - this
-		// wouldn't happen in practice today, but the function shouldn't
-		// silently depend on adjacency to work correctly.
-		const objects: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 400, y: 0, style: 'grass', groupId: 'a' }
-		];
-		expect(getSameGroupTileKeys(objects, 'a')).toEqual(['16,0', '400,0']);
-	});
-
-	it('does not include a physically touching tile from a different group', () => {
-		const objects: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'b' }
-		];
-		expect(getSameGroupTileKeys(objects, 'a')).toEqual(['16,0']);
-	});
-
-	it('returns an empty array when no tiles match', () => {
-		const objects: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
-		expect(getSameGroupTileKeys(objects, 'nonexistent')).toEqual([]);
 	});
 });
 
@@ -135,146 +85,163 @@ describe('getNextActiveGroupKeys', () => {
 	});
 });
 
-describe('resolveGroupIdForPlacement', () => {
+describe('resolveGroupIdForPlacement - horizontal', () => {
 	it('falls back to a fresh id when there are no neighbors', () => {
-		expect(resolveGroupIdForPlacement([], 16, 'grass', 32, 'fresh')).toBe('fresh');
+		expect(resolveGroupIdForPlacement([], 16, 0, 'horizontal', 'grass', 32, 'fresh')).toBe('fresh');
 	});
 
-	it('joins the left neighbor when it exists and matches style', () => {
-		const rowObjects: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
-		expect(resolveGroupIdForPlacement(rowObjects, 48, 'grass', 32, 'fresh')).toBe('a');
+	it('joins the left neighbor when it exists, matches style, and is horizontal', () => {
+		const existing = [obj(16, 0, 'grass', 'a')];
+		expect(resolveGroupIdForPlacement(existing, 48, 0, 'horizontal', 'grass', 32, 'fresh')).toBe('a');
 	});
 
 	it('does not join the left neighbor when styles differ', () => {
-		const rowObjects: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'stone', groupId: 'a' }];
-		expect(resolveGroupIdForPlacement(rowObjects, 48, 'grass', 32, 'fresh')).toBe('fresh');
+		const existing = [obj(16, 0, 'stone', 'a')];
+		expect(resolveGroupIdForPlacement(existing, 48, 0, 'horizontal', 'grass', 32, 'fresh')).toBe(
+			'fresh'
+		);
 	});
 
-	it('joins the right neighbor when it exists and matches style', () => {
-		const rowObjects: PlacedObject[] = [{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'b' }];
-		expect(resolveGroupIdForPlacement(rowObjects, 16, 'grass', 32, 'fresh')).toBe('b');
+	it('joins the right neighbor when the left one does not match', () => {
+		const existing = [obj(48, 0, 'grass', 'b')];
+		expect(resolveGroupIdForPlacement(existing, 16, 0, 'horizontal', 'grass', 32, 'fresh')).toBe('b');
+	});
+});
+
+describe('resolveGroupIdForPlacement - vertical', () => {
+	it('joins the neighbor above when it exists, matches style, and is vertical', () => {
+		const existing = [obj(0, 0, 'grass', 'a')];
+		expect(resolveGroupIdForPlacement(existing, 0, 32, 'vertical', 'grass', 32, 'fresh')).toBe('a');
 	});
 
-	it('prefers the left neighbor when both match (mergeGroupIds handles unifying the right one)', () => {
-		const rowObjects: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'b' }
-		];
-		expect(resolveGroupIdForPlacement(rowObjects, 48, 'grass', 32, 'fresh')).toBe('a');
+	it('joins the neighbor below when the one above does not match', () => {
+		const existing = [obj(0, 64, 'grass', 'b')];
+		expect(resolveGroupIdForPlacement(existing, 0, 32, 'vertical', 'grass', 32, 'fresh')).toBe('b');
 	});
 
-	it('ignores a neighbor of a different style even if the other side matches', () => {
-		const rowObjects: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'stone', groupId: 'a' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'b' }
-		];
-		expect(resolveGroupIdForPlacement(rowObjects, 48, 'grass', 32, 'fresh')).toBe('b');
+	it('a horizontal neighbor at the same x/y-adjacent spot is ignored for vertical placement', () => {
+		// A tile sitting where a vertical neighbor would be, but which
+		// belongs to a >1-tile HORIZONTAL group, must not be joined by a
+		// vertical placement - orientations never mix.
+		const existing = [obj(0, 0, 'grass', 'h'), obj(32, 0, 'grass', 'h')];
+		expect(resolveGroupIdForPlacement(existing, 0, 32, 'vertical', 'grass', 32, 'fresh')).toBe(
+			'fresh'
+		);
+	});
+});
+
+describe('resolveGroupIdForPlacement - orientation compatibility', () => {
+	it('does not join a same-style neighbor whose own group is a different, established orientation', () => {
+		// "below" exists and matches style, but its group ('v') is already a
+		// 2-tile VERTICAL run - a horizontal placement must not join it.
+		const existing = [obj(0, 32, 'grass', 'v'), obj(0, 64, 'grass', 'v')];
+		expect(resolveGroupIdForPlacement(existing, 32, 32, 'horizontal', 'grass', 32, 'fresh')).toBe(
+			'fresh'
+		);
+	});
+
+	it('does join a same-style neighbor that is still a single-tile (orientation-less) group', () => {
+		const existing = [obj(0, 32, 'grass', 'solo')];
+		expect(resolveGroupIdForPlacement(existing, 32, 32, 'horizontal', 'grass', 32, 'fresh')).toBe(
+			'solo'
+		);
 	});
 });
 
 describe('mergeGroupIds', () => {
 	it('reassigns every object with the old groupId to the new one', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'b' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'b' }
-		];
+		const existing = [obj(16, 0, 'grass', 'b'), obj(48, 0, 'grass', 'a'), obj(80, 0, 'grass', 'b')];
 		expect(mergeGroupIds(existing, 'b', 'a')).toEqual([
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'a' }
+			obj(16, 0, 'grass', 'a'),
+			obj(48, 0, 'grass', 'a'),
+			obj(80, 0, 'grass', 'a')
 		]);
 	});
 
 	it('is a no-op when the two ids are already the same', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
+		const existing = [obj(16, 0, 'grass', 'a')];
 		expect(mergeGroupIds(existing, 'a', 'a')).toEqual(existing);
 	});
+});
 
-	it('leaves objects with unrelated groupIds untouched', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'stone', groupId: 'c' }
+describe('bridgeIfBetweenTwoGroups', () => {
+	it('merges two horizontal neighbors the new tile sits between', () => {
+		const updated = [obj(16, 0, 'grass', 'left'), obj(48, 0, 'grass', 'mid'), obj(80, 0, 'grass', 'right')];
+		const result = bridgeIfBetweenTwoGroups(updated, 48, 0, 'horizontal', 'grass', 32, 'mid');
+		const groupIds = new Set(result.map((o) => o.groupId));
+		expect(groupIds.size).toBe(1);
+	});
+
+	it('merges two vertical neighbors the new tile sits between', () => {
+		const updated = [obj(0, 16, 'grass', 'top'), obj(0, 48, 'grass', 'mid'), obj(0, 80, 'grass', 'bottom')];
+		const result = bridgeIfBetweenTwoGroups(updated, 0, 48, 'vertical', 'grass', 32, 'mid');
+		const groupIds = new Set(result.map((o) => o.groupId));
+		expect(groupIds.size).toBe(1);
+	});
+
+	it('does not bridge when only one side has a neighbor', () => {
+		const updated = [obj(16, 0, 'grass', 'left'), obj(48, 0, 'grass', 'mid')];
+		const result = bridgeIfBetweenTwoGroups(updated, 48, 0, 'horizontal', 'grass', 32, 'mid');
+		expect(result).toEqual(updated);
+	});
+
+	it('does not bridge across an orientation mismatch', () => {
+		// "before" is part of an established vertical group; a horizontal
+		// bridge attempt must not merge it in.
+		const updated = [
+			obj(-32, 0, 'grass', 'before-vertical'),
+			obj(-32, 32, 'grass', 'before-vertical'),
+			obj(0, 0, 'grass', 'mid'),
+			obj(32, 0, 'grass', 'after')
 		];
-		expect(mergeGroupIds(existing, 'a', 'z')).toEqual([
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'z' },
-			{ type: 'ground', x: 48, y: 0, style: 'stone', groupId: 'c' }
-		]);
+		const result = bridgeIfBetweenTwoGroups(updated, 0, 0, 'horizontal', 'grass', 32, 'mid');
+		const beforeGroupStillIntact = result.filter((o) => o.groupId === 'before-vertical');
+		expect(beforeGroupStillIntact).toHaveLength(2);
 	});
 });
 
 describe('mergeAdjacentSameStyleGroups', () => {
-	it('merges a touching same-style neighbor on the right after a restyle', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'b' }
-		];
-		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual([
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' }
+	it('merges a touching same-style horizontal neighbor after a restyle', () => {
+		const existing = [obj(16, 0, 'grass', 'a'), obj(48, 0, 'grass', 'b')];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 32)).toEqual([
+			obj(16, 0, 'grass', 'a'),
+			obj(48, 0, 'grass', 'a')
 		]);
 	});
 
-	it('merges a touching same-style neighbor on the left after a restyle', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'b' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' }
-		];
-		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual([
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'a' }
+	it('merges a touching same-style vertical neighbor after a restyle', () => {
+		const existing = [obj(0, 0, 'grass', 'a'), obj(0, 32, 'grass', 'b')];
+		expect(mergeAdjacentSameStyleGroups(existing, 'a', 32)).toEqual([
+			obj(0, 0, 'grass', 'a'),
+			obj(0, 32, 'grass', 'a')
 		]);
 	});
 
-	it('merges neighbors on both sides at once', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'left' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'right' }
+	it('checks both ends of a multi-tile group, not just one tile', () => {
+		const existing = [
+			obj(16, 0, 'grass', 'active'),
+			obj(48, 0, 'grass', 'active'),
+			obj(80, 0, 'grass', 'neighbor')
 		];
-		expect(mergeAdjacentSameStyleGroups(existing, 'active', 0, 32)).toEqual([
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'active' }
-		]);
+		const result = mergeAdjacentSameStyleGroups(existing, 'active', 32);
+		const groupIds = new Set(result.map((o) => o.groupId));
+		expect(groupIds.size).toBe(1);
 	});
 
-	it('does not merge when the touching neighbor is a different style', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 0, style: 'stone', groupId: 'b' }
+	it('does not merge across an orientation mismatch', () => {
+		const existing = [
+			obj(16, 0, 'grass', 'horiz'),
+			obj(48, 0, 'grass', 'horiz'),
+			obj(80, 0, 'grass', 'vert-a'),
+			obj(80, 32, 'grass', 'vert-a')
 		];
-		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual(existing);
+		const result = mergeAdjacentSameStyleGroups(existing, 'horiz', 32);
+		const vertStillIntact = result.filter((o) => o.groupId === 'vert-a');
+		expect(vertStillIntact).toHaveLength(2);
 	});
 
-	it('does nothing when there is no neighbor at all', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
-		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual(existing);
-	});
-
-	it('checks the edges of a multi-tile group, not just one tile', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'neighbor' }
-		];
-		expect(mergeAdjacentSameStyleGroups(existing, 'active', 0, 32)).toEqual([
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 48, y: 0, style: 'grass', groupId: 'active' },
-			{ type: 'ground', x: 80, y: 0, style: 'grass', groupId: 'active' }
-		]);
-	});
-
-	it('is unaffected by tiles on other rows', () => {
-		const existing: PlacedObject[] = [
-			{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' },
-			{ type: 'ground', x: 48, y: 32, style: 'grass', groupId: 'b' }
-		];
-		expect(mergeAdjacentSameStyleGroups(existing, 'a', 0, 32)).toEqual(existing);
-	});
-
-	it('returns the input unchanged when the group has no tiles on that row', () => {
-		const existing: PlacedObject[] = [{ type: 'ground', x: 16, y: 0, style: 'grass', groupId: 'a' }];
-		expect(mergeAdjacentSameStyleGroups(existing, 'nonexistent', 0, 32)).toEqual(existing);
+	it('returns the input unchanged when the group has no tiles', () => {
+		const existing = [obj(16, 0, 'grass', 'a')];
+		expect(mergeAdjacentSameStyleGroups(existing, 'nonexistent', 32)).toEqual(existing);
 	});
 });

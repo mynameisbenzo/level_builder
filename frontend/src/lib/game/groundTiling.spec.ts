@@ -1,202 +1,129 @@
 import { describe, expect, it } from 'vitest';
 import {
-	getFrameForPositionInRun,
+	determineOrientation,
+	getGroupFrames,
 	getNextGroundTileStyle,
 	getPreviousGroundTileStyle,
-	getRowTileFrames,
-	groupIntoContiguousRuns,
 	GROUND_TILE_FRAME_SETS,
 	GROUND_TILE_STYLES,
 	type GroundTileStyle,
 	type PositionedTile
 } from './groundTiling';
 
-describe('groupIntoContiguousRuns', () => {
-	it('returns an empty array for no tiles', () => {
-		expect(groupIntoContiguousRuns([], 32)).toEqual([]);
+const tile = (x: number, y: number, style: GroundTileStyle = 'grass', groupId = 'a'): PositionedTile => ({
+	x,
+	y,
+	style,
+	groupId
+});
+
+describe('determineOrientation', () => {
+	it('treats a single tile as horizontal (arbitrary - renders as single either way)', () => {
+		expect(determineOrientation([tile(0, 0)])).toBe('horizontal');
 	});
 
-	it('groups physically adjacent tiles from the same platform into one run', () => {
-		const tiles: PositionedTile[] = [
-			{ x: 16, style: 'grass', groupId: 'a' },
-			{ x: 48, style: 'grass', groupId: 'a' },
-			{ x: 80, style: 'grass', groupId: 'a' }
-		];
-		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([tiles]);
+	it('detects horizontal when all tiles share a y', () => {
+		expect(determineOrientation([tile(0, 0), tile(32, 0), tile(64, 0)])).toBe('horizontal');
 	});
 
-	it('splits into separate runs when there is a physical gap', () => {
-		const tiles: PositionedTile[] = [
-			{ x: 16, style: 'grass', groupId: 'a' },
-			{ x: 48, style: 'grass', groupId: 'a' },
-			{ x: 144, style: 'grass', groupId: 'a' },
-			{ x: 176, style: 'grass', groupId: 'a' }
-		];
-		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([
-			[tiles[0], tiles[1]],
-			[tiles[2], tiles[3]]
-		]);
-	});
-
-	it('splits into separate runs when two physically touching tiles belong to different platforms', () => {
-		const tiles: PositionedTile[] = [
-			{ x: 16, style: 'grass', groupId: 'a' },
-			{ x: 48, style: 'grass', groupId: 'a' },
-			{ x: 80, style: 'stone', groupId: 'b' },
-			{ x: 112, style: 'stone', groupId: 'b' }
-		];
-		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([
-			[tiles[0], tiles[1]],
-			[tiles[2], tiles[3]]
-		]);
-	});
-
-	it('treats a single isolated tile as its own run', () => {
-		const tiles: PositionedTile[] = [{ x: 16, style: 'grass', groupId: 'a' }];
-		expect(groupIntoContiguousRuns(tiles, 32)).toEqual([tiles]);
+	it('detects vertical when all tiles share an x', () => {
+		expect(determineOrientation([tile(0, 0), tile(0, 32), tile(0, 64)])).toBe('vertical');
 	});
 });
 
-describe('getFrameForPositionInRun', () => {
-	const run = (xs: number[]): PositionedTile[] =>
-		xs.map((x) => ({ x, style: 'grass', groupId: 'a' }));
-
-	it('uses the single-block frame for a run of one', () => {
-		expect(getFrameForPositionInRun(run([16]), 16, 'grass')).toBe(
-			GROUND_TILE_FRAME_SETS.grass.single
-		);
-	});
-
-	it('uses left/right end caps for a run of two, no center', () => {
-		const tiles = run([16, 48]);
-		expect(getFrameForPositionInRun(tiles, 16, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.left);
-		expect(getFrameForPositionInRun(tiles, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.right);
-	});
-
-	it('uses left/center/right for a run of three', () => {
-		const tiles = run([16, 48, 80]);
-		expect(getFrameForPositionInRun(tiles, 16, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.left);
-		expect(getFrameForPositionInRun(tiles, 48, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.center);
-		expect(getFrameForPositionInRun(tiles, 80, 'grass')).toBe(GROUND_TILE_FRAME_SETS.grass.right);
-	});
-
-	it('uses the correct frames for a non-default style', () => {
-		const tiles = run([16, 48]);
-		expect(getFrameForPositionInRun(tiles, 16, 'stone')).toBe(GROUND_TILE_FRAME_SETS.stone.left);
-		expect(getFrameForPositionInRun(tiles, 48, 'stone')).toBe(GROUND_TILE_FRAME_SETS.stone.right);
-	});
-});
-
-describe('getRowTileFrames', () => {
+describe('getGroupFrames', () => {
 	it('handles a single tile', () => {
-		expect(getRowTileFrames([{ x: 16, style: 'grass', groupId: 'a' }], 32)).toEqual([
-			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.single }
+		expect(getGroupFrames([tile(16, 0)], 32)).toEqual([
+			{ x: 16, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.single }
 		]);
 	});
 
-	it('handles two tiles of the same platform', () => {
-		expect(
-			getRowTileFrames(
-				[
-					{ x: 48, style: 'grass', groupId: 'a' },
-					{ x: 16, style: 'grass', groupId: 'a' }
-				],
-				32
-			)
-		).toEqual([
-			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right }
-		]);
+	describe('horizontal groups', () => {
+		it('assigns left/right end caps for a run of two', () => {
+			expect(getGroupFrames([tile(48, 0), tile(16, 0)], 32)).toEqual([
+				{ x: 16, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.left },
+				{ x: 48, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.right }
+			]);
+		});
+
+		it('assigns left/center/right for a run of three', () => {
+			expect(getGroupFrames([tile(80, 0), tile(16, 0), tile(48, 0)], 32)).toEqual([
+				{ x: 16, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.left },
+				{ x: 48, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.center },
+				{ x: 80, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.right }
+			]);
+		});
+
+		it('splits into separate runs across a physical gap within the group', () => {
+			// Can happen after erasing a middle tile - the remainder is still
+			// one groupId but no longer physically contiguous.
+			expect(
+				getGroupFrames([tile(16, 0), tile(48, 0), tile(144, 0), tile(176, 0)], 32)
+			).toEqual([
+				{ x: 16, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.left },
+				{ x: 48, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.right },
+				{ x: 144, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.left },
+				{ x: 176, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.right }
+			]);
+		});
+
+		it('uses each tile\'s own style for its frame', () => {
+			expect(getGroupFrames([tile(16, 0, 'grass'), tile(48, 0, 'stone'), tile(80, 0, 'grass')], 32)).toEqual([
+				{ x: 16, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.left },
+				{ x: 48, y: 0, frame: GROUND_TILE_FRAME_SETS.stone.center },
+				{ x: 80, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.right }
+			]);
+		});
 	});
 
-	it('handles three or more tiles of the same platform with a center piece', () => {
-		expect(
-			getRowTileFrames(
-				[
-					{ x: 80, style: 'grass', groupId: 'a' },
-					{ x: 16, style: 'grass', groupId: 'a' },
-					{ x: 48, style: 'grass', groupId: 'a' }
-				],
-				32
-			)
-		).toEqual([
-			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.center },
-			{ x: 80, frame: GROUND_TILE_FRAME_SETS.grass.right }
-		]);
-	});
+	describe('vertical groups', () => {
+		it('assigns top/bottom end caps for a run of two', () => {
+			expect(getGroupFrames([tile(0, 32), tile(0, 0)], 32)).toEqual([
+				{ x: 0, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.top },
+				{ x: 0, y: 32, frame: GROUND_TILE_FRAME_SETS.grass.bottom }
+			]);
+		});
 
-	it('gives each side of a physical gap its own end caps', () => {
-		expect(
-			getRowTileFrames(
-				[
-					{ x: 16, style: 'grass', groupId: 'a' },
-					{ x: 48, style: 'grass', groupId: 'a' },
-					{ x: 144, style: 'grass', groupId: 'a' },
-					{ x: 176, style: 'grass', groupId: 'a' }
-				],
-				32
-			)
-		).toEqual([
-			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right },
-			{ x: 144, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 176, frame: GROUND_TILE_FRAME_SETS.grass.right }
-		]);
-	});
+		it('assigns top/middle/bottom for a run of three', () => {
+			expect(getGroupFrames([tile(0, 64), tile(0, 0), tile(0, 32)], 32)).toEqual([
+				{ x: 0, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.top },
+				{ x: 0, y: 32, frame: GROUND_TILE_FRAME_SETS.grass.middle },
+				{ x: 0, y: 64, frame: GROUND_TILE_FRAME_SETS.grass.bottom }
+			]);
+		});
 
-	it('gives two touching platforms (different groupIds) their own end caps, even with the same style', () => {
-		expect(
-			getRowTileFrames(
-				[
-					{ x: 16, style: 'grass', groupId: 'a' },
-					{ x: 48, style: 'grass', groupId: 'a' },
-					{ x: 80, style: 'grass', groupId: 'b' },
-					{ x: 112, style: 'grass', groupId: 'b' }
-				],
-				32
-			)
-		).toEqual([
-			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right },
-			{ x: 80, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 112, frame: GROUND_TILE_FRAME_SETS.grass.right }
-		]);
-	});
-
-	it('gives two touching platforms of different styles their own end caps', () => {
-		expect(
-			getRowTileFrames(
-				[
-					{ x: 16, style: 'grass', groupId: 'a' },
-					{ x: 48, style: 'grass', groupId: 'a' },
-					{ x: 80, style: 'stone', groupId: 'b' },
-					{ x: 112, style: 'stone', groupId: 'b' }
-				],
-				32
-			)
-		).toEqual([
-			{ x: 16, frame: GROUND_TILE_FRAME_SETS.grass.left },
-			{ x: 48, frame: GROUND_TILE_FRAME_SETS.grass.right },
-			{ x: 80, frame: GROUND_TILE_FRAME_SETS.stone.left },
-			{ x: 112, frame: GROUND_TILE_FRAME_SETS.stone.right }
-		]);
+		it('splits into separate runs across a physical gap within the group', () => {
+			expect(
+				getGroupFrames([tile(0, 0), tile(0, 32), tile(0, 128), tile(0, 160)], 32)
+			).toEqual([
+				{ x: 0, y: 0, frame: GROUND_TILE_FRAME_SETS.grass.top },
+				{ x: 0, y: 32, frame: GROUND_TILE_FRAME_SETS.grass.bottom },
+				{ x: 0, y: 128, frame: GROUND_TILE_FRAME_SETS.grass.top },
+				{ x: 0, y: 160, frame: GROUND_TILE_FRAME_SETS.grass.bottom }
+			]);
+		});
 	});
 });
 
 describe('GROUND_TILE_FRAME_SETS', () => {
-	it('derives the expected frame names for a given style', () => {
+	it('derives the expected frame names for a given style, including vertical', () => {
 		expect(GROUND_TILE_FRAME_SETS.stone).toEqual({
 			single: 'terrain_stone_block',
 			left: 'terrain_stone_horizontal_left',
 			right: 'terrain_stone_horizontal_right',
-			center: 'terrain_stone_horizontal_middle'
+			center: 'terrain_stone_horizontal_middle',
+			top: 'terrain_stone_vertical_top',
+			middle: 'terrain_stone_vertical_middle',
+			bottom: 'terrain_stone_vertical_bottom'
 		});
 	});
 
 	it('has a complete frame set for every declared style', () => {
 		for (const style of GROUND_TILE_STYLES) {
 			expect(GROUND_TILE_FRAME_SETS[style]).toBeDefined();
+			expect(GROUND_TILE_FRAME_SETS[style].top).toBeTruthy();
+			expect(GROUND_TILE_FRAME_SETS[style].middle).toBeTruthy();
+			expect(GROUND_TILE_FRAME_SETS[style].bottom).toBeTruthy();
 		}
 	});
 });

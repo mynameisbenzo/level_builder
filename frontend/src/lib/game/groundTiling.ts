@@ -3,24 +3,32 @@ export type GroundTileStyle = (typeof GROUND_TILE_STYLES)[number];
 export const GROUND_TILE_STYLE_REGISTRY_KEY = 'groundTileStyle';
 export const DEFAULT_GROUND_TILE_STYLE: GroundTileStyle = 'grass';
 
+export type PlatformOrientation = 'horizontal' | 'vertical';
+
 export interface GroundTileFrameSet {
 	single: string;
 	left: string;
 	right: string;
 	center: string;
+	top: string;
+	middle: string;
+	bottom: string;
 }
 
 /**
  * Every style in the Kenney tileset follows the same naming convention, so
  * each style's frame set can be derived from its name rather than
- * hand-written four times per style.
+ * hand-written seven times per style.
  */
 function buildFrameSet(style: GroundTileStyle): GroundTileFrameSet {
 	return {
 		single: `terrain_${style}_block`,
 		left: `terrain_${style}_horizontal_left`,
 		right: `terrain_${style}_horizontal_right`,
-		center: `terrain_${style}_horizontal_middle`
+		center: `terrain_${style}_horizontal_middle`,
+		top: `terrain_${style}_vertical_top`,
+		middle: `terrain_${style}_vertical_middle`,
+		bottom: `terrain_${style}_vertical_bottom`
 	};
 }
 
@@ -52,91 +60,84 @@ export function getPreviousGroundTileStyle(current: GroundTileStyle): GroundTile
 
 export interface PositionedTile {
 	x: number;
+	y: number;
 	style: GroundTileStyle;
 	groupId: string;
 }
 
 /**
- * Groups a sorted list of tiles into contiguous VISUAL runs - a run breaks
- * not only at a physical gap, but also whenever the platform (groupId)
- * changes between two physically adjacent tiles. Two platforms placed as
- * separate click-and-drag actions get their own end caps even when they
- * end up touching - physical adjacency alone no longer means "same
- * platform".
+ * Determines whether a group of tiles runs horizontally (all share a y,
+ * differing x) or vertically (all share an x, differing y). A group is
+ * only ever formed one way or the other by construction (see
+ * resolveGroupIdForPlacement), so this just reads that back out of the
+ * tiles' actual positions rather than needing it stored separately. A
+ * single tile is arbitrarily called horizontal - it renders as "single"
+ * either way, so it doesn't matter.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function groupIntoContiguousRuns(
-	sortedTiles: PositionedTile[],
-	gridSize: number
-): PositionedTile[][] {
-	if (sortedTiles.length === 0) {
+export function determineOrientation(tiles: PositionedTile[]): PlatformOrientation {
+	if (tiles.length <= 1) {
+		return 'horizontal';
+	}
+	const firstY = tiles[0].y;
+	const allSameY = tiles.every((tile) => tile.y === firstY);
+	return allSameY ? 'horizontal' : 'vertical';
+}
+
+export interface TileFrameAssignment {
+	x: number;
+	y: number;
+	frame: string;
+}
+
+/**
+ * Computes the correct tile frame for every tile in a single platform
+ * (group), using whichever axis the group actually runs along. Even
+ * within one group, a physical gap (e.g. from erasing a middle tile)
+ * gets its own end caps on each side rather than being rendered as one
+ * continuous run - groups are contiguous by construction when placed,
+ * but erasure can break that after the fact.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getGroupFrames(tiles: PositionedTile[], gridSize: number): TileFrameAssignment[] {
+	if (tiles.length === 0) {
 		return [];
 	}
 
-	const runs: PositionedTile[][] = [[sortedTiles[0]]];
-	for (let i = 1; i < sortedTiles.length; i++) {
-		const previous = sortedTiles[i - 1];
-		const current = sortedTiles[i];
-		const isPhysicallyAdjacent = current.x - previous.x === gridSize;
-		const sameGroup = current.groupId === previous.groupId;
-		if (isPhysicallyAdjacent && sameGroup) {
+	const orientation = determineOrientation(tiles);
+	const sorted =
+		orientation === 'horizontal'
+			? [...tiles].sort((a, b) => a.x - b.x)
+			: [...tiles].sort((a, b) => a.y - b.y);
+
+	const runs: PositionedTile[][] = [[sorted[0]]];
+	for (let i = 1; i < sorted.length; i++) {
+		const previous = sorted[i - 1];
+		const current = sorted[i];
+		const delta = orientation === 'horizontal' ? current.x - previous.x : current.y - previous.y;
+		if (delta === gridSize) {
 			runs[runs.length - 1].push(current);
 		} else {
 			runs.push([current]);
 		}
 	}
-	return runs;
-}
-
-/**
- * Picks the correct tile frame for one x position within a single
- * contiguous run, in the given style: the only tile in a run of one gets
- * the plain block, the two ends of a longer run get the matching end-cap,
- * and everything between gets the center frame.
- * Pure function, no Phaser dependency, safe to unit test directly.
- */
-export function getFrameForPositionInRun(
-	run: PositionedTile[],
-	x: number,
-	style: GroundTileStyle
-): string {
-	const frames = GROUND_TILE_FRAME_SETS[style];
-
-	if (run.length === 1) {
-		return frames.single;
-	}
-
-	const index = run.findIndex((tile) => tile.x === x);
-	if (index === 0) {
-		return frames.left;
-	}
-	if (index === run.length - 1) {
-		return frames.right;
-	}
-	return frames.center;
-}
-
-export interface TileFrameAssignment {
-	x: number;
-	frame: string;
-}
-
-/**
- * Computes the correct tile frame for every tile on a single row,
- * accounting for both physical gaps AND platform (groupId) boundaries via
- * groupIntoContiguousRuns. Each tile's left/center/right/single ROLE is
- * determined by its position within its run; the actual frame drawn uses
- * that specific tile's own style.
- * Pure function, no Phaser dependency, safe to unit test directly.
- */
-export function getRowTileFrames(tiles: PositionedTile[], gridSize: number): TileFrameAssignment[] {
-	const sortedTiles = [...tiles].sort((a, b) => a.x - b.x);
-	const runs = groupIntoContiguousRuns(sortedTiles, gridSize);
 
 	const assignments: TileFrameAssignment[] = [];
 	for (const run of runs) {
-		for (const tile of run) {
-			assignments.push({ x: tile.x, frame: getFrameForPositionInRun(run, tile.x, tile.style) });
+		for (let i = 0; i < run.length; i++) {
+			const tile = run[i];
+			const frames = GROUND_TILE_FRAME_SETS[tile.style];
+			let frame: string;
+			if (run.length === 1) {
+				frame = frames.single;
+			} else if (i === 0) {
+				frame = orientation === 'horizontal' ? frames.left : frames.top;
+			} else if (i === run.length - 1) {
+				frame = orientation === 'horizontal' ? frames.right : frames.bottom;
+			} else {
+				frame = orientation === 'horizontal' ? frames.center : frames.middle;
+			}
+			assignments.push({ x: tile.x, y: tile.y, frame });
 		}
 	}
 	return assignments;

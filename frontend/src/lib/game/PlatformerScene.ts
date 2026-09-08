@@ -14,7 +14,7 @@ import {
 	PLAYER_TEXTURE_KEY,
 	TILES_ATLAS_KEY
 } from './textures';
-import { getRowTileFrames, type PositionedTile } from './groundTiling';
+import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
@@ -86,14 +86,14 @@ export class PlatformerScene extends Phaser.Scene {
 		this.platforms = this.physics.add.staticGroup();
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const rowTilesByY = new Map<number, PositionedTile[]>();
+		const tilesByGroupId = new Map<string, PositionedTile[]>();
 		for (const object of placedObjects) {
-			const tiles = rowTilesByY.get(object.y) ?? [];
-			tiles.push({ x: object.x, style: object.style, groupId: object.groupId });
-			rowTilesByY.set(object.y, tiles);
+			const tiles = tilesByGroupId.get(object.groupId) ?? [];
+			tiles.push({ x: object.x, y: object.y, style: object.style, groupId: object.groupId });
+			tilesByGroupId.set(object.groupId, tiles);
 		}
-		for (const [y, tiles] of rowTilesByY) {
-			for (const { x, frame } of getRowTileFrames(tiles, GRID_SIZE)) {
+		for (const tiles of tilesByGroupId.values()) {
+			for (const { x, y, frame } of getGroupFrames(tiles, GRID_SIZE)) {
 				const tile = this.platforms.create(
 					x,
 					y,

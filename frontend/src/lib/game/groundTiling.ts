@@ -97,6 +97,12 @@ export interface TileFrameAssignment {
  * gets its own end caps on each side rather than being rendered as one
  * continuous run - groups are contiguous by construction when placed,
  * but erasure can break that after the fact.
+ *
+ * Horizontal and vertical platforms do not visually connect to each
+ * other, even when touching - each is computed independently, purely
+ * from its own group's tiles. (A vertical/horizontal junction piece was
+ * tried and removed - see README TODOs; the available tile art didn't
+ * look right for it.)
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function getGroupFrames(tiles: PositionedTile[], gridSize: number): TileFrameAssignment[] {

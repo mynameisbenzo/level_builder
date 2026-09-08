@@ -769,6 +769,10 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * can change what frame its neighbors within the same group should
 	 * show, so the whole group is refreshed rather than just the one tile
 	 * that changed.
+	 *
+	 * Horizontal and vertical platforms are never rendered together here -
+	 * each group is entirely independent, since they don't visually
+	 * connect (a junction piece was tried and removed; see README TODOs).
 	 */
 	private refreshGroup(groupId: string) {
 		const allObjects =

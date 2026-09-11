@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose } from './movement';
 
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
@@ -92,5 +92,36 @@ describe('hasRisingEdge', () => {
 	it('returns false when up now, regardless of last frame', () => {
 		expect(hasRisingEdge(false, true)).toBe(false);
 		expect(hasRisingEdge(false, false)).toBe(false);
+	});
+});
+
+describe('getPlayerPose', () => {
+	it('is idle when grounded, not ducking, not moving', () => {
+		expect(getPlayerPose(true, false, 0)).toBe('idle');
+	});
+
+	it('is walk when grounded, not ducking, moving', () => {
+		expect(getPlayerPose(true, false, 200)).toBe('walk');
+		expect(getPlayerPose(true, false, -200)).toBe('walk');
+	});
+
+	it('is duck when grounded and ducking, regardless of movement', () => {
+		expect(getPlayerPose(true, true, 0)).toBe('duck');
+		expect(getPlayerPose(true, true, 200)).toBe('duck');
+	});
+
+	it('is jump whenever airborne, regardless of ducking or movement', () => {
+		expect(getPlayerPose(false, false, 0)).toBe('jump');
+		expect(getPlayerPose(false, false, 200)).toBe('jump');
+		expect(getPlayerPose(false, true, 0)).toBe('jump');
+		expect(getPlayerPose(false, true, 200)).toBe('jump');
+	});
+
+	it('prioritizes airborne over ducking', () => {
+		expect(getPlayerPose(false, true, 0)).not.toBe('duck');
+	});
+
+	it('prioritizes ducking over walking', () => {
+		expect(getPlayerPose(true, true, 200)).not.toBe('walk');
 	});
 });

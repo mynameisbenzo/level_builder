@@ -1,14 +1,15 @@
 import Phaser from 'phaser';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import {
+	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
 	ensureEraserIcon,
-	ensurePlayerTexture,
 	ensureSelectCursorIcon,
 	ensureTilesAtlas,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
-	PLAYER_TEXTURE_KEY,
+	PLAYER_DISPLAY_SIZE,
+	PLAYER_SPRITE_FRAME,
 	SELECT_CURSOR_ICON_KEY,
 	SELECT_CURSOR_ICON_PATH,
 	TILES_ATLAS_KEY
@@ -125,7 +126,6 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	preload() {
-		ensurePlayerTexture(this);
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
 		ensureEraserIcon(this);
@@ -252,7 +252,8 @@ export class LevelEditorScene extends Phaser.Scene {
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, screenCenter);
 
 		this.playerObject = this.add
-			.image(spawnPosition.x, spawnPosition.y, PLAYER_TEXTURE_KEY)
+			.image(spawnPosition.x, spawnPosition.y, CHARACTERS_ATLAS_KEY, PLAYER_SPRITE_FRAME)
+			.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
 			.setInteractive({ draggable: true });
 
 		this.playerObject.on(

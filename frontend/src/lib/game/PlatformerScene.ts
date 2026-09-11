@@ -3,15 +3,19 @@ import {
 	exceedsDeadzone,
 	getHorizontalVelocity,
 	getJumpVelocity,
+	getPlayerPose,
 	hasFallenOffScreen,
-	hasRisingEdge
+	hasRisingEdge,
+	type PlayerPose
 } from './movement';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import {
+	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
-	ensurePlayerTexture,
+	ensurePlayerWalkAnimation,
 	ensureTilesAtlas,
-	PLAYER_TEXTURE_KEY,
+	PLAYER_DISPLAY_SIZE,
+	PLAYER_POSE_CONFIG,
 	TILES_ATLAS_KEY
 } from './textures';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
@@ -50,15 +54,13 @@ export class PlatformerScene extends Phaser.Scene {
 	private gamepadStatusText!: Phaser.GameObjects.Text;
 	private gamepadStatusTween?: Phaser.Tweens.Tween;
 	private toggleKey!: Phaser.Input.Keyboard.Key;
+	private currentPose: PlayerPose | null = null;
 
 	constructor() {
 		super('PlatformerScene');
 	}
 
 	preload() {
-		// Generate a simple white square texture for the player.
-		// Real sprites get swapped in later phases.
-		ensurePlayerTexture(this);
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
 	}
@@ -80,8 +82,37 @@ export class PlatformerScene extends Phaser.Scene {
 			| undefined;
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
-		this.player = this.physics.add.sprite(spawnPosition.x, spawnPosition.y, PLAYER_TEXTURE_KEY);
+		this.player = this.physics.add.sprite(
+			spawnPosition.x,
+			spawnPosition.y,
+			CHARACTERS_ATLAS_KEY,
+			PLAYER_POSE_CONFIG.idle.frame
+		);
+		this.player.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
+		// The source frame (128x128) is bigger than our 32px hitbox AND the
+		// character art doesn't fill the frame edge-to-edge - Kenney pads
+		// frames so different poses share one size, and this pose is
+		// bottom-aligned with empty space above the head. Sizing the body
+		// to the full frame (even scaled correctly) would center the
+		// hitbox on the padded frame's middle, not on the character, which
+		// is what caused collisions to register around the sprite's
+		// midpoint instead of at its feet. Using the measured content
+		// bounds (in the frame's own pre-scale units, which Phaser scales
+		// down automatically to match the display scale) fits the hitbox
+		// to the actual character silhouette instead.
+		this.player.body?.setSize(
+			PLAYER_POSE_CONFIG.idle.hitbox.width,
+			PLAYER_POSE_CONFIG.idle.hitbox.height,
+			false
+		);
+		this.player.body?.setOffset(
+			PLAYER_POSE_CONFIG.idle.hitbox.x,
+			PLAYER_POSE_CONFIG.idle.hitbox.y
+		);
+		this.currentPose = 'idle';
 		this.player.setCollideWorldBounds(true);
+		this.player.setCollideWorldBounds(true);
+		ensurePlayerWalkAnimation(this);
 
 		this.platforms = this.physics.add.staticGroup();
 		const placedObjects =
@@ -185,6 +216,34 @@ export class PlatformerScene extends Phaser.Scene {
 			touchInputState.right;
 		const velocityX = getHorizontalVelocity({ left: leftDown, right: rightDown }, MOVE_SPEED);
 		this.player.setVelocityX(velocityX);
+
+		// Ducking takes priority over the walk/idle animation - held
+		// regardless of horizontal movement, same as it would be in most
+		// platformers (there's no separate duck-walk animation here).
+		// Ducking (held regardless of horizontal movement, same as it
+		// would be in most platformers - there's no separate duck-walk
+		// animation here) and jumping (airborne, i.e. not onGround) are
+		// the only two additional pose inputs; getPlayerPose applies the
+		// actual priority between them (see movement.ts).
+		const isDucking = this.wasd.s.isDown || this.arrows.down.isDown;
+		const pose = getPlayerPose(onGround, isDucking, velocityX);
+
+		if (pose !== this.currentPose) {
+			const config = PLAYER_POSE_CONFIG[pose];
+			this.player.body?.setSize(config.hitbox.width, config.hitbox.height, false);
+			this.player.body?.setOffset(config.hitbox.x, config.hitbox.y);
+			if (config.animationKey) {
+				this.player.anims.play(config.animationKey, true);
+			} else {
+				this.player.anims.stop();
+				this.player.setTexture(CHARACTERS_ATLAS_KEY, config.frame);
+			}
+			this.currentPose = pose;
+		}
+
+		if (velocityX !== 0) {
+			this.player.setFlipX(velocityX < 0);
+		}
 
 		// Gamepad and touch buttons don't have Phaser's keyboard-style
 		// JustDown() helper, so we track each source's previous-frame state

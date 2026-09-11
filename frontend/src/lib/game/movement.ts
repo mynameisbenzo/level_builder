@@ -64,3 +64,28 @@ export function hasFallenOffScreen(
 export function hasRisingEdge(isDownNow: boolean, wasDownLastFrame: boolean): boolean {
 	return isDownNow && !wasDownLastFrame;
 }
+
+export type PlayerPose = 'jump' | 'duck' | 'walk' | 'idle';
+
+/**
+ * Decides which pose the player should be in. Priority: airborne always
+ * wins (you can't meaningfully duck or walk mid-air), then ducking
+ * overrides walking, then walking overrides idle.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getPlayerPose(
+	onGround: boolean,
+	isDucking: boolean,
+	velocityX: number
+): PlayerPose {
+	if (!onGround) {
+		return 'jump';
+	}
+	if (isDucking) {
+		return 'duck';
+	}
+	if (velocityX !== 0) {
+		return 'walk';
+	}
+	return 'idle';
+}

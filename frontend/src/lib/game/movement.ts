@@ -60,7 +60,29 @@ export function getJumpVelocity(input: JumpInput, jumpVelocity: number): number 
 	}
 	return null;
 }
-
+/**
+ * Implements variable jump height ("jump cut"): releasing the jump button
+ * while still moving upward reduces the remaining upward velocity,
+ * cutting the jump short instead of letting it continue to its full arc.
+ * Holding the button through the whole ascent leaves gravity alone to
+ * determine the peak height, uncut. Returns the velocity to apply, or
+ * null if nothing should change this frame (button still held, or
+ * already at/past the peak so there's nothing left to cut).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getJumpCutVelocity(
+	velocityY: number,
+	isJumpHeld: boolean,
+	cutMultiplier: number
+): number | null {
+	if (isJumpHeld) {
+		return null;
+	}
+	if (velocityY >= 0) {
+		return null;
+	}
+	return velocityY * cutMultiplier;
+}
 /**
  * Determines whether an analog stick axis value counts as "pressed" in a
  * direction, ignoring small values caused by stick drift/noise.

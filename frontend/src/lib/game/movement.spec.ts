@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity } from './movement';
-
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity } from './movement';
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
 		const velocity = getHorizontalVelocity({ left: true, right: false }, 200);
@@ -171,5 +170,32 @@ describe('getAcceleratedVelocity', () => {
 	it('zero deltaSeconds produces no change', () => {
 		const result = getAcceleratedVelocity({ left: false, right: true }, 50, 200, 800, 0);
 		expect(result).toBe(50);
+	});
+});
+
+describe('getJumpCutVelocity', () => {
+	it('does not cut the jump while the button is still held', () => {
+		expect(getJumpCutVelocity(-450, true, 0.5)).toBeNull();
+	});
+
+	it('cuts the jump when released while still moving upward', () => {
+		expect(getJumpCutVelocity(-450, false, 0.5)).toBe(-225);
+	});
+
+	it('applies the given multiplier exactly', () => {
+		expect(getJumpCutVelocity(-400, false, 0.4)).toBe(-160);
+	});
+
+	it('does nothing once already falling, even if released', () => {
+		expect(getJumpCutVelocity(100, false, 0.5)).toBeNull();
+	});
+
+	it('does nothing at the exact peak (velocity zero)', () => {
+		expect(getJumpCutVelocity(0, false, 0.5)).toBeNull();
+	});
+
+	it('a held button always wins regardless of velocity direction', () => {
+		expect(getJumpCutVelocity(-450, true, 0.5)).toBeNull();
+		expect(getJumpCutVelocity(100, true, 0.5)).toBeNull();
 	});
 });

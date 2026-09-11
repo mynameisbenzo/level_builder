@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import {
 	exceedsDeadzone,
 	getAcceleratedVelocity,
+	getJumpCutVelocity,
 	getJumpVelocity,
 	getPlayerPose,
 	hasFallenOffScreen,
@@ -37,6 +38,12 @@ const MOVE_SPEED = 200;
 // this to taste; higher = snappier ramp, lower = more gradual.
 const ACCELERATION = 800;
 const JUMP_VELOCITY = -450;
+// Variable jump height ("jump cut"): releasing jump early while still
+// ascending multiplies the remaining upward velocity by this factor,
+// cutting the jump short. Lower = shorter minimum hop when tapped;
+// holding the button the whole way up always reaches the full height
+// regardless of this value.
+const JUMP_CUT_MULTIPLIER = 0.5;
 const GRAVITY_Y = 900;
 const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
@@ -53,12 +60,12 @@ export class PlatformerScene extends Phaser.Scene {
 	};
 	private arrows!: Phaser.Types.Input.Keyboard.CursorKeys;
 	private platforms!: Phaser.Physics.Arcade.StaticGroup;
+	private currentPose: PlayerPose | null = null;
 	private wasPadJumpButtonDown = false;
 	private wasTouchJumpDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
 	private gamepadStatusTween?: Phaser.Tweens.Tween;
 	private toggleKey!: Phaser.Input.Keyboard.Key;
-	private currentPose: PlayerPose | null = null;
 
 	constructor() {
 		super('PlatformerScene');
@@ -114,7 +121,6 @@ export class PlatformerScene extends Phaser.Scene {
 			PLAYER_POSE_CONFIG.idle.hitbox.y
 		);
 		this.currentPose = 'idle';
-		this.player.setCollideWorldBounds(true);
 		this.player.setCollideWorldBounds(true);
 		ensurePlayerWalkAnimation(this);
 
@@ -228,9 +234,6 @@ export class PlatformerScene extends Phaser.Scene {
 		);
 		this.player.setVelocityX(velocityX);
 
-		// Ducking takes priority over the walk/idle animation - held
-		// regardless of horizontal movement, same as it would be in most
-		// platformers (there's no separate duck-walk animation here).
 		// Ducking (held regardless of horizontal movement, same as it
 		// would be in most platformers - there's no separate duck-walk
 		// animation here) and jumping (airborne, i.e. not onGround) are
@@ -244,6 +247,8 @@ export class PlatformerScene extends Phaser.Scene {
 			this.player.body?.setSize(config.hitbox.width, config.hitbox.height, false);
 			this.player.body?.setOffset(config.hitbox.x, config.hitbox.y);
 			if (config.animationKey) {
+				// true = don't restart the animation from frame 0 if it's
+				// already playing, so alternating left/right taps stay smooth.
 				this.player.anims.play(config.animationKey, true);
 			} else {
 				this.player.anims.stop();
@@ -252,6 +257,8 @@ export class PlatformerScene extends Phaser.Scene {
 			this.currentPose = pose;
 		}
 
+		// Facing direction is independent of pose - update every frame
+		// while moving, regardless of whether the pose itself changed.
 		if (velocityX !== 0) {
 			this.player.setFlipX(velocityX < 0);
 		}
@@ -274,6 +281,19 @@ export class PlatformerScene extends Phaser.Scene {
 		const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
 		if (velocityY !== null) {
 			this.player.setVelocityY(velocityY);
+		}
+
+		// Variable jump height: if jump isn't currently held and the player
+		// is still moving upward, cut the ascent short rather than letting
+		// gravity alone carry it to the full height. Checked every frame
+		// (not just on release) since velocity keeps changing under
+		// gravity regardless of when the button came up.
+		const isJumpHeld =
+			this.wasd.w.isDown || this.arrows.up.isDown || padJumpButtonDown || touchInputState.jump;
+		const currentVelocityY = this.player.body?.velocity.y ?? 0;
+		const cutVelocityY = getJumpCutVelocity(currentVelocityY, isJumpHeld, JUMP_CUT_MULTIPLIER);
+		if (cutVelocityY !== null) {
+			this.player.setVelocityY(cutVelocityY);
 		}
 	}
 }

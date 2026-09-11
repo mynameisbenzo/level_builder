@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import {
 	exceedsDeadzone,
-	getHorizontalVelocity,
+	getAcceleratedVelocity,
 	getJumpVelocity,
 	getPlayerPose,
 	hasFallenOffScreen,
@@ -32,6 +32,10 @@ import {
 
 const CURRENT_MODE: GameMode = 'play';
 const MOVE_SPEED = 200;
+// Time to reach MOVE_SPEED from a standstill: MOVE_SPEED / ACCELERATION
+// seconds (200 / 800 = 0.25s) - the P-speed-style build-up test. Tune
+// this to taste; higher = snappier ramp, lower = more gradual.
+const ACCELERATION = 800;
 const JUMP_VELOCITY = -450;
 const GRAVITY_Y = 900;
 const STICK_DEADZONE = 0.2;
@@ -182,7 +186,7 @@ export class PlatformerScene extends Phaser.Scene {
 		});
 	}
 
-	update() {
+	update(_time: number, delta: number) {
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
 			clearModeTogglePressed();
 			const nextMode = toggleMode(CURRENT_MODE);
@@ -214,7 +218,14 @@ export class PlatformerScene extends Phaser.Scene {
 			(pad?.right ?? false) ||
 			padStickRight ||
 			touchInputState.right;
-		const velocityX = getHorizontalVelocity({ left: leftDown, right: rightDown }, MOVE_SPEED);
+		const currentVelocityX = this.player.body?.velocity.x ?? 0;
+		const velocityX = getAcceleratedVelocity(
+			{ left: leftDown, right: rightDown },
+			currentVelocityX,
+			MOVE_SPEED,
+			ACCELERATION,
+			delta / 1000
+		);
 		this.player.setVelocityX(velocityX);
 
 		// Ducking takes priority over the walk/idle animation - held

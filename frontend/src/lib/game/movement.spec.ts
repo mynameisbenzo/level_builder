@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity } from './movement';
 
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
@@ -123,5 +123,53 @@ describe('getPlayerPose', () => {
 
 	it('prioritizes ducking over walking', () => {
 		expect(getPlayerPose(true, true, 200)).not.toBe('walk');
+	});
+});
+
+describe('getAcceleratedVelocity', () => {
+	it('ramps up gradually toward max speed rather than snapping instantly', () => {
+		const result = getAcceleratedVelocity({ left: false, right: true }, 0, 200, 800, 0.1);
+		expect(result).toBe(80);
+		expect(result).toBeLessThan(200);
+	});
+
+	it('does not overshoot max speed when the step would exceed it', () => {
+		const result = getAcceleratedVelocity({ left: false, right: true }, 0, 200, 800, 0.5);
+		expect(result).toBe(200);
+	});
+
+	it('reaches exactly max speed and stays there once at max', () => {
+		const atMax = getAcceleratedVelocity({ left: false, right: true }, 200, 200, 800, 0.1);
+		expect(atMax).toBe(200);
+	});
+
+	it('accelerates symmetrically in the negative direction', () => {
+		const result = getAcceleratedVelocity({ left: true, right: false }, 0, 200, 800, 0.1);
+		expect(result).toBe(-80);
+	});
+
+	it('decelerates toward zero when input is released', () => {
+		const result = getAcceleratedVelocity({ left: false, right: false }, 200, 200, 800, 0.1);
+		expect(result).toBe(120);
+	});
+
+	it('does not overshoot past zero when decelerating', () => {
+		const result = getAcceleratedVelocity({ left: false, right: false }, 40, 200, 800, 0.1);
+		expect(result).toBe(0);
+	});
+
+	it('reverses direction by decelerating through zero, not snapping', () => {
+		const result = getAcceleratedVelocity({ left: true, right: false }, 200, 200, 800, 0.1);
+		expect(result).toBe(120);
+	});
+
+	it('both directions held cancels out, same as getHorizontalVelocity', () => {
+		const result = getAcceleratedVelocity({ left: true, right: true }, 100, 200, 800, 0.1);
+		expect(result).toBe(20);
+	});
+
+	it('zero deltaSeconds produces no change', () => {
+		const result = getAcceleratedVelocity({ left: false, right: true }, 50, 200, 800, 0);
+		expect(result).toBe(50);
 	});
 });

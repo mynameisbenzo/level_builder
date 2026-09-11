@@ -13,10 +13,11 @@ import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import {
 	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
+	ensurePlayerColor,
 	ensurePlayerWalkAnimation,
 	ensureTilesAtlas,
+	getPlayerPoseConfig,
 	PLAYER_DISPLAY_SIZE,
-	PLAYER_POSE_CONFIG,
 	TILES_ATLAS_KEY
 } from './textures';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
@@ -61,6 +62,7 @@ export class PlatformerScene extends Phaser.Scene {
 	private arrows!: Phaser.Types.Input.Keyboard.CursorKeys;
 	private platforms!: Phaser.Physics.Arcade.StaticGroup;
 	private currentPose: PlayerPose | null = null;
+	private playerPoseConfig!: ReturnType<typeof getPlayerPoseConfig>;
 	private wasPadJumpButtonDown = false;
 	private wasTouchJumpDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
@@ -93,36 +95,29 @@ export class PlatformerScene extends Phaser.Scene {
 			| undefined;
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
+		const playerColor = ensurePlayerColor(this);
+		this.playerPoseConfig = getPlayerPoseConfig(playerColor);
+
 		this.player = this.physics.add.sprite(
 			spawnPosition.x,
 			spawnPosition.y,
 			CHARACTERS_ATLAS_KEY,
-			PLAYER_POSE_CONFIG.idle.frame
+			this.playerPoseConfig.idle.frame
 		);
 		this.player.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
-		// The source frame (128x128) is bigger than our 32px hitbox AND the
-		// character art doesn't fill the frame edge-to-edge - Kenney pads
-		// frames so different poses share one size, and this pose is
-		// bottom-aligned with empty space above the head. Sizing the body
-		// to the full frame (even scaled correctly) would center the
-		// hitbox on the padded frame's middle, not on the character, which
-		// is what caused collisions to register around the sprite's
-		// midpoint instead of at its feet. Using the measured content
-		// bounds (in the frame's own pre-scale units, which Phaser scales
-		// down automatically to match the display scale) fits the hitbox
-		// to the actual character silhouette instead.
+		// (comment block unchanged)
 		this.player.body?.setSize(
-			PLAYER_POSE_CONFIG.idle.hitbox.width,
-			PLAYER_POSE_CONFIG.idle.hitbox.height,
+			this.playerPoseConfig.idle.hitbox.width,
+			this.playerPoseConfig.idle.hitbox.height,
 			false
 		);
 		this.player.body?.setOffset(
-			PLAYER_POSE_CONFIG.idle.hitbox.x,
-			PLAYER_POSE_CONFIG.idle.hitbox.y
+			this.playerPoseConfig.idle.hitbox.x,
+			this.playerPoseConfig.idle.hitbox.y
 		);
 		this.currentPose = 'idle';
 		this.player.setCollideWorldBounds(true);
-		ensurePlayerWalkAnimation(this);
+		ensurePlayerWalkAnimation(this, playerColor);
 
 		this.platforms = this.physics.add.staticGroup();
 		const placedObjects =
@@ -243,7 +238,7 @@ export class PlatformerScene extends Phaser.Scene {
 		const pose = getPlayerPose(onGround, isDucking, velocityX);
 
 		if (pose !== this.currentPose) {
-			const config = PLAYER_POSE_CONFIG[pose];
+			const config = this.playerPoseConfig[pose];
 			this.player.body?.setSize(config.hitbox.width, config.hitbox.height, false);
 			this.player.body?.setOffset(config.hitbox.x, config.hitbox.y);
 			if (config.animationKey) {

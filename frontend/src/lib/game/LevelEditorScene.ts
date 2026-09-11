@@ -4,12 +4,13 @@ import {
 	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
 	ensureEraserIcon,
+	ensurePlayerColor,
 	ensureSelectCursorIcon,
 	ensureTilesAtlas,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
+	getPlayerPoseConfig,
 	PLAYER_DISPLAY_SIZE,
-	PLAYER_SPRITE_FRAME,
 	SELECT_CURSOR_ICON_KEY,
 	SELECT_CURSOR_ICON_PATH,
 	TILES_ATLAS_KEY
@@ -251,8 +252,14 @@ export class LevelEditorScene extends Phaser.Scene {
 		const screenCenter = { x: this.scale.width / 2, y: this.scale.height / 2 };
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, screenCenter);
 
+		const playerColor = ensurePlayerColor(this);
 		this.playerObject = this.add
-			.image(spawnPosition.x, spawnPosition.y, CHARACTERS_ATLAS_KEY, PLAYER_SPRITE_FRAME)
+			.image(
+				spawnPosition.x,
+				spawnPosition.y,
+				CHARACTERS_ATLAS_KEY,
+				getPlayerPoseConfig(playerColor).idle.frame
+			)
 			.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
 			.setInteractive({ draggable: true });
 

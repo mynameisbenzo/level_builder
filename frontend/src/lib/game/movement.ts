@@ -14,6 +14,36 @@ export function getHorizontalVelocity(input: HorizontalInput, speed: number): nu
 	return 0;
 }
 
+/**
+ * Computes the next frame's horizontal velocity, ramping toward the
+ * target speed (whichever direction is held, or zero if neither/both are)
+ * by at most `acceleration * deltaSeconds`, rather than snapping to it
+ * instantly. This is the core "build-up" feel from 2D Mario games'
+ * running mechanic - hold a direction and speed ramps up over time; let
+ * go (or reverse direction) and it ramps back down the same way, passing
+ * through zero naturally rather than needing special-case braking logic.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getAcceleratedVelocity(
+	input: HorizontalInput,
+	currentVelocity: number,
+	maxSpeed: number,
+	acceleration: number,
+	deltaSeconds: number
+): number {
+	const direction = input.left && input.right ? 0 : input.left ? -1 : input.right ? 1 : 0;
+	const targetVelocity = direction * maxSpeed;
+	const maxDelta = acceleration * deltaSeconds;
+
+	if (targetVelocity > currentVelocity) {
+		return Math.min(targetVelocity, currentVelocity + maxDelta);
+	}
+	if (targetVelocity < currentVelocity) {
+		return Math.max(targetVelocity, currentVelocity - maxDelta);
+	}
+	return currentVelocity;
+}
+
 export interface JumpInput {
 	jumpJustPressed: boolean;
 	onGround: boolean;

@@ -1,4 +1,3 @@
-
 ## Backend setup
 
 ```bash
@@ -282,6 +281,17 @@ until the moment someone wants to save or share.
 - [ ] `tool_assisted` classification for levels an admin determines
       aren't legitimately clearable as submitted (stays live, gets
       relabeled — like a TAS tag in speedrunning, not deletion)
+
+## Future Considerations (way down the line)
+
+Not part of the active technical roadmap — noted for later, pricing
+model only, details TBD:
+
+- [ ] **Website access** — $5/month subscription
+- [ ] **Standalone Steam version** — $15 flat fee
+- [ ] **DLC** — free on the website, paid on the Steam standalone
+      version. Exact mechanics (what counts as DLC, how it's gated
+      between the two versions, etc.) still to be figured out.
 
 ## Housekeeping
 

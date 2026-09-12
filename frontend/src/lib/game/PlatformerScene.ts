@@ -16,6 +16,7 @@ import {
 	ensurePlayerColor,
 	ensurePlayerWalkAnimation,
 	ensureTilesAtlas,
+	getPlayerHudFrame,
 	getPlayerPoseConfig,
 	PLAYER_DISPLAY_SIZE,
 	TILES_ATLAS_KEY
@@ -155,13 +156,21 @@ export class PlatformerScene extends Phaser.Scene {
 		this.arrows = this.input.keyboard.createCursorKeys();
 		this.toggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
 
-		this.add.text(10, 30, 'Tab: switch to Edit Mode', {
+		// Character HUD - top-left corner. Portraits live in the TILES
+		// atlas (not the character atlas) as hud_character_2 through
+		// hud_character_6, one per PLAYER_COLORS entry.
+		this.add
+			.image(10, 10, TILES_ATLAS_KEY, getPlayerHudFrame(playerColor))
+			.setOrigin(0, 0)
+			.setDisplaySize(48, 48);
+
+		this.add.text(68, 26, 'Tab: switch to Edit Mode', {
 			font: '14px monospace',
 			color: '#aaaaaa'
 		});
 
 		this.gamepadStatusText = this.add
-			.text(10, 10, '', { font: '14px monospace', color: '#ffffff' })
+			.text(10, 68, '', { font: '14px monospace', color: '#ffffff' })
 			.setAlpha(0);
 
 		this.input.gamepad?.on('connected', (pad: Phaser.Input.Gamepad.Gamepad) => {

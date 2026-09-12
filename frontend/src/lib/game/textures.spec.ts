@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pickPlayerColor, PLAYER_COLORS } from './textures';
+import { getPlayerHudFrame, pickPlayerColor, PLAYER_COLORS } from './textures';
 
 describe('pickPlayerColor', () => {
 	it('picks the first color for a random value of 0', () => {
@@ -23,5 +23,20 @@ describe('pickPlayerColor', () => {
 
 	it('is deterministic for the same input', () => {
 		expect(pickPlayerColor(0.37)).toBe(pickPlayerColor(0.37));
+	});
+});
+
+describe('getPlayerHudFrame', () => {
+	it('maps each color to its named helmet portrait frame', () => {
+		expect(getPlayerHudFrame('beige')).toBe('hud_player_helmet_beige');
+		expect(getPlayerHudFrame('green')).toBe('hud_player_helmet_green');
+		expect(getPlayerHudFrame('pink')).toBe('hud_player_helmet_pink');
+		expect(getPlayerHudFrame('purple')).toBe('hud_player_helmet_purple');
+		expect(getPlayerHudFrame('yellow')).toBe('hud_player_helmet_yellow');
+	});
+
+	it('produces a distinct frame for every color', () => {
+		const frames = PLAYER_COLORS.map((color) => getPlayerHudFrame(color));
+		expect(new Set(frames).size).toBe(PLAYER_COLORS.length);
 	});
 });

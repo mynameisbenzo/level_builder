@@ -44,6 +44,18 @@ function playerFrameName(color: PlayerColor, poseSuffix: string): string {
 }
 
 /**
+ * Maps a player color to its HUD portrait frame ("helmet" variant - the
+ * plain hud_player_<color> frames, without "helmet", are reserved for the
+ * planned character-swap floating objects, see README TODOs). These live
+ * in the TILES atlas, not the character atlas - Kenney grouped the HUD
+ * icons in with the tile spritesheet.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getPlayerHudFrame(color: PlayerColor): string {
+	return `hud_player_helmet_${color}`;
+}
+
+/**
  * The visible character's bounds within its 128x128 source frame, in the
  * frame's own (pre-scale) pixel units - measured directly from the sprite
  * sheet. Kenney's character frames include padding so different poses

@@ -287,8 +287,8 @@ until the moment someone wants to save or share.
 Not part of the active technical roadmap — noted for later, pricing
 model only, details TBD:
 
-- [ ] **Website access** — $5/month subscription
-- [ ] **Standalone Steam version** — $15 flat fee
+- [ ] **Website access** — monthly subscription all dlc updates included
+- [ ] **Standalone Steam version** — flat fee new content blocked by paywall
 - [ ] **DLC** — free on the website, paid on the Steam standalone
       version. Exact mechanics (what counts as DLC, how it's gated
       between the two versions, etc.) still to be figured out.

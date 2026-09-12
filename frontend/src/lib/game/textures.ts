@@ -56,6 +56,16 @@ export function getPlayerHudFrame(color: PlayerColor): string {
 }
 
 /**
+ * Maps a player color to the frame a character-swap floating object shows
+ * while holding that color - the non-"helmet" hud_player_<color> frames,
+ * distinct from getPlayerHudFrame's portraits.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getCharacterSwapObjectFrame(color: PlayerColor): string {
+	return `hud_player_${color}`;
+}
+
+/**
  * The visible character's bounds within its 128x128 source frame, in the
  * frame's own (pre-scale) pixel units - measured directly from the sprite
  * sheet. Kenney's character frames include padding so different poses
@@ -107,18 +117,16 @@ export function ensureCharacterAtlas(scene: Phaser.Scene) {
 export const PLAYER_WALK_ANIMATION_KEY = 'player-walk';
 
 /**
- * Registers the player's two-frame walk-cycle animation, in the given
- * color, if it isn't already registered. Animations live in the scene's
- * global Animation Manager (shared across scene restarts within the same
- * Game instance, same as textures), so this needs the same existence
- * guard as the texture loaders to avoid a duplicate-key warning when a
- * scene restarts (e.g. toggling between Play and Edit mode). The color is
- * only ever read once per session (see pickPlayerColor), so this only
- * ever needs to build the animation for one color, not all five.
+ * (Re)builds the player's two-frame walk-cycle animation for the given
+ * color, replacing any existing registration. Use this (not
+ * ensurePlayerWalkAnimation) when the player's color changes mid-session
+ * (e.g. a character-swap object) - the animation needs to be rebuilt with
+ * the new color's frames, not just left as whatever color it was
+ * originally registered with.
  */
-export function ensurePlayerWalkAnimation(scene: Phaser.Scene, color: PlayerColor) {
+export function setPlayerWalkAnimationColor(scene: Phaser.Scene, color: PlayerColor) {
 	if (scene.anims.exists(PLAYER_WALK_ANIMATION_KEY)) {
-		return;
+		scene.anims.remove(PLAYER_WALK_ANIMATION_KEY);
 	}
 
 	scene.anims.create({
@@ -130,6 +138,22 @@ export function ensurePlayerWalkAnimation(scene: Phaser.Scene, color: PlayerColo
 		frameRate: 8,
 		repeat: -1
 	});
+}
+
+/**
+ * Registers the player's walk-cycle animation, in the given color, only
+ * if it isn't already registered. Animations live in the scene's global
+ * Animation Manager (shared across scene restarts within the same Game
+ * instance, same as textures), so this guard avoids a duplicate-key
+ * warning when a scene restarts (e.g. toggling between Play and Edit
+ * mode) - for the initial setup only. If the color changes later, use
+ * setPlayerWalkAnimationColor instead, which rebuilds unconditionally.
+ */
+export function ensurePlayerWalkAnimation(scene: Phaser.Scene, color: PlayerColor) {
+	if (scene.anims.exists(PLAYER_WALK_ANIMATION_KEY)) {
+		return;
+	}
+	setPlayerWalkAnimationColor(scene, color);
 }
 
 interface PlayerPoseConfig {

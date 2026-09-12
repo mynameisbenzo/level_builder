@@ -16,14 +16,25 @@ import {
 	ensurePlayerColor,
 	ensurePlayerWalkAnimation,
 	ensureTilesAtlas,
+	getCharacterSwapObjectFrame,
 	getPlayerHudFrame,
 	getPlayerPoseConfig,
+	PLAYER_COLOR_REGISTRY_KEY,
+	PLAYER_COLORS,
 	PLAYER_DISPLAY_SIZE,
-	TILES_ATLAS_KEY
+	setPlayerWalkAnimationColor,
+	TILES_ATLAS_KEY,
+	type PlayerColor
 } from './textures';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
+import {
+	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
+	getSwapResult,
+	isWithinSwapRange,
+	type CharacterSwapObject
+} from './characterSwapObjects';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
 import {
@@ -51,6 +62,13 @@ const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
 const GAMEPAD_MESSAGE_FADE_MS = 800;
 const FALL_OFF_SCREEN_THRESHOLD_PX = 100;
+// How close the player needs to be to a character-swap object to trigger
+// it. These use a simple distance check rather than a physics body (see
+// characterSwapObjects.ts for why).
+const SWAP_TRIGGER_DISTANCE = 24;
+const SWAP_OBJECT_DISPLAY_SIZE = 32;
+const SWAP_OBJECT_BOB_DISTANCE_PX = 6;
+const SWAP_OBJECT_BOB_DURATION_MS = 800;
 
 export class PlatformerScene extends Phaser.Scene {
 	private player!: Phaser.Physics.Arcade.Sprite;
@@ -64,6 +82,8 @@ export class PlatformerScene extends Phaser.Scene {
 	private platforms!: Phaser.Physics.Arcade.StaticGroup;
 	private currentPose: PlayerPose | null = null;
 	private playerPoseConfig!: ReturnType<typeof getPlayerPoseConfig>;
+	private hudPortrait!: Phaser.GameObjects.Image;
+	private swapObjects: { data: CharacterSwapObject; sprite: Phaser.GameObjects.Image }[] = [];
 	private wasPadJumpButtonDown = false;
 	private wasTouchJumpDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
@@ -106,7 +126,17 @@ export class PlatformerScene extends Phaser.Scene {
 			this.playerPoseConfig.idle.frame
 		);
 		this.player.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
-		// (comment block unchanged)
+		// The source frame (128x128) is bigger than our 32px hitbox AND the
+		// character art doesn't fill the frame edge-to-edge - Kenney pads
+		// frames so different poses share one size, and this pose is
+		// bottom-aligned with empty space above the head. Sizing the body
+		// to the full frame (even scaled correctly) would center the
+		// hitbox on the padded frame's middle, not on the character, which
+		// is what caused collisions to register around the sprite's
+		// midpoint instead of at its feet. Using the measured content
+		// bounds (in the frame's own pre-scale units, which Phaser scales
+		// down automatically to match the display scale) fits the hitbox
+		// to the actual character silhouette instead.
 		this.player.body?.setSize(
 			this.playerPoseConfig.idle.hitbox.width,
 			this.playerPoseConfig.idle.hitbox.height,
@@ -143,6 +173,45 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 		this.physics.add.collider(this.player, this.platforms);
 
+		// TEMPORARY: placing these via the Level Editor is a separate,
+		// not-yet-built TODO. Until that exists, spawn one test object near
+		// the player (a color different from the player's own) so the swap
+		// mechanic can actually be tried out. Remove this block once the
+		// editor placement tool exists and levels can carry their own
+		// swap-object data instead.
+		let swapObjectsData =
+			(this.registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as
+				| CharacterSwapObject[]
+				| undefined) ?? [];
+		if (swapObjectsData.length === 0) {
+			const testColor = PLAYER_COLORS.find((color) => color !== playerColor) ?? PLAYER_COLORS[0];
+			swapObjectsData = [{ x: spawnPosition.x + 100, y: spawnPosition.y, color: testColor }];
+			this.registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, swapObjectsData);
+		}
+
+		// Floating character-swap objects. Rendered as plain images (not
+		// physics bodies) with a bobbing tween - see isWithinSwapRange in
+		// characterSwapObjects.ts for why a tween-driven position isn't
+		// paired with an Arcade body. Bobbing (and the objects existing at
+		// all) is Play-mode-only, since this scene IS Play mode - there's
+		// no Editor-side rendering of these yet.
+		this.swapObjects = swapObjectsData.map((data) => {
+			const sprite = this.add
+				.image(data.x, data.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(data.color))
+				.setDisplaySize(SWAP_OBJECT_DISPLAY_SIZE, SWAP_OBJECT_DISPLAY_SIZE);
+
+			this.tweens.add({
+				targets: sprite,
+				y: data.y - SWAP_OBJECT_BOB_DISTANCE_PX,
+				duration: SWAP_OBJECT_BOB_DURATION_MS,
+				yoyo: true,
+				repeat: -1,
+				ease: 'Sine.easeInOut'
+			});
+
+			return { data, sprite };
+		});
+
 		if (!this.input.keyboard) {
 			throw new Error('Keyboard input plugin is not available');
 		}
@@ -157,9 +226,8 @@ export class PlatformerScene extends Phaser.Scene {
 		this.toggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
 
 		// Character HUD - top-left corner. Portraits live in the TILES
-		// atlas (not the character atlas) as hud_character_2 through
-		// hud_character_6, one per PLAYER_COLORS entry.
-		this.add
+		// atlas (not the character atlas).
+		this.hudPortrait = this.add
 			.image(10, 10, TILES_ATLAS_KEY, getPlayerHudFrame(playerColor))
 			.setOrigin(0, 0)
 			.setDisplaySize(48, 48);
@@ -196,6 +264,46 @@ export class PlatformerScene extends Phaser.Scene {
 		});
 	}
 
+	/**
+	 * Applies a character swap: the player takes on the touched object's
+	 * color, the object is left holding the player's old color (both
+	 * visually and in the data persisted back to the registry, so it
+	 * survives toggling to the Editor and back).
+	 *
+	 * Item 1 (an animated HUD portrait transition) is a deferred TODO -
+	 * for now the portrait and the object's own sprite both update
+	 * instantly, with no animation.
+	 */
+	private handleCharacterSwap(swapObject: {
+		data: CharacterSwapObject;
+		sprite: Phaser.GameObjects.Image;
+	}) {
+		const currentPlayerColor = (this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
+			| PlayerColor
+			| undefined) ?? swapObject.data.color;
+		const { newPlayerColor, newObjectColor } = getSwapResult(
+			currentPlayerColor,
+			swapObject.data.color
+		);
+
+		this.registry.set(PLAYER_COLOR_REGISTRY_KEY, newPlayerColor);
+		this.playerPoseConfig = getPlayerPoseConfig(newPlayerColor);
+		setPlayerWalkAnimationColor(this, newPlayerColor);
+		// Force the pose-transition block in update() to re-apply on the
+		// very next frame even if the pose name itself (e.g. "idle")
+		// hasn't changed - only its underlying frame/hitbox meaning has,
+		// via the new playerPoseConfig above.
+		this.currentPose = null;
+		this.hudPortrait.setTexture(TILES_ATLAS_KEY, getPlayerHudFrame(newPlayerColor));
+
+		swapObject.data.color = newObjectColor;
+		swapObject.sprite.setTexture(TILES_ATLAS_KEY, getCharacterSwapObjectFrame(newObjectColor));
+		this.registry.set(
+			CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
+			this.swapObjects.map((object) => object.data)
+		);
+	}
+
 	update(_time: number, delta: number) {
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
 			clearModeTogglePressed();
@@ -208,6 +316,21 @@ export class PlatformerScene extends Phaser.Scene {
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;
+		}
+
+		for (const swapObject of this.swapObjects) {
+			if (
+				isWithinSwapRange(
+					this.player.x,
+					this.player.y,
+					swapObject.sprite.x,
+					swapObject.sprite.y,
+					SWAP_TRIGGER_DISTANCE
+				)
+			) {
+				this.handleCharacterSwap(swapObject);
+				break;
+			}
 		}
 
 		const onGround = this.player.body?.blocked.down ?? false;

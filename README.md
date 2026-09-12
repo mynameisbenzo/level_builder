@@ -1,3 +1,74 @@
+# Level Builder
+
+An in-browser, Mario Maker–style platformer where levels are built screen by
+screen — and different screens in the same level can be built by different
+people. Players share and play each other's levels; level creation happens
+one screen at a time, with screens later connected together into a full
+level.
+
+## Tech stack
+
+| Layer      | Tech                                             |
+| ---------- | ------------------------------------------------- |
+| Frontend   | SvelteKit + TypeScript + Phaser 4                  |
+| Backend    | Flask + Flask-SQLAlchemy + Flask-Migrate           |
+| Database   | PostgreSQL via Neon (SQLite in-memory for tests)   |
+| Assets     | Kenney "New Platformer Pack" (CC0)                 |
+| Testing    | pytest (backend), Vitest (frontend)                |
+| CI/CD      | GitHub Actions, deployed on Render (CI-gated)      |
+
+## Prerequisites
+
+- **Python 3.10.13** — pinned via [pyenv](https://github.com/pyenv/pyenv) (`.python-version` at the repo root). Newer Python versions can hit missing prebuilt wheels for `psycopg`; 3.10.13 is the tested baseline.
+- **Node.js 20+** and npm.
+- **PostgreSQL** — running locally, or a `DATABASE_URL` pointing at one (e.g. [Neon](https://neon.com), free tier). Not required to run the test suite (tests use in-memory SQLite).
+- **Git**
+
+> **Windows note:** this project uses `psycopg[binary]` (not `psycopg2-binary`) specifically to avoid native-compile issues on Windows. Keep the pinned version in `requirements.txt`.
+
+## Project structure
+
+level-builder/
+├── backend/ # Flask API
+│ ├── app/
+│ │ ├── main.py # create_app() factory, landing page route
+│ │ ├── config.py # Testing/Development/Production config
+│ │ ├── extensions.py # shared Flask-SQLAlchemy instance
+│ │ ├── templates/ # Jinja - portfolio landing page
+│ │ └── models/ # SQLAlchemy models
+│ ├── tests/
+│ ├── requirements.txt
+│ └── requirements-dev.txt
+├── frontend/ # SvelteKit app
+│ ├── static/assets/
+│ │ ├── kenney/ # Kenney platformer pack (sprites, tiles, sfx)
+│ │ └── icons/ # Eraser + select-tool cursor icons
+│ └── src/
+│ ├── lib/
+│ │ ├── api.ts # backend API client
+│ │ └── game/ # Phaser scenes + supporting logic:
+│ │ ├── PlatformerScene.ts # Play mode
+│ │ ├── LevelEditorScene.ts # Edit mode (default scene)
+│ │ ├── movement.ts # pure input/physics/pose logic (tested)
+│ │ ├── gridSnap.ts # grid snapping + drag fill (tested)
+│ │ ├── groundTiling.ts # auto-tiling + platform run logic (tested)
+│ │ ├── placedObjects.ts # placed-tile data, selection, group merge (tested)
+│ │ ├── characterSwapObjects.ts # floating swap-object logic (tested)
+│ │ ├── tools.ts # editor tool (select/eraser) constants
+│ │ ├── playerState.ts # position carryover (tested)
+│ │ ├── mode.ts # Play/Edit mode logic (tested)
+│ │ ├── touchInput.ts # mobile touch input state (tested)
+│ │ ├── currentMode.ts # Svelte store for active mode
+│ │ ├── textures.ts # texture/atlas/animation/pose loading (tested)
+│ │ ├── TouchControls.svelte # on-screen mobile buttons
+│ │ └── LandscapeGuard.svelte # portrait-mode block screen
+│ └── routes/
+│ └── play/ # the game itself
+├── .github/workflows/ # CI: backend-ci.yml, frontend-ci.yml
+├── render.yaml # Render Blueprint (backend + frontend)
+└── .python-version # pins Python 3.10.13 via pyenv
+
+
 ## Backend setup
 
 ```bash
@@ -100,6 +171,13 @@ the screen automatically sends you back to the Editor.
 - **Character color is randomized once per session** (5 available: beige,
   green, pink, purple, yellow) — picked the first time a scene loads and
   kept consistent across Play/Edit toggles for the rest of the session
+- A **character HUD portrait** (top-left) always reflects the current
+  color
+- **Floating character-swap objects**: touching one swaps your character
+  for the one it represents, and the object is left holding your old
+  character (see [Character swapping](#character-swapping) below) — a
+  prototype of this exists in Play mode right now via a temporary
+  hardcoded test object (see TODOs)
 
 **Mobile:** the game is landscape-only — a rotate prompt blocks portrait
 orientation. On-screen touch controls only appear on touch-capable
@@ -129,17 +207,34 @@ to be touching:
   junction piece for where they meet was tried and removed (see TODOs
   below); they currently just don't visually connect.
 
+### Character swapping
+
+Five character colors exist (beige, green, pink, purple, yellow), each
+with a full pose set (idle/walk/duck/jump). A floating object touched by
+the player swaps which color is currently active — the player becomes the
+object's color, and the object is left displaying whatever color the
+player had before touching it. Both the player's walk animation and the
+touched object's own sprite update immediately; the swapped state is
+persisted to the registry so it survives toggling to the Editor and back.
+
+This is a foundational piece for a planned feature (see TODOs) where each
+character eventually plays differently, not just looks different.
+
+**Known gap, not yet fixed:** there's currently no cooldown, so standing
+inside a swap object's trigger radius re-fires the swap every frame. See
+the "Character-swap re-trigger cooldown" TODO below.
+
 ## Testing philosophy
 
 Pure logic (input calculations, mode switching, position resolution, grid
 snapping, auto-tiling, platform grouping/merging, player pose priority,
-acceleration/jump physics, color selection) lives in Phaser-free
-TypeScript modules and is fully unit tested. Phaser-specific wiring (scene
-setup, rendering, tweens, drag/click events) is verified manually in the
-browser rather than unit tested — faking a canvas in a test runner
-requires a compiled native dependency (`canvas`), which risks the exact
-kind of cross-platform build issues (see the Windows note above) this
-project has already run into once.
+acceleration/jump physics, color selection, character-swap distance
+checks) lives in Phaser-free TypeScript modules and is fully unit tested.
+Phaser-specific wiring (scene setup, rendering, tweens, drag/click events)
+is verified manually in the browser rather than unit tested — faking a
+canvas in a test runner requires a compiled native dependency (`canvas`),
+which risks the exact kind of cross-platform build issues (see the
+Windows note above) this project has already run into once.
 
 ## CI
 
@@ -179,16 +274,48 @@ manual gating required.
 - [x] Variable jump height ("jump cut") — tap for a short hop, hold for
       the full arc
 - [x] Player character color randomized per session (5 Kenney colors)
-- [ ] **Manual character selection** — let the user pick their preferred
-      color instead of leaving it to chance
+- [x] Character HUD portrait (top-left), always reflecting the current
+      color
+- [x] Character-swap floating objects — touching one swaps the player's
+      character with the object's; both update instantly and the swap
+      persists across Play/Edit toggles
+- [ ] **Character-swap re-trigger cooldown** — currently nothing stops
+      the swap from re-firing every frame while the player stands inside
+      the trigger radius. Needs three connected pieces: (1) after a
+      swap, lock that specific object out from triggering again until
+      the player has moved at least 64px away from it; (2) while locked
+      out, show that visually - stop the object's bob tween and drop its
+      opacity to 50%; (3) once the player finally clears the 64px
+      distance, play a reactivation "pop" before it resumes normal
+      floating - shrink to 25% scale, overshoot to 115%, settle back to
+      100%, then re-enable bobbing and become swappable again.
+- [ ] **Animated HUD portrait transition** — currently the HUD portrait
+      swaps instantly. The intended feel: shrink and disappear, then the
+      new portrait pops in small, grows to ~10% past its final size,
+      then settles back down - all within about a second.
+- [ ] **Editor placement tool for character-swap objects** — there's
+      currently no way to place these via the Level Editor; Play mode
+      always spawns one hardcoded test object near the player as a
+      temporary stand-in (see the TEMPORARY-flagged block in
+      `PlatformerScene.ts`) purely so the swap mechanic itself could be
+      tried out. Needs a toolbar option that opens a second toolbar of
+      the five character objects, click one to make it the active
+      placeable tile, then place it like a ground tile. The temporary
+      test-spawn should be removed once this exists.
+- [ ] **Manual character selection** — currently the player's color/character
+      is randomized once per session (see `pickPlayerColor`); let the user
+      pick their preferred one instead of leaving it to chance.
 - [ ] **Character-specific abilities (SMB2-style)** — explore giving each
-      color a distinct gameplay trait (higher jump, brief float, faster
-      movement, etc.) instead of being purely cosmetic. A bigger,
-      exploratory idea — would mean threading a "which character"
-      parameter through the currently color-agnostic shared movement
-      functions (`getPlayerPose`, `getAcceleratedVelocity`,
-      `getJumpVelocity`/`getJumpCutVelocity`), worth designing
-      deliberately before starting
+      of the five character colors a distinct gameplay trait instead of
+      being purely cosmetic (e.g. one jumps higher, one can float
+      briefly, one moves faster). A bigger, more exploratory idea than
+      the rest of this list — worth prototyping before committing, since
+      it touches the shared movement/pose system every character
+      currently uses identically (`getPlayerPose`,
+      `getAcceleratedVelocity`, `getJumpVelocity`/`getJumpCutVelocity`
+      are all color-agnostic right now). The character-swap objects above
+      are a foundational piece toward this - swapping "which character"
+      already works, it just doesn't change how anything plays yet.
 - [ ] Interactable objects (coins, keys)
 - [ ] Enemies, mini-enemies, bosses
 - [ ] Climb animation exists in the sprite atlas but isn't wired to

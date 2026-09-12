@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getPlayerHudFrame, pickPlayerColor, PLAYER_COLORS } from './textures';
-
+import { getCharacterSwapObjectFrame, getPlayerHudFrame, pickPlayerColor, PLAYER_COLORS } from './textures';
 describe('pickPlayerColor', () => {
 	it('picks the first color for a random value of 0', () => {
 		expect(pickPlayerColor(0)).toBe(PLAYER_COLORS[0]);
@@ -38,5 +37,21 @@ describe('getPlayerHudFrame', () => {
 	it('produces a distinct frame for every color', () => {
 		const frames = PLAYER_COLORS.map((color) => getPlayerHudFrame(color));
 		expect(new Set(frames).size).toBe(PLAYER_COLORS.length);
+	});
+});
+
+describe('getCharacterSwapObjectFrame', () => {
+	it('maps each color to its non-helmet hud_player frame', () => {
+		expect(getCharacterSwapObjectFrame('beige')).toBe('hud_player_beige');
+		expect(getCharacterSwapObjectFrame('green')).toBe('hud_player_green');
+		expect(getCharacterSwapObjectFrame('pink')).toBe('hud_player_pink');
+		expect(getCharacterSwapObjectFrame('purple')).toBe('hud_player_purple');
+		expect(getCharacterSwapObjectFrame('yellow')).toBe('hud_player_yellow');
+	});
+
+	it('is distinct from the HUD portrait frame for every color', () => {
+		for (const color of PLAYER_COLORS) {
+			expect(getCharacterSwapObjectFrame(color)).not.toBe(getPlayerHudFrame(color));
+		}
 	});
 });

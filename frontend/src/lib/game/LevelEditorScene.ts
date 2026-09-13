@@ -9,12 +9,20 @@ import {
 	ensureTilesAtlas,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
+	getCharacterSwapObjectFrame,
 	getPlayerPoseConfig,
+	PLAYER_COLORS,
 	PLAYER_DISPLAY_SIZE,
 	SELECT_CURSOR_ICON_KEY,
 	SELECT_CURSOR_ICON_PATH,
-	TILES_ATLAS_KEY
+	TILES_ATLAS_KEY,
+	type PlayerColor
 } from './textures';
+import {
+	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
+	getAvailableSwapColors,
+	type CharacterSwapObject
+} from './characterSwapObjects';
 import {
 	DEFAULT_GROUND_TILE_STYLE,
 	getGroupFrames,
@@ -122,6 +130,15 @@ export class LevelEditorScene extends Phaser.Scene {
 	// UI mode toggle
 	private uiModeToggleButton!: Phaser.GameObjects.Text;
 
+	// Character-swap placement tool
+	private selectedSwapColor: PlayerColor | null = null;
+	private characterSwapSwatches: {
+		color: PlayerColor;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
+	private placedSwapObjectImages: Phaser.GameObjects.Image[] = [];
+
 	constructor() {
 		super('LevelEditorScene');
 	}
@@ -150,7 +167,10 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.applyCursorForTool(this.getEditorTool());
 		this.createUiModeToggle();
 		this.createStyleToolbar();
+		this.createCharacterSwapToolbar();
 		this.refreshStylePickerVisibility();
+
+		this.refreshSwapObjectImages();
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -168,7 +188,14 @@ export class LevelEditorScene extends Phaser.Scene {
 					return;
 				}
 
-				if (this.getEditorTool() !== 'select') {
+				const tool = this.getEditorTool();
+
+				if (tool === 'characterSwap') {
+					this.placeSwapObjectAtPointer(pointer);
+					return;
+				}
+
+				if (tool !== 'select') {
 					// The eraser (and any future non-placement tool) has
 					// nothing useful to do on empty space.
 					return;
@@ -367,7 +394,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createToolsToolbar() {
 		const spacing = 56;
-		const startX = this.scale.width / 2 - spacing / 2;
+		const startX = this.scale.width / 2 - spacing;
 		const y = 24;
 
 		const selectBorder = this.add.rectangle(startX, y, 40, 32).setStrokeStyle(2, 0x666666);
@@ -386,6 +413,17 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setInteractive({ useHandCursor: true });
 		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
 		this.toolButtons.push({ tool: 'eraser', hitArea: eraserIcon, border: eraserBorder });
+
+		const swapX = startX + spacing * 2;
+		const swapBorder = this.add.rectangle(swapX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		// No dedicated tool icon exists for this - reusing one color's
+		// swap-object frame as a representative icon.
+		const swapIcon = this.add
+			.image(swapX, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame('beige'))
+			.setDisplaySize(24, 24)
+			.setInteractive({ useHandCursor: true });
+		swapIcon.on('pointerdown', () => this.setEditorTool('characterSwap'));
+		this.toolButtons.push({ tool: 'characterSwap', hitArea: swapIcon, border: swapBorder });
 
 		this.refreshToolHighlight();
 	}
@@ -416,6 +454,10 @@ export class LevelEditorScene extends Phaser.Scene {
 			// leftover style picker doesn't linger while erasing.
 			this.setActiveGroup(null);
 		}
+		if (tool !== 'characterSwap') {
+			this.selectedSwapColor = null;
+		}
+		this.refreshCharacterSwapToolbarVisibility();
 	}
 
 	/**
@@ -462,6 +504,144 @@ export class LevelEditorScene extends Phaser.Scene {
 		// caps recomputed (e.g. the tile next to it is now an end, not a
 		// middle piece).
 		this.refreshGroup(erasedObject.groupId);
+	}
+
+	// ── Character-swap placement tool ───────────────────────────────────
+
+	private createCharacterSwapToolbar() {
+		const swatchSize = 40;
+		const spacing = 10;
+		const totalWidth =
+			PLAYER_COLORS.length * swatchSize + (PLAYER_COLORS.length - 1) * spacing;
+		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
+		const y = this.scale.height - 40;
+
+		this.characterSwapSwatches = PLAYER_COLORS.map((color, index) => {
+			const x = startX + index * (swatchSize + spacing);
+
+			const border = this.add
+				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+				.setStrokeStyle(3, 0x666666);
+
+			const image = this.add
+				.image(x, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(color))
+				.setDisplaySize(swatchSize, swatchSize)
+				.setInteractive({ useHandCursor: true });
+
+			image.on('pointerdown', () => this.selectSwapColor(color));
+
+			return { color, image, border };
+		});
+
+		this.refreshCharacterSwapToolbarVisibility();
+	}
+
+	private getPlacedSwapObjects(): CharacterSwapObject[] {
+		return (
+			(this.registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as
+				| CharacterSwapObject[]
+				| undefined) ?? []
+		);
+	}
+
+	/**
+	 * Shows the color swatches only while the character-swap tool is
+	 * active. Colors already used by a placed object, or all colors once
+	 * MAX_CHARACTER_SWAP_OBJECTS is reached, are dimmed and disabled
+	 * rather than hidden - so it's visible *why* nothing more can be
+	 * placed, not just that clicking does nothing.
+	 */
+	private refreshCharacterSwapToolbarVisibility() {
+		const isToolActive = this.getEditorTool() === 'characterSwap';
+		const availableColors = new Set(
+			getAvailableSwapColors(this.getPlacedSwapObjects(), ensurePlayerColor(this))
+		);
+		
+		for (const swatch of this.characterSwapSwatches) {
+			swatch.image.setVisible(isToolActive);
+			swatch.border.setVisible(isToolActive);
+
+			const isAvailable = availableColors.has(swatch.color);
+			if (isToolActive && isAvailable) {
+				swatch.image.setInteractive({ useHandCursor: true });
+				swatch.image.setAlpha(1);
+			} else {
+				swatch.image.disableInteractive();
+				swatch.image.setAlpha(isToolActive ? 0.3 : 1);
+			}
+
+			swatch.border.setStrokeStyle(
+				3,
+				swatch.color === this.selectedSwapColor ? 0xffd23f : 0x666666
+			);
+		}
+	}
+
+	private selectSwapColor(color: PlayerColor) {
+		const availableColors = getAvailableSwapColors(
+			this.getPlacedSwapObjects(),
+			ensurePlayerColor(this)
+		);
+		if (!availableColors.includes(color)) {
+			// Shouldn't be reachable (the swatch is disabled), but defensive
+			// against any state drift between the two checks.
+			return;
+		}
+		this.selectedSwapColor = color;
+		this.refreshCharacterSwapToolbarVisibility();
+	}
+
+	private placeSwapObjectAtPointer(pointer: Phaser.Input.Pointer) {
+		if (this.selectedSwapColor === null) {
+			return;
+		}
+
+		const existing = this.getPlacedSwapObjects();
+		// Re-check availability at placement time, not just at
+		// color-selection time, in case something else changed the
+		// placed set in between (defensive, not expected in practice).
+		if (!getAvailableSwapColors(existing, ensurePlayerColor(this)).includes(this.selectedSwapColor)) {			this.selectedSwapColor = null;
+			this.refreshCharacterSwapToolbarVisibility();
+			return;
+		}
+
+		const x = snapToGrid(pointer.x, GRID_SIZE);
+		const y = snapToGrid(pointer.y, GRID_SIZE);
+		if (existing.some((object) => object.x === x && object.y === y)) {
+			// Something (another swap object) is already exactly here.
+			return;
+		}
+
+		const updated: CharacterSwapObject[] = [
+			...existing,
+			{ x, y, color: this.selectedSwapColor }
+		];
+		this.registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, updated);
+
+		// One placement per color selection - pick a color again for the
+		// next object, rather than staying "armed" with a color that (at
+		// most) could never be placed again anyway.
+		this.selectedSwapColor = null;
+		this.refreshSwapObjectImages();
+		this.refreshCharacterSwapToolbarVisibility();
+	}
+
+	/**
+	 * Destroys and re-renders every placed swap object. Static images
+	 * here, not animated - the bobbing tween and cooldown visuals are
+	 * Play-mode-only (see PlatformerScene), since these are purely
+	 * editor-time placement markers.
+	 */
+	private refreshSwapObjectImages() {
+		for (const image of this.placedSwapObjectImages) {
+			image.destroy();
+		}
+
+		this.placedSwapObjectImages = this.getPlacedSwapObjects().map((object) =>
+			this.add
+				.image(object.x, object.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(object.color))
+				.setDisplaySize(GRID_SIZE, GRID_SIZE)
+		);
 	}
 
 	// ── UI mode toggle (top-right) ──────────────────────────────────────

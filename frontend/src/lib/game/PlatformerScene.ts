@@ -20,7 +20,6 @@ import {
 	getPlayerHudFrame,
 	getPlayerPoseConfig,
 	PLAYER_COLOR_REGISTRY_KEY,
-	PLAYER_COLORS,
 	PLAYER_DISPLAY_SIZE,
 	setPlayerWalkAnimationColor,
 	TILES_ATLAS_KEY,
@@ -62,13 +61,34 @@ const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
 const GAMEPAD_MESSAGE_FADE_MS = 800;
 const FALL_OFF_SCREEN_THRESHOLD_PX = 100;
-// How close the player needs to be to a character-swap object to trigger
-// it. These use a simple distance check rather than a physics body (see
-// characterSwapObjects.ts for why).
+
+// Character-swap objects: distance-based trigger/cooldown, plus the
+// reactivation "pop" animation's scale steps and per-step durations.
 const SWAP_TRIGGER_DISTANCE = 24;
+// Must be bigger than SWAP_TRIGGER_DISTANCE - this is how far the player
+// has to move away before a just-triggered object can fire again.
+const SWAP_COOLDOWN_CLEAR_DISTANCE = 64;
+const SWAP_COOLDOWN_OPACITY = 0.5;
+const SWAP_COOLDOWN_SCALE = 0.5;
 const SWAP_OBJECT_DISPLAY_SIZE = 32;
 const SWAP_OBJECT_BOB_DISTANCE_PX = 6;
 const SWAP_OBJECT_BOB_DURATION_MS = 800;
+const SWAP_REACTIVATE_SHRINK_SCALE = 0.25;
+const SWAP_REACTIVATE_OVERSHOOT_SCALE = 1.15;
+const SWAP_REACTIVATE_SHRINK_DURATION_MS = 150;
+const SWAP_REACTIVATE_OVERSHOOT_DURATION_MS = 200;
+const SWAP_REACTIVATE_SETTLE_DURATION_MS = 150;
+const HUD_PORTRAIT_SIZE = 48;
+
+interface TrackedSwapObject {
+	data: CharacterSwapObject;
+	sprite: Phaser.GameObjects.Image;
+	bobTween: Phaser.Tweens.Tween;
+	/** True from the moment this object triggers a swap until the player
+	 * has moved SWAP_COOLDOWN_CLEAR_DISTANCE away and the reactivation
+	 * animation has run - it can't trigger again while true. */
+	onCooldown: boolean;
+}
 
 export class PlatformerScene extends Phaser.Scene {
 	private player!: Phaser.Physics.Arcade.Sprite;
@@ -83,7 +103,7 @@ export class PlatformerScene extends Phaser.Scene {
 	private currentPose: PlayerPose | null = null;
 	private playerPoseConfig!: ReturnType<typeof getPlayerPoseConfig>;
 	private hudPortrait!: Phaser.GameObjects.Image;
-	private swapObjects: { data: CharacterSwapObject; sprite: Phaser.GameObjects.Image }[] = [];
+	private swapObjects: TrackedSwapObject[] = [];
 	private wasPadJumpButtonDown = false;
 	private wasTouchJumpDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
@@ -173,34 +193,23 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 		this.physics.add.collider(this.player, this.platforms);
 
-		// TEMPORARY: placing these via the Level Editor is a separate,
-		// not-yet-built TODO. Until that exists, spawn one test object near
-		// the player (a color different from the player's own) so the swap
-		// mechanic can actually be tried out. Remove this block once the
-		// editor placement tool exists and levels can carry their own
-		// swap-object data instead.
-		let swapObjectsData =
+		const swapObjectsData =
 			(this.registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as
 				| CharacterSwapObject[]
 				| undefined) ?? [];
-		if (swapObjectsData.length === 0) {
-			const testColor = PLAYER_COLORS.find((color) => color !== playerColor) ?? PLAYER_COLORS[0];
-			swapObjectsData = [{ x: spawnPosition.x + 100, y: spawnPosition.y, color: testColor }];
-			this.registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, swapObjectsData);
-		}
 
 		// Floating character-swap objects. Rendered as plain images (not
 		// physics bodies) with a bobbing tween - see isWithinSwapRange in
 		// characterSwapObjects.ts for why a tween-driven position isn't
-		// paired with an Arcade body. Bobbing (and the objects existing at
-		// all) is Play-mode-only, since this scene IS Play mode - there's
-		// no Editor-side rendering of these yet.
+		// paired with an Arcade body. Bobbing (and the cooldown visuals)
+		// are Play-mode-only - the Editor renders these as plain static
+		// images (see LevelEditorScene's refreshSwapObjectImages).
 		this.swapObjects = swapObjectsData.map((data) => {
 			const sprite = this.add
 				.image(data.x, data.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(data.color))
 				.setDisplaySize(SWAP_OBJECT_DISPLAY_SIZE, SWAP_OBJECT_DISPLAY_SIZE);
 
-			this.tweens.add({
+			const bobTween = this.tweens.add({
 				targets: sprite,
 				y: data.y - SWAP_OBJECT_BOB_DISTANCE_PX,
 				duration: SWAP_OBJECT_BOB_DURATION_MS,
@@ -209,7 +218,7 @@ export class PlatformerScene extends Phaser.Scene {
 				ease: 'Sine.easeInOut'
 			});
 
-			return { data, sprite };
+			return { data, sprite, bobTween, onCooldown: false };
 		});
 
 		if (!this.input.keyboard) {
@@ -227,10 +236,19 @@ export class PlatformerScene extends Phaser.Scene {
 
 		// Character HUD - top-left corner. Portraits live in the TILES
 		// atlas (not the character atlas).
+		// Center origin (rather than top-left) so the shrink/grow swap
+		// animation pops symmetrically around a fixed point, matching how
+		// the swap objects themselves animate - position is offset by
+		// half the size so the visible footprint still sits flush in the
+		// corner, unchanged from a plain top-left placement.
 		this.hudPortrait = this.add
-			.image(10, 10, TILES_ATLAS_KEY, getPlayerHudFrame(playerColor))
-			.setOrigin(0, 0)
-			.setDisplaySize(48, 48);
+			.image(
+				10 + HUD_PORTRAIT_SIZE / 2,
+				10 + HUD_PORTRAIT_SIZE / 2,
+				TILES_ATLAS_KEY,
+				getPlayerHudFrame(playerColor)
+			)
+			.setDisplaySize(HUD_PORTRAIT_SIZE, HUD_PORTRAIT_SIZE);
 
 		this.add.text(68, 26, 'Tab: switch to Edit Mode', {
 			font: '14px monospace',
@@ -268,16 +286,11 @@ export class PlatformerScene extends Phaser.Scene {
 	 * Applies a character swap: the player takes on the touched object's
 	 * color, the object is left holding the player's old color (both
 	 * visually and in the data persisted back to the registry, so it
-	 * survives toggling to the Editor and back).
-	 *
-	 * Item 1 (an animated HUD portrait transition) is a deferred TODO -
-	 * for now the portrait and the object's own sprite both update
-	 * instantly, with no animation.
+	 * survives toggling to the Editor and back). Puts the object on
+	 * cooldown - pauses its bob and dims it - until the player moves far
+	 * enough away (see reactivateSwapObject).
 	 */
-	private handleCharacterSwap(swapObject: {
-		data: CharacterSwapObject;
-		sprite: Phaser.GameObjects.Image;
-	}) {
+	private handleCharacterSwap(swapObject: TrackedSwapObject) {
 		const currentPlayerColor = (this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
 			| PlayerColor
 			| undefined) ?? swapObject.data.color;
@@ -294,10 +307,93 @@ export class PlatformerScene extends Phaser.Scene {
 		// hasn't changed - only its underlying frame/hitbox meaning has,
 		// via the new playerPoseConfig above.
 		this.currentPose = null;
-		this.hudPortrait.setTexture(TILES_ATLAS_KEY, getPlayerHudFrame(newPlayerColor));
+		this.animateHudPortraitSwap(newPlayerColor);
 
 		swapObject.data.color = newObjectColor;
 		swapObject.sprite.setTexture(TILES_ATLAS_KEY, getCharacterSwapObjectFrame(newObjectColor));
+		this.persistSwapObjectsData();
+
+		swapObject.onCooldown = true;
+		swapObject.bobTween.pause();
+		swapObject.sprite.setAlpha(SWAP_COOLDOWN_OPACITY);
+		swapObject.sprite.setDisplaySize(
+			SWAP_OBJECT_DISPLAY_SIZE * SWAP_COOLDOWN_SCALE,
+			SWAP_OBJECT_DISPLAY_SIZE * SWAP_COOLDOWN_SCALE
+		);
+	}
+
+	/**
+	 * Animates the HUD portrait through the swap: shrinks the outgoing
+	 * portrait away, swaps its texture once fully shrunk (so the change
+	 * itself isn't visible mid-size), then grows back in with the same
+	 * overshoot-then-settle rhythm as a swap object's own reactivation
+	 * pop (see reactivateSwapObject) - reusing the exact same constants
+	 * for visual consistency between the two.
+	 */
+	private animateHudPortraitSwap(newColor: PlayerColor) {
+		this.tweens.add({
+			targets: this.hudPortrait,
+			displayWidth: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
+			displayHeight: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
+			duration: SWAP_REACTIVATE_SHRINK_DURATION_MS,
+			onComplete: () => {
+				this.hudPortrait.setTexture(TILES_ATLAS_KEY, getPlayerHudFrame(newColor));
+				this.tweens.add({
+					targets: this.hudPortrait,
+					displayWidth: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
+					displayHeight: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
+					duration: SWAP_REACTIVATE_OVERSHOOT_DURATION_MS,
+					onComplete: () => {
+						this.tweens.add({
+							targets: this.hudPortrait,
+							displayWidth: HUD_PORTRAIT_SIZE,
+							displayHeight: HUD_PORTRAIT_SIZE,
+							duration: SWAP_REACTIVATE_SETTLE_DURATION_MS
+						});
+					}
+				});
+			}
+		});
+	}
+
+	/**
+	 * Runs once the player has moved far enough away from a
+	 * just-triggered object: a shrink/overshoot/settle "pop" (25% ->
+	 * 115% -> 100%), then resumes normal bobbing and full opacity, and
+	 * clears the cooldown so it can trigger again.
+	 */
+	private reactivateSwapObject(swapObject: TrackedSwapObject) {
+		swapObject.sprite.setAlpha(1);
+
+		this.tweens.add({
+			targets: swapObject.sprite,
+			displayWidth: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
+			displayHeight: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
+			duration: SWAP_REACTIVATE_SHRINK_DURATION_MS,
+			onComplete: () => {
+				this.tweens.add({
+					targets: swapObject.sprite,
+					displayWidth: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
+					displayHeight: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
+					duration: SWAP_REACTIVATE_OVERSHOOT_DURATION_MS,
+					onComplete: () => {
+						this.tweens.add({
+							targets: swapObject.sprite,
+							displayWidth: SWAP_OBJECT_DISPLAY_SIZE,
+							displayHeight: SWAP_OBJECT_DISPLAY_SIZE,
+							duration: SWAP_REACTIVATE_SETTLE_DURATION_MS,
+							onComplete: () => {
+								swapObject.bobTween.resume();
+								swapObject.onCooldown = false;
+							}
+						});
+					}
+				});
+			}
+		});
+	}
+
+	private persistSwapObjectsData() {
 		this.registry.set(
 			CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
 			this.swapObjects.map((object) => object.data)
@@ -320,6 +416,7 @@ export class PlatformerScene extends Phaser.Scene {
 
 		for (const swapObject of this.swapObjects) {
 			if (
+				!swapObject.onCooldown &&
 				isWithinSwapRange(
 					this.player.x,
 					this.player.y,
@@ -329,7 +426,22 @@ export class PlatformerScene extends Phaser.Scene {
 				)
 			) {
 				this.handleCharacterSwap(swapObject);
+				// Stop after the first trigger this frame - if two objects'
+				// trigger radii happen to overlap around the player,
+				// handling both in the same frame would chain into a
+				// confusing 3-way rotation instead of a single clean swap.
 				break;
+			} else if (
+				swapObject.onCooldown &&
+				!isWithinSwapRange(
+					this.player.x,
+					this.player.y,
+					swapObject.sprite.x,
+					swapObject.sprite.y,
+					SWAP_COOLDOWN_CLEAR_DISTANCE
+				)
+			) {
+				this.reactivateSwapObject(swapObject);
 			}
 		}
 

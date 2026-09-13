@@ -1,4 +1,4 @@
-import type { PlayerColor } from './textures';
+import { PLAYER_COLORS, type PlayerColor } from './textures';
 
 export interface CharacterSwapObject {
 	x: number;
@@ -7,6 +7,38 @@ export interface CharacterSwapObject {
 }
 
 export const CHARACTER_SWAP_OBJECTS_REGISTRY_KEY = 'characterSwapObjects';
+
+/**
+ * At most this many swap objects may exist in a level: PLAYER_COLORS.length
+ * minus 1, so at least one color is always left over for whichever
+ * character the player starts as - every object gets a genuinely distinct
+ * color, never a duplicate of another object's.
+ */
+export const MAX_CHARACTER_SWAP_OBJECTS = PLAYER_COLORS.length - 1;
+
+/**
+ * Which colors can still be placed as a new swap object: every declared
+ * color not already used by an existing object AND not the player's own
+ * current color (an object representing the character you're already
+ * playing as would be redundant, and placing one would also break the
+ * "every color has exactly one holder" invariant the moment the level
+ * loads, before any swap even happens) - or none at all once the level
+ * is already at MAX_CHARACTER_SWAP_OBJECTS, even if a color happens to
+ * be technically unused, since a 5th object would leave nothing for the
+ * player to (re)start as.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getAvailableSwapColors(
+	placedObjects: CharacterSwapObject[],
+	currentPlayerColor: PlayerColor
+): PlayerColor[] {
+	if (placedObjects.length >= MAX_CHARACTER_SWAP_OBJECTS) {
+		return [];
+	}
+	const usedColors = new Set(placedObjects.map((object) => object.color));
+	usedColors.add(currentPlayerColor);
+	return PLAYER_COLORS.filter((color) => !usedColors.has(color));
+}
 
 export interface SwapResult {
 	newPlayerColor: PlayerColor;

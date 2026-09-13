@@ -2,8 +2,7 @@ import type Phaser from 'phaser';
 import type { PlayerPose } from './movement';
 
 export const CHARACTERS_ATLAS_KEY = 'characters';
-export const PLAYER_DISPLAY_SIZE = 32;
-
+export const PLAYER_DISPLAY_SIZE = 48;
 export const PLAYER_COLORS = ['beige', 'green', 'pink', 'purple', 'yellow'] as const;
 export type PlayerColor = (typeof PLAYER_COLORS)[number];
 export const PLAYER_COLOR_REGISTRY_KEY = 'playerColor';

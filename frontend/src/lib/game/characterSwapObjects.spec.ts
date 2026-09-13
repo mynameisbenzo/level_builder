@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { getSwapResult, isWithinSwapRange } from './characterSwapObjects';
+import {
+	getAvailableSwapColors,
+	getSwapResult,
+	isWithinSwapRange,
+	MAX_CHARACTER_SWAP_OBJECTS,
+	type CharacterSwapObject
+} from './characterSwapObjects';
+import { PLAYER_COLORS } from './textures';
 
 describe('getSwapResult', () => {
 	it('gives the player the object\'s color', () => {
@@ -35,6 +42,55 @@ describe('isWithinSwapRange', () => {
 	});
 
 	it('measures true circular distance, not axis-aligned distance', () => {
+		// 3-4-5 triangle: dx=18, dy=24 -> distance 30, outside a 24 threshold
+		// even though each axis alone would be within it.
 		expect(isWithinSwapRange(0, 0, 18, 24, 24)).toBe(false);
+	});
+});
+
+const obj = (color: CharacterSwapObject['color']): CharacterSwapObject => ({ x: 0, y: 0, color });
+
+describe('MAX_CHARACTER_SWAP_OBJECTS', () => {
+	it('is one less than the total number of player colors', () => {
+		expect(MAX_CHARACTER_SWAP_OBJECTS).toBe(PLAYER_COLORS.length - 1);
+	});
+});
+
+describe('getAvailableSwapColors', () => {
+	it('returns every color except the player\'s own when nothing is placed yet', () => {
+		expect(getAvailableSwapColors([], 'beige')).toEqual(
+			PLAYER_COLORS.filter((color) => color !== 'beige')
+		);
+	});
+
+	it('excludes colors already used by a placed object', () => {
+		const result = getAvailableSwapColors([obj('beige'), obj('green')], 'purple');
+		expect(result).not.toContain('beige');
+		expect(result).not.toContain('green');
+		expect(result).toContain('pink');
+	});
+
+	it('excludes the player\'s own current color even if no object uses it yet', () => {
+		const result = getAvailableSwapColors([], 'green');
+		expect(result).not.toContain('green');
+		expect(result).toHaveLength(PLAYER_COLORS.length - 1);
+	});
+
+	it('does not double-count if a placed object happens to share the player\'s color', () => {
+		const result = getAvailableSwapColors([obj('beige')], 'beige');
+		expect(result).not.toContain('beige');
+		expect(result).toHaveLength(PLAYER_COLORS.length - 1);
+	});
+
+	it('returns nothing once at the cap, even if a color is technically unused', () => {
+		const placed = PLAYER_COLORS.slice(0, MAX_CHARACTER_SWAP_OBJECTS).map((color) => obj(color));
+		expect(getAvailableSwapColors(placed, PLAYER_COLORS[MAX_CHARACTER_SWAP_OBJECTS])).toEqual([]);
+	});
+
+	it('never returns any colors once at or past the cap', () => {
+		for (let count = MAX_CHARACTER_SWAP_OBJECTS; count <= PLAYER_COLORS.length; count++) {
+			const placed = PLAYER_COLORS.slice(0, count).map((color) => obj(color));
+			expect(getAvailableSwapColors(placed, 'beige')).toEqual([]);
+		}
 	});
 });

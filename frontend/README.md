@@ -261,6 +261,21 @@ until the moment someone wants to save or share.
       resetting *any* sprite (not just the player) that leaves the
       playable bounds, once there are other objects (enemies, etc.) that
       need the same handling.
+- [ ] **Editor placement tool for character-swap objects** — there's
+      currently no way to place these via the Level Editor; Play mode
+      always spawns one hardcoded test object near the player as a
+      temporary stand-in (see the TEMPORARY-flagged block in
+      `PlatformerScene.ts`) purely so the swap mechanic itself could be
+      tried out. Needs a toolbar option that opens a second toolbar of
+      the five character objects, click one to make it the active
+      placeable tile, then place it like a ground tile. **Cap: at most 4
+      swap objects per scene** (5 total colors, minus whichever one the
+      player currently embodies, leaves exactly 4 that can exist as
+      distinct floating objects without ever duplicating a color) - the
+      placement tool should enforce this, e.g. by disabling/graying out
+      a color already represented by an existing object or the current
+      player. The temporary test-spawn should be removed once this
+      exists.
 
 **Accounts (prerequisite for saving/sharing, not yet built):**
 - [ ] `User` auth: JWT-based (not session cookies — frontend and backend

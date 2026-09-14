@@ -1,4 +1,4 @@
-import { PLAYER_COLORS, type PlayerColor } from './textures';
+import { PLAYER_COLORS, type PlayerColor } from './playerColor';
 
 export interface CharacterSwapObject {
 	x: number;
@@ -38,6 +38,19 @@ export function getAvailableSwapColors(
 	const usedColors = new Set(placedObjects.map((object) => object.color));
 	usedColors.add(currentPlayerColor);
 	return PLAYER_COLORS.filter((color) => !usedColors.has(color));
+}
+
+/**
+ * Removes the swap object at the exact given position, if one exists.
+ * Returns a new array either way (unchanged if nothing matched).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function removeSwapObjectAt(
+	objects: CharacterSwapObject[],
+	x: number,
+	y: number
+): CharacterSwapObject[] {
+	return objects.filter((object) => !(object.x === x && object.y === y));
 }
 
 export interface SwapResult {

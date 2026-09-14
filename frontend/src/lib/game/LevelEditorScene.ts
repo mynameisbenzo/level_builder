@@ -4,23 +4,25 @@ import {
 	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
 	ensureEraserIcon,
-	ensurePlayerColor,
 	ensureSelectCursorIcon,
 	ensureTilesAtlas,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
-	getCharacterSwapObjectFrame,
-	getPlayerPoseConfig,
-	PLAYER_COLORS,
-	PLAYER_DISPLAY_SIZE,
 	SELECT_CURSOR_ICON_KEY,
 	SELECT_CURSOR_ICON_PATH,
-	TILES_ATLAS_KEY,
+	TILES_ATLAS_KEY
+} from './atlases';
+import {
+	ensurePlayerColor,
+	getCharacterSwapObjectFrame,
+	PLAYER_COLORS,
 	type PlayerColor
-} from './textures';
+} from './playerColor';
+import { getPlayerPoseConfig, PLAYER_DISPLAY_SIZE } from './playerPose';
 import {
 	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
 	getAvailableSwapColors,
+	removeSwapObjectAt,
 	type CharacterSwapObject
 } from './characterSwapObjects';
 import {
@@ -485,6 +487,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const x = snapToGrid(pointer.x, GRID_SIZE);
 		const y = snapToGrid(pointer.y, GRID_SIZE);
 		this.eraseTile(x, y);
+		this.eraseSwapObjectAt(x, y);
 	}
 
 	private eraseTile(x: number, y: number) {
@@ -556,7 +559,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const availableColors = new Set(
 			getAvailableSwapColors(this.getPlacedSwapObjects(), ensurePlayerColor(this))
 		);
-		
+
 		for (const swatch of this.characterSwapSwatches) {
 			swatch.image.setVisible(isToolActive);
 			swatch.border.setVisible(isToolActive);
@@ -600,7 +603,8 @@ export class LevelEditorScene extends Phaser.Scene {
 		// Re-check availability at placement time, not just at
 		// color-selection time, in case something else changed the
 		// placed set in between (defensive, not expected in practice).
-		if (!getAvailableSwapColors(existing, ensurePlayerColor(this)).includes(this.selectedSwapColor)) {			this.selectedSwapColor = null;
+		if (!getAvailableSwapColors(existing, ensurePlayerColor(this)).includes(this.selectedSwapColor)) {
+			this.selectedSwapColor = null;
 			this.refreshCharacterSwapToolbarVisibility();
 			return;
 		}
@@ -630,18 +634,43 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * Destroys and re-renders every placed swap object. Static images
 	 * here, not animated - the bobbing tween and cooldown visuals are
 	 * Play-mode-only (see PlatformerScene), since these are purely
-	 * editor-time placement markers.
+	 * editor-time placement markers. Interactive only for the eraser -
+	 * these don't support anything analogous to the style picker, so
+	 * there's nothing else for a click to do yet.
 	 */
 	private refreshSwapObjectImages() {
 		for (const image of this.placedSwapObjectImages) {
 			image.destroy();
 		}
 
-		this.placedSwapObjectImages = this.getPlacedSwapObjects().map((object) =>
-			this.add
+		this.placedSwapObjectImages = this.getPlacedSwapObjects().map((object) => {
+			const image = this.add
 				.image(object.x, object.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(object.color))
 				.setDisplaySize(GRID_SIZE, GRID_SIZE)
-		);
+				.setInteractive();
+
+			image.on('pointerdown', () => {
+				if (this.getEditorTool() === 'eraser') {
+					this.eraseSwapObjectAt(object.x, object.y);
+				}
+			});
+
+			return image;
+		});
+	}
+
+	private eraseSwapObjectAt(x: number, y: number) {
+		const existing = this.getPlacedSwapObjects();
+		const updated = removeSwapObjectAt(existing, x, y);
+		if (updated.length === existing.length) {
+			// Nothing was there - avoid a no-op registry write/re-render.
+			return;
+		}
+		this.registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, updated);
+		this.refreshSwapObjectImages();
+		// Erasing an object frees up its color - reflect that immediately
+		// if the character-swap toolbar happens to be open.
+		this.refreshCharacterSwapToolbarVisibility();
 	}
 
 	// ── UI mode toggle (top-right) ──────────────────────────────────────

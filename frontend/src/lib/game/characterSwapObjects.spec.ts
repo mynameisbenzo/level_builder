@@ -4,9 +4,10 @@ import {
 	getSwapResult,
 	isWithinSwapRange,
 	MAX_CHARACTER_SWAP_OBJECTS,
+	removeSwapObjectAt,
 	type CharacterSwapObject
 } from './characterSwapObjects';
-import { PLAYER_COLORS } from './textures';
+import { PLAYER_COLORS } from './playerColor';
 
 describe('getSwapResult', () => {
 	it('gives the player the object\'s color', () => {
@@ -77,12 +78,18 @@ describe('getAvailableSwapColors', () => {
 	});
 
 	it('does not double-count if a placed object happens to share the player\'s color', () => {
+		// Shouldn't normally happen (this same exclusion is what prevents
+		// it), but the result should still just be a clean exclusion set,
+		// not miscounted.
 		const result = getAvailableSwapColors([obj('beige')], 'beige');
 		expect(result).not.toContain('beige');
 		expect(result).toHaveLength(PLAYER_COLORS.length - 1);
 	});
 
 	it('returns nothing once at the cap, even if a color is technically unused', () => {
+		// 4 objects placed (the cap), one color (whichever 5th) never used -
+		// still returns empty, since a 5th object would leave nothing for
+		// the player to start as.
 		const placed = PLAYER_COLORS.slice(0, MAX_CHARACTER_SWAP_OBJECTS).map((color) => obj(color));
 		expect(getAvailableSwapColors(placed, PLAYER_COLORS[MAX_CHARACTER_SWAP_OBJECTS])).toEqual([]);
 	});
@@ -92,5 +99,27 @@ describe('getAvailableSwapColors', () => {
 			const placed = PLAYER_COLORS.slice(0, count).map((color) => obj(color));
 			expect(getAvailableSwapColors(placed, 'beige')).toEqual([]);
 		}
+	});
+});
+
+describe('removeSwapObjectAt', () => {
+	it('removes the object at the exact position', () => {
+		const existing: CharacterSwapObject[] = [{ x: 32, y: 32, color: 'beige' }];
+		expect(removeSwapObjectAt(existing, 32, 32)).toEqual([]);
+	});
+
+	it('only removes the exact match, keeping the rest', () => {
+		const existing: CharacterSwapObject[] = [
+			{ x: 0, y: 0, color: 'green' },
+			{ x: 96, y: 96, color: 'pink' }
+		];
+		expect(removeSwapObjectAt(existing, 0, 0)).toEqual([
+			{ x: 96, y: 96, color: 'pink' }
+		]);
+	});
+
+	it('returns an equivalent array unchanged when nothing matches', () => {
+		const existing: CharacterSwapObject[] = [{ x: 32, y: 32, color: 'purple' }];
+		expect(removeSwapObjectAt(existing, 64, 64)).toEqual(existing);
 	});
 });

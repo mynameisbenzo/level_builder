@@ -10,21 +10,21 @@ import {
 	type PlayerPose
 } from './movement';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
+import { ensureSounds, playSfx } from './sounds';
+import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
 import {
-	CHARACTERS_ATLAS_KEY,
-	ensureCharacterAtlas,
 	ensurePlayerColor,
-	ensurePlayerWalkAnimation,
-	ensureTilesAtlas,
 	getCharacterSwapObjectFrame,
 	getPlayerHudFrame,
-	getPlayerPoseConfig,
 	PLAYER_COLOR_REGISTRY_KEY,
-	PLAYER_DISPLAY_SIZE,
-	setPlayerWalkAnimationColor,
-	TILES_ATLAS_KEY,
 	type PlayerColor
-} from './textures';
+} from './playerColor';
+import {
+	ensurePlayerWalkAnimation,
+	getPlayerPoseConfig,
+	PLAYER_DISPLAY_SIZE,
+	setPlayerWalkAnimationColor
+} from './playerPose';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
@@ -117,6 +117,7 @@ export class PlatformerScene extends Phaser.Scene {
 	preload() {
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
+		ensureSounds(this);
 	}
 
 	create() {
@@ -291,6 +292,8 @@ export class PlatformerScene extends Phaser.Scene {
 	 * enough away (see reactivateSwapObject).
 	 */
 	private handleCharacterSwap(swapObject: TrackedSwapObject) {
+		playSfx(this, 'characterSwap');
+
 		const currentPlayerColor = (this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
 			| PlayerColor
 			| undefined) ?? swapObject.data.color;
@@ -324,68 +327,64 @@ export class PlatformerScene extends Phaser.Scene {
 
 	/**
 	 * Animates the HUD portrait through the swap: shrinks the outgoing
-	 * portrait away, swaps its texture once fully shrunk (so the change
-	 * itself isn't visible mid-size), then grows back in with the same
-	 * overshoot-then-settle rhythm as a swap object's own reactivation
-	 * pop (see reactivateSwapObject) - reusing the exact same constants
-	 * for visual consistency between the two.
+	 * portrait away, swaps its texture at the smallest point (so the
+	 * change itself isn't visible mid-size), then grows back in via the
+	 * shared pop animation (see playPopAnimation) - the same one a swap
+	 * object's own reactivation uses, for visual consistency between the
+	 * two.
 	 */
 	private animateHudPortraitSwap(newColor: PlayerColor) {
-		this.tweens.add({
-			targets: this.hudPortrait,
-			displayWidth: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
-			displayHeight: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
-			duration: SWAP_REACTIVATE_SHRINK_DURATION_MS,
-			onComplete: () => {
-				this.hudPortrait.setTexture(TILES_ATLAS_KEY, getPlayerHudFrame(newColor));
-				this.tweens.add({
-					targets: this.hudPortrait,
-					displayWidth: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
-					displayHeight: HUD_PORTRAIT_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
-					duration: SWAP_REACTIVATE_OVERSHOOT_DURATION_MS,
-					onComplete: () => {
-						this.tweens.add({
-							targets: this.hudPortrait,
-							displayWidth: HUD_PORTRAIT_SIZE,
-							displayHeight: HUD_PORTRAIT_SIZE,
-							duration: SWAP_REACTIVATE_SETTLE_DURATION_MS
-						});
-					}
-				});
-			}
+		this.playPopAnimation(this.hudPortrait, HUD_PORTRAIT_SIZE, () => {
+			this.hudPortrait.setTexture(TILES_ATLAS_KEY, getPlayerHudFrame(newColor));
 		});
 	}
 
 	/**
 	 * Runs once the player has moved far enough away from a
-	 * just-triggered object: a shrink/overshoot/settle "pop" (25% ->
-	 * 115% -> 100%), then resumes normal bobbing and full opacity, and
-	 * clears the cooldown so it can trigger again.
+	 * just-triggered object: the shared pop animation, then resumes
+	 * normal bobbing and full opacity, and clears the cooldown so it can
+	 * trigger again.
 	 */
 	private reactivateSwapObject(swapObject: TrackedSwapObject) {
 		swapObject.sprite.setAlpha(1);
+		this.playPopAnimation(swapObject.sprite, SWAP_OBJECT_DISPLAY_SIZE, undefined, () => {
+			swapObject.bobTween.resume();
+			swapObject.onCooldown = false;
+		});
+	}
 
+	/**
+	 * Shrink -> overshoot -> settle "pop" (25% -> 115% -> 100%), shared by
+	 * the HUD portrait's swap transition and a swap object's reactivation
+	 * - the only difference between the two is what's being animated,
+	 * what (if anything) happens at the smallest point, and what (if
+	 * anything) happens once it's fully settled.
+	 */
+	private playPopAnimation(
+		target: Phaser.GameObjects.Image,
+		baseSize: number,
+		atSmallest?: () => void,
+		onComplete?: () => void
+	) {
 		this.tweens.add({
-			targets: swapObject.sprite,
-			displayWidth: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
-			displayHeight: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_SHRINK_SCALE,
+			targets: target,
+			displayWidth: baseSize * SWAP_REACTIVATE_SHRINK_SCALE,
+			displayHeight: baseSize * SWAP_REACTIVATE_SHRINK_SCALE,
 			duration: SWAP_REACTIVATE_SHRINK_DURATION_MS,
 			onComplete: () => {
+				atSmallest?.();
 				this.tweens.add({
-					targets: swapObject.sprite,
-					displayWidth: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
-					displayHeight: SWAP_OBJECT_DISPLAY_SIZE * SWAP_REACTIVATE_OVERSHOOT_SCALE,
+					targets: target,
+					displayWidth: baseSize * SWAP_REACTIVATE_OVERSHOOT_SCALE,
+					displayHeight: baseSize * SWAP_REACTIVATE_OVERSHOOT_SCALE,
 					duration: SWAP_REACTIVATE_OVERSHOOT_DURATION_MS,
 					onComplete: () => {
 						this.tweens.add({
-							targets: swapObject.sprite,
-							displayWidth: SWAP_OBJECT_DISPLAY_SIZE,
-							displayHeight: SWAP_OBJECT_DISPLAY_SIZE,
+							targets: target,
+							displayWidth: baseSize,
+							displayHeight: baseSize,
 							duration: SWAP_REACTIVATE_SETTLE_DURATION_MS,
-							onComplete: () => {
-								swapObject.bobTween.resume();
-								swapObject.onCooldown = false;
-							}
+							onComplete
 						});
 					}
 				});
@@ -409,6 +408,7 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 
 		if (hasFallenOffScreen(this.player.y, this.scale.height, FALL_OFF_SCREEN_THRESHOLD_PX)) {
+			playSfx(this, 'death');
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;
@@ -520,6 +520,7 @@ export class PlatformerScene extends Phaser.Scene {
 		const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
 		if (velocityY !== null) {
 			this.player.setVelocityY(velocityY);
+			playSfx(this, 'jump');
 		}
 
 		// Variable jump height: if jump isn't currently held and the player

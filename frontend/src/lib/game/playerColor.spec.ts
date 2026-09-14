@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getCharacterSwapObjectFrame, getPlayerHudFrame, pickPlayerColor, PLAYER_COLORS } from './textures';
+import { getCharacterSwapObjectFrame, getPlayerHudFrame, pickPlayerColor, PLAYER_COLORS } from './playerColor';
+
 describe('pickPlayerColor', () => {
 	it('picks the first color for a random value of 0', () => {
 		expect(pickPlayerColor(0)).toBe(PLAYER_COLORS[0]);

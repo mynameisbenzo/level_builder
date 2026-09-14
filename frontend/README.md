@@ -27,44 +27,45 @@ level.
 > **Windows note:** this project uses `psycopg[binary]` (not `psycopg2-binary`) specifically to avoid native-compile issues on Windows. Keep the pinned version in `requirements.txt`.
 
 ## Project structure
-
-```
 level-builder/
-├── backend/                    # Flask API
-│   ├── app/
-│   │   ├── main.py              # create_app() factory, landing page route
-│   │   ├── config.py            # Testing/Development/Production config
-│   │   ├── extensions.py        # shared Flask-SQLAlchemy instance
-│   │   ├── templates/           # Jinja - portfolio landing page
-│   │   └── models/               # SQLAlchemy models
-│   ├── tests/
-│   ├── requirements.txt
-│   └── requirements-dev.txt
-├── frontend/                   # SvelteKit app
-│   ├── static/assets/kenney/    # Kenney platformer pack (sprites, tiles, sfx)
-│   └── src/
-│       ├── lib/
-│       │   ├── api.ts                  # backend API client
-│       │   └── game/                   # Phaser scenes + supporting logic:
-│       │       ├── PlatformerScene.ts    # Play mode
-│       │       ├── LevelEditorScene.ts   # Edit mode (default scene)
-│       │       ├── movement.ts           # pure input/physics logic (tested)
-│       │       ├── gridSnap.ts           # grid snapping (tested)
-│       │       ├── groundTiling.ts       # auto-tiling + platform run logic (tested)
-│       │       ├── placedObjects.ts      # placed-tile data, selection, group merge (tested)
-│       │       ├── playerState.ts        # position carryover (tested)
-│       │       ├── mode.ts               # Play/Edit mode logic (tested)
-│       │       ├── touchInput.ts         # mobile touch input state (tested)
-│       │       ├── currentMode.ts        # Svelte store for active mode
-│       │       ├── textures.ts           # texture/atlas loading (Phaser wiring)
-│       │       ├── TouchControls.svelte  # on-screen mobile buttons
-│       │       └── LandscapeGuard.svelte # portrait-mode block screen
-│       └── routes/
-│           └── play/             # the game itself
-├── .github/workflows/          # CI: backend-ci.yml, frontend-ci.yml
-├── render.yaml                 # Render Blueprint (backend + frontend)
-└── .python-version              # pins Python 3.10.13 via pyenv
-```
+├── backend/ # Flask API
+│ ├── app/
+│ │ ├── main.py # create_app() factory, landing page route
+│ │ ├── config.py # Testing/Development/Production config
+│ │ ├── extensions.py # shared Flask-SQLAlchemy instance
+│ │ ├── templates/ # Jinja - portfolio landing page
+│ │ └── models/ # SQLAlchemy models
+│ ├── tests/
+│ ├── requirements.txt
+│ └── requirements-dev.txt
+├── frontend/ # SvelteKit app
+│ ├── static/assets/
+│ │ ├── kenney/ # Kenney platformer pack (sprites, tiles, sfx)
+│ │ └── icons/ # Eraser + select-tool cursor icons
+│ └── src/
+│ ├── lib/
+│ │ ├── api.ts # backend API client
+│ │ └── game/ # Phaser scenes + supporting logic:
+│ │ ├── PlatformerScene.ts # Play mode
+│ │ ├── LevelEditorScene.ts # Edit mode (default scene)
+│ │ ├── movement.ts # pure input/physics/pose logic (tested)
+│ │ ├── gridSnap.ts # grid snapping + drag fill (tested)
+│ │ ├── groundTiling.ts # auto-tiling + platform run logic (tested)
+│ │ ├── placedObjects.ts # placed-tile data, selection, group merge (tested)
+│ │ ├── characterSwapObjects.ts # floating swap-object logic (tested)
+│ │ ├── tools.ts # editor tool constants (select/eraser/characterSwap)
+│ │ ├── playerState.ts # position carryover (tested)
+│ │ ├── mode.ts # Play/Edit mode logic (tested)
+│ │ ├── touchInput.ts # mobile touch input state (tested)
+│ │ ├── currentMode.ts # Svelte store for active mode
+│ │ ├── textures.ts # texture/atlas/animation/pose loading (tested)
+│ │ ├── TouchControls.svelte # on-screen mobile buttons
+│ │ └── LandscapeGuard.svelte # portrait-mode block screen
+│ └── routes/
+│ └── play/ # the game itself
+├── .github/workflows/ # CI: backend-ci.yml, frontend-ci.yml
+├── render.yaml # Render Blueprint (backend + frontend)
+└── .python-version # pins Python 3.10.13 via pyenv
 
 ## Backend setup
 
@@ -123,19 +124,23 @@ With both servers running, visit **`localhost:5173/play`**. It opens
 directly into the **Level Editor** (Edit mode is the default scene).
 
 **Level Editor (Edit mode):**
-- Drag the player square to reposition it (snaps to the grid)
-- Click-and-drag empty grid space (along a single row) to place a platform
-  of ground tiles
-- Click any tile to select its **whole platform** (highlighted with a gold
-  border), click again to deselect
-- **Placing a new platform right next to an existing one of the same
-  style automatically connects them into one platform.** A different
-  style stays visually and functionally separate, even when touching —
-  see [Platform grouping](#platform-grouping) below
-- The style palette (bottom of screen) sets the style of the selected
-  platform, or the default style for new platforms if nothing is selected
-- `[?] Hide/Show Instructions` button, top-left, toggles the on-screen
-  help text
+- Drag the player character to reposition it (snaps to the grid)
+- Click-and-drag empty grid space to place a platform — drag horizontally
+  or vertically, whichever way you move first
+- Click a platform to select it (highlights the whole thing, not just one
+  tile), click again to deselect
+- Placing or restyling a platform next to another of the **same style**
+  automatically connects them into one platform; a **different style**
+  stays separate even when touching — see
+  [Platform grouping](#platform-grouping)
+- A style picker (toolbar by default, or a radial menu — toggle between
+  them top-right) appears only while a platform is selected
+- Tools toolbar (top-center): **Select**, **Eraser**, and **Character
+  Swap** — the eraser removes ground tiles by click or click-drag; the
+  character-swap tool opens a row of color swatches below (see
+  [Character swapping](#character-swapping)) - click an available color,
+  then click in the level to place that character's floating object
+- `[?] Instructions` opens a quick reference modal
 - Tab, or the on-screen ⇄ button on mobile, switches to Play mode
 
 **Play mode:**
@@ -144,11 +149,31 @@ directly into the **Level Editor** (Edit mode is the default scene).
 | ------ | ------------- | --------------------------- | ------------------------ |
 | Move   | A/D or ←/→    | D-pad or left stick          | On-screen left/right buttons |
 | Jump   | W or ↑        | A (Xbox) / X (PlayStation)   | On-screen jump button     |
+| Duck   | S or ↓        | —                            | —                          |
 
 Platforms built in the Editor become real, solid ground in Play mode.
 There's no ground unless you've placed some — walk/fall off the edge of
 what you've built (or off nothing at all) and falling far enough below
 the screen automatically sends you back to the Editor.
+
+**Player feel:**
+- Horizontal movement **accelerates and decelerates** rather than
+  snapping instantly to full speed — tap for a quick nudge, hold for a
+  build-up to top speed (P-speed-style, tunable via `ACCELERATION` in
+  `PlatformerScene.ts`)
+- **Variable jump height** — tap jump for a short hop, hold it for the
+  full arc; releasing early cuts the jump short (tunable via
+  `JUMP_CUT_MULTIPLIER`)
+- The player is a real animated character (Kenney sprite, sized larger
+  than a single grid tile): idle, walk cycle, duck, and jump poses, all
+  driven by one pose-priority state machine (`getPlayerPose` in
+  `movement.ts`) so adding a new pose later is a one-line addition, not
+  a new branch of scene code
+- **Character color is randomized once per session** (5 available: beige,
+  green, pink, purple, yellow) — picked the first time a scene loads and
+  kept consistent across Play/Edit toggles for the rest of the session
+- A **character HUD portrait** (top-left) always reflects the current
+  color, with a shrink/overshoot/settle "pop" animation on every swap
 
 **Mobile:** the game is landscape-only — a rotate prompt blocks portrait
 orientation. On-screen touch controls only appear on touch-capable
@@ -157,32 +182,65 @@ devices; desktop mouse/keyboard users won't see them.
 ### Platform grouping
 
 Each platform has an explicit identity (`groupId`), assigned per
-click-and-drag placement action — not inferred from which tiles happen to
-be touching. This is what makes selection, restyling, and the visual
-end-caps behave like separate physical objects rather than one blob:
+click-and-drag placement gesture — not inferred from which tiles happen
+to be touching:
 
 - Placing tiles in one continuous drag: each new tile checks its
-  immediate left/right neighbor; if a same-style neighbor exists, the new
-  tile joins that platform. This is how a whole drag ends up as one group
-  without any special "gesture" tracking.
-- Placing a **new, separate** platform touching an **existing** one of a
-  **different** style: no matching neighbor, so it starts its own group —
-  visually distinct end-caps at the seam, independently selectable.
-- Placing a **new, separate** platform touching an **existing** one of
-  the **same** style: it joins that platform's group directly.
-- Placing a single tile that bridges two existing same-style platforms
-  (filling a one-cell gap between them) merges both into one group.
+  immediate neighbor along the drag's axis; if a same-style neighbor
+  exists, the new tile joins that platform.
+- A **new, separate** platform touching an existing one of a
+  **different** style: stays its own group, with its own end caps, even
+  when touching.
+- A **new, separate** platform touching an existing one of the **same**
+  style: joins that platform's group directly.
+- A single tile bridging two existing same-style platforms (filling a
+  gap between them) merges both into one.
+- **Restyling** a selected platform to match a touching different
+  platform merges them too — this check happens retroactively, not just
+  at placement time.
+- Horizontal and vertical platforms **never merge with each other**,
+  even when touching and same-styled — each runs one way only. A visual
+  junction piece for where they meet was tried and removed (see TODOs
+  below); they currently just don't visually connect.
+
+### Character swapping
+
+Five character colors exist (beige, green, pink, purple, yellow), each
+with a full pose set (idle/walk/duck/jump). Floating swap objects, placed
+via the Editor's Character Swap tool, let the player trade characters
+with whichever one they touch:
+
+- Touching an object swaps colors both ways: the player becomes the
+  object's color, and the object is left holding the player's old one.
+  Both the walk animation and the HUD portrait update with a matching
+  pop animation.
+- **Cooldown**: a just-triggered object can't fire again until the
+  player has moved at least 64px away. While on cooldown, it stops
+  bobbing, dims to 50% opacity, and shrinks to 50% size - all clear
+  visual signals that it's temporarily inactive. Clearing the distance
+  triggers a shrink→overshoot→settle "pop" before it resumes normal
+  floating.
+- **At most 4 objects per level**, enforced by the Editor: every object
+  must hold a genuinely distinct color, and the color the player is
+  *currently* playing as is also excluded from placement - so a level
+  can never end up in a state where two things share one color, even
+  the moment it first loads.
+
+This is a foundational piece for a planned feature (see TODOs) where each
+character eventually plays differently, not just looks different.
 
 ## Testing philosophy
 
 Pure logic (input calculations, mode switching, position resolution, grid
-snapping, auto-tiling, platform grouping/merging) lives in Phaser-free
-TypeScript modules and is fully unit tested. Phaser-specific wiring (scene
-setup, rendering, tweens, drag/click events) is verified manually in the
-browser rather than unit tested — faking a canvas in a test runner
-requires a compiled native dependency (`canvas`), which risks the exact
-kind of cross-platform build issues (see the Windows note above) this
-project has already run into once.
+snapping, auto-tiling, platform grouping/merging, player pose priority,
+acceleration/jump physics, color selection, character-swap distance and
+availability checks) lives in Phaser-free TypeScript modules and is fully
+unit tested. Phaser-specific wiring (scene setup, rendering, tweens,
+drag/click events) is verified manually in the browser rather than unit
+tested — faking a canvas in a test runner requires a compiled native
+dependency (`canvas`), which risks the exact kind of cross-platform build
+issues (see the Windows note above) this project has already run into
+once.
 
 ## CI
 
@@ -207,13 +265,55 @@ manual gating required.
       integration, deployment on Render + Neon with a CI-gated pipeline,
       portfolio-facing landing page.
 
-### Phase 2 — Gameplay (in progress)
+### Phase 2 — Gameplay (character system now feature-complete as a foundation)
 
 - [x] Player movement (keyboard, gamepad, and touch)
 - [x] Object architecture decided: interfaces for contracts + lightweight
       composition for shared behavior, built on Phaser Sprites/Groups
+- [x] Real animated player sprite (Kenney character), replacing the
+      placeholder square, sized larger than a grid tile
+- [x] Pose state machine — idle/walk/duck/jump, priority-ordered, driven
+      by one pure decision function + a data table
+- [x] Gradual acceleration/deceleration ("P-speed"-style build-up)
+      instead of instant velocity snapping
+- [x] Variable jump height ("jump cut") — tap for a short hop, hold for
+      the full arc
+- [x] Player character color randomized per session (5 Kenney colors)
+- [x] Character HUD portrait (top-left), with an animated pop transition
+      on every swap
+- [x] Character-swap floating objects — full loop: touch to swap,
+      cooldown with dim/shrink/frozen-bob visual state, distance-gated
+      reactivation with a pop animation, persisted across Play/Edit
+      toggles
+- [x] Editor placement tool for character-swap objects — toolbar option,
+      color-swatch sub-toolbar, capped at 4 objects with automatic
+      exclusion of both already-used colors and the player's own current
+      color
+- [ ] **Remove/replace swap objects in the Editor** — the eraser tool
+      only removes ground tiles right now; there's no way to delete a
+      placed swap object once it's down. A natural, contained extension
+      of the existing eraser.
+- [ ] **Animated HUD portrait transition** — done (see above); leaving
+      this line struck through in spirit, no longer a TODO.
+- [ ] **Manual character selection** — currently the player's color is
+      randomized once per session (see `pickPlayerColor`); let the user
+      pick their preferred one instead of leaving it to chance.
+- [ ] **Character-specific abilities (SMB2-style)** — explore giving each
+      of the five character colors a distinct gameplay trait instead of
+      being purely cosmetic (e.g. one jumps higher, one can float
+      briefly, one moves faster). A bigger, more exploratory idea than
+      the rest of this list — worth prototyping before committing, since
+      it touches the shared movement/pose system every character
+      currently uses identically (`getPlayerPose`,
+      `getAcceleratedVelocity`, `getJumpVelocity`/`getJumpCutVelocity`
+      are all color-agnostic right now). The character-swap system above
+      is the foundational piece this was building toward - swapping
+      "which character" fully works now; it just doesn't change how
+      anything plays yet.
 - [ ] Interactable objects (coins, keys)
 - [ ] Enemies, mini-enemies, bosses
+- [ ] Climb animation exists in the sprite atlas but isn't wired to
+      anything yet (no climbable surfaces)
 
 ### Phase 3 — Level creation, accounts & persistence (in progress)
 
@@ -223,15 +323,25 @@ until the moment someone wants to save or share.
 
 **Level Editor:**
 - [x] Level Editor is the default scene; Play mode is entered from it
-- [x] Click-and-drag platform placement (single row / X-axis)
-- [x] Auto-tiling: single/left/center/right frames computed per platform,
+- [x] Click-and-drag platform placement, both X-axis and Y-axis (axis
+      locks to whichever direction the drag moves first)
+- [x] Auto-tiling: single/end-cap/middle frames computed per platform,
       six selectable styles (grass, dirt, sand, snow, stone, purple)
-- [x] Explicit platform grouping (`groupId`), assigned per placement
-      gesture, with same-style neighbor joining and bridge-merging —
-      physical adjacency alone no longer means "same platform"
+- [x] Explicit platform grouping (`groupId`), orientation-aware so
+      horizontal and vertical platforms never accidentally merge into an
+      L-shape
 - [x] Click a tile to select its whole platform; click again to deselect
-- [x] Style palette UI (toolbar): restyles the selected platform, or sets
-      the default for new placements
+- [x] Restyling a selected platform retroactively merges it with a newly
+      matching adjacent platform
+- [x] Style picker UI: toolbar (default) and a radial menu, switchable
+      via a top-right toggle; either UI only appears while a platform is
+      selected
+- [x] Eraser tool — click or click-drag to remove ground tiles (player
+      excluded by construction), with its own custom cursor
+- [x] Character Swap placement tool (see Phase 2 above)
+- [x] Tools toolbar (top-center), extensible for future tools
+- [x] Custom cursors per tool
+- [x] Instructions modal (replacing an earlier inline-panel version)
 - [x] Drag-to-reposition the player, snapped to the grid
 - [x] Placed platforms persist across Play/Edit toggles and become real,
       solid ground in Play mode (with collision)
@@ -239,43 +349,27 @@ until the moment someone wants to save or share.
       automatically reverts to the Editor
 - [x] Mobile support: touch controls, landscape-only enforcement,
       scale-to-fit canvas
-- [x] Toggleable on-screen instructions
-- [ ] **Restyling doesn't re-check for merges** — if a selected platform
-      is restyled to match a directly touching different platform, they
-      currently stay separate groups (with a redundant seam) instead of
-      merging. Placement-time merging works; style-change-time merging
-      does not yet.
-- [ ] **Eraser tool** — click the eraser option and drag across tiles to
-      remove them (excluding the player). Currently there's no delete
-      interaction at all in the Editor.
-- [ ] **UI preference: toolbar vs. radial menu** — let the user choose
-      which style-selection UI they prefer, defaulting to the toolbar. A
-      working radial-menu prototype exists (built and compared against
-      four other UI approaches — cycling arrows, dropdown, modal, radial —
-      before the toolbar was chosen as default), but isn't wired in as a
-      togglable option yet.
-- [ ] **Placement rules** beyond "no stacking duplicates" — e.g. what's
+- [ ] **Vertical/horizontal junction piece** — a horizontal and vertical
+      platform touching currently render with no visual connection
+      between them. A junction was built and tried (a horizontal tile
+      switching to a connector frame, the touching vertical tile
+      switching to a middle piece) but removed - the available tile art
+      didn't look right for it. Revisit if better-suited assets turn up.
+- [ ] **Placement rules** beyond "no duplicate stacking" — e.g. what's
       allowed to be adjacent to what — are still undecided.
+- [ ] **UI mode preference doesn't survive a full page reload** — the
+      toolbar/radial choice is stored in Phaser's registry, so it
+      persists across Play/Edit toggles within a session, but resets to
+      the toolbar default on refresh. Would need `localStorage` to
+      persist across sessions.
+- [ ] **Instructions as a dedicated page** — the modal works for now, but
+      if the content list keeps growing (more tools, more mechanics),
+      it'd outgrow a Phaser-rendered modal.
 - [ ] **Kill zone** — generalize the current "player falls off-screen →
       revert to Editor" behavior into a proper system for removing/
       resetting *any* sprite (not just the player) that leaves the
       playable bounds, once there are other objects (enemies, etc.) that
       need the same handling.
-- [ ] **Editor placement tool for character-swap objects** — there's
-      currently no way to place these via the Level Editor; Play mode
-      always spawns one hardcoded test object near the player as a
-      temporary stand-in (see the TEMPORARY-flagged block in
-      `PlatformerScene.ts`) purely so the swap mechanic itself could be
-      tried out. Needs a toolbar option that opens a second toolbar of
-      the five character objects, click one to make it the active
-      placeable tile, then place it like a ground tile. **Cap: at most 4
-      swap objects per scene** (5 total colors, minus whichever one the
-      player currently embodies, leaves exactly 4 that can exist as
-      distinct floating objects without ever duplicating a color) - the
-      placement tool should enforce this, e.g. by disabling/graying out
-      a color already represented by an existing object or the current
-      player. The temporary test-spawn should be removed once this
-      exists.
 
 **Accounts (prerequisite for saving/sharing, not yet built):**
 - [ ] `User` auth: JWT-based (not session cookies — frontend and backend
@@ -308,3 +402,22 @@ until the moment someone wants to save or share.
 - [ ] `tool_assisted` classification for levels an admin determines
       aren't legitimately clearable as submitted (stays live, gets
       relabeled — like a TAS tag in speedrunning, not deletion)
+
+## Future Considerations (way down the line)
+
+Not part of the active technical roadmap — noted for later, pricing
+model only, details TBD:
+
+- [ ] **Website access** — monthly subscription, all DLC updates
+      included
+- [ ] **Standalone Steam version** — flat fee, new content blocked by a
+      paywall
+- [ ] **DLC** — free on the website, paid on the Steam standalone
+      version. Exact mechanics (what counts as DLC, how it's gated
+      between the two versions, etc.) still to be figured out.
+
+## Housekeeping
+
+- [ ] npm version differs between the two dev machines this project is
+      built on (Windows and macOS) — not urgent, but worth syncing to
+      keep `package-lock.json` diffs from being noise.

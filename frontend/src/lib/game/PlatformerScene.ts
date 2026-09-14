@@ -13,7 +13,7 @@ import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
 import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
 import {
-	ensurePlayerColor,
+	ensureStartingPlayerColor,
 	getCharacterSwapObjectFrame,
 	getPlayerHudFrame,
 	PLAYER_COLOR_REGISTRY_KEY,
@@ -137,7 +137,12 @@ export class PlatformerScene extends Phaser.Scene {
 			| undefined;
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
-		const playerColor = ensurePlayerColor(this);
+		// Every fresh Play session begins as the level's starting color,
+		// discarding whatever the runtime color was left at by a previous
+		// session's swaps - a swap should never leak into what a level
+		// begins as, or into what the Editor shows.
+		const playerColor = ensureStartingPlayerColor(this);
+		this.registry.set(PLAYER_COLOR_REGISTRY_KEY, playerColor);
 		this.playerPoseConfig = getPlayerPoseConfig(playerColor);
 
 		this.player = this.physics.add.sprite(
@@ -205,7 +210,17 @@ export class PlatformerScene extends Phaser.Scene {
 		// paired with an Arcade body. Bobbing (and the cooldown visuals)
 		// are Play-mode-only - the Editor renders these as plain static
 		// images (see LevelEditorScene's refreshSwapObjectImages).
-		this.swapObjects = swapObjectsData.map((data) => {
+		this.swapObjects = swapObjectsData.map((originalData) => {
+			// Copy rather than reuse the reference straight from the
+			// registry - CharacterSwapObject is a plain object, and
+			// mutating swapObject.data.color later (on a swap) would
+			// otherwise mutate the exact same object still sitting inside
+			// the registry's stored array, corrupting the level's design
+			// data with no explicit registry.set() call even needed to do
+			// it. A shallow copy is enough since every field here is a
+			// primitive (x, y, color).
+			const data: CharacterSwapObject = { ...originalData };
+
 			const sprite = this.add
 				.image(data.x, data.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(data.color))
 				.setDisplaySize(SWAP_OBJECT_DISPLAY_SIZE, SWAP_OBJECT_DISPLAY_SIZE);
@@ -312,9 +327,15 @@ export class PlatformerScene extends Phaser.Scene {
 		this.currentPose = null;
 		this.animateHudPortraitSwap(newPlayerColor);
 
+		// The object's color is only updated in memory here, for the rest
+		// of this Play session - deliberately not written back to
+		// CHARACTER_SWAP_OBJECTS_REGISTRY_KEY. That key is the level's
+		// design data (what the Editor placed and shows); a mid-session
+		// swap changing an object's held color is exactly the kind of
+		// runtime-only state that should never leak back into it, same
+		// principle as the player's own color (see playerColor.ts).
 		swapObject.data.color = newObjectColor;
 		swapObject.sprite.setTexture(TILES_ATLAS_KEY, getCharacterSwapObjectFrame(newObjectColor));
-		this.persistSwapObjectsData();
 
 		swapObject.onCooldown = true;
 		swapObject.bobTween.pause();
@@ -390,13 +411,6 @@ export class PlatformerScene extends Phaser.Scene {
 				});
 			}
 		});
-	}
-
-	private persistSwapObjectsData() {
-		this.registry.set(
-			CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
-			this.swapObjects.map((object) => object.data)
-		);
 	}
 
 	update(_time: number, delta: number) {

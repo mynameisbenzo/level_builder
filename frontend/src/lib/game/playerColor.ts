@@ -2,37 +2,38 @@ import type Phaser from 'phaser';
 
 export const PLAYER_COLORS = ['beige', 'green', 'pink', 'purple', 'yellow'] as const;
 export type PlayerColor = (typeof PLAYER_COLORS)[number];
+
+/**
+ * The player's color for the current, in-progress Play session -
+ * intentionally separate from PLAYER_STARTING_COLOR_REGISTRY_KEY. This
+ * one changes at runtime (character-swap objects write to it) and is
+ * reset back to the starting color every time Play mode boots (see
+ * PlatformerScene.create()), so a mid-session swap never leaks back into
+ * what the Editor shows or what a fresh Play session begins as.
+ */
 export const PLAYER_COLOR_REGISTRY_KEY = 'playerColor';
 
-/**
- * Picks a player color given a [0, 1) random value (pass Math.random()).
- * Taking the random value as a parameter, rather than calling Math.random()
- * internally, keeps the actual selection logic deterministic and testable -
- * for the same input, this always returns the same color.
- * Pure function, no Phaser dependency, safe to unit test directly.
- */
-export function pickPlayerColor(randomValue: number): PlayerColor {
-	const index = Math.floor(randomValue * PLAYER_COLORS.length);
-	return PLAYER_COLORS[index];
-}
+export const DEFAULT_PLAYER_COLOR: PlayerColor = 'green';
+export const PLAYER_STARTING_COLOR_REGISTRY_KEY = 'playerStartingColor';
 
 /**
- * Returns the player's color for this session, picking and storing a
- * random one (see pickPlayerColor) if none has been chosen yet. Reading
- * from the registry rather than picking fresh every time means whichever
- * scene boots first decides the color, and every scene after it (including
- * the same scene restarting, e.g. toggling Play/Edit) sees the same one
- * for the rest of the session instead of re-randomizing on every restart.
+ * Returns the level's starting player color, defaulting to (and storing)
+ * DEFAULT_PLAYER_COLOR if none has been explicitly chosen yet. This is
+ * the Editor-controlled, level-wide setting - what a fresh Play session
+ * always begins as, regardless of how a previous session ended.
  */
-export function ensurePlayerColor(scene: Phaser.Scene): PlayerColor {
-	const stored = scene.registry.get(PLAYER_COLOR_REGISTRY_KEY) as PlayerColor | undefined;
+export function ensureStartingPlayerColor(scene: Phaser.Scene): PlayerColor {
+	const stored = scene.registry.get(PLAYER_STARTING_COLOR_REGISTRY_KEY) as PlayerColor | undefined;
 	if (stored) {
 		return stored;
 	}
 
-	const picked = pickPlayerColor(Math.random());
-	scene.registry.set(PLAYER_COLOR_REGISTRY_KEY, picked);
-	return picked;
+	scene.registry.set(PLAYER_STARTING_COLOR_REGISTRY_KEY, DEFAULT_PLAYER_COLOR);
+	return DEFAULT_PLAYER_COLOR;
+}
+
+export function setStartingPlayerColor(scene: Phaser.Scene, color: PlayerColor) {
+	scene.registry.set(PLAYER_STARTING_COLOR_REGISTRY_KEY, color);
 }
 
 /**

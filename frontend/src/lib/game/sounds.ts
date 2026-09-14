@@ -14,8 +14,6 @@ import type Phaser from 'phaser';
 export const SOUND_ASSETS = {
 	jump: '/assets/kenney/platformer-pack/Sounds/sfx_jump.ogg',
 	characterSwap: '/assets/kenney/platformer-pack/Sounds/sfx_magic.ogg',
-	// Closest available stand-in for "dying" - the pack has no
-	// purpose-made death/game-over sound. Revisit if one is sourced later.
 	death: '/assets/kenney/platformer-pack/Sounds/sfx_disappear.ogg'
 } as const;
 
@@ -44,8 +42,7 @@ const DEFAULT_VOLUME = 0.5;
  * back to DEFAULT_VOLUME for anything missing, non-numeric, or out of
  * range. Takes the raw value as a parameter rather than reading
  * localStorage internally, so the parsing logic itself is pure and
- * testable independent of the browser API - same pattern as
- * pickPlayerColor taking a random value as a parameter.
+ * testable independent of the browser API.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function parseStoredVolume(raw: string | null): number {

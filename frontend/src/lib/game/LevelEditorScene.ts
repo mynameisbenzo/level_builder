@@ -13,9 +13,11 @@ import {
 	TILES_ATLAS_KEY
 } from './atlases';
 import {
-	ensurePlayerColor,
+	ensureStartingPlayerColor,
 	getCharacterSwapObjectFrame,
+	getPlayerHudFrame,
 	PLAYER_COLORS,
+	setStartingPlayerColor,
 	type PlayerColor
 } from './playerColor';
 import { getPlayerPoseConfig, PLAYER_DISPLAY_SIZE } from './playerPose';
@@ -141,6 +143,17 @@ export class LevelEditorScene extends Phaser.Scene {
 	}[] = [];
 	private placedSwapObjectImages: Phaser.GameObjects.Image[] = [];
 
+	// Starting-character picker - a standalone toolbar button, not an
+	// EditorTool (it doesn't change what clicking in the level does; it
+	// just sets a level-wide value directly).
+	private startingCharacterButtonIcon!: Phaser.GameObjects.Image;
+	private isStartingCharacterPickerOpen = false;
+	private startingCharacterSwatches: {
+		color: PlayerColor;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
+
 	constructor() {
 		super('LevelEditorScene');
 	}
@@ -170,6 +183,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.createUiModeToggle();
 		this.createStyleToolbar();
 		this.createCharacterSwapToolbar();
+		this.createStartingCharacterToolbar();
 		this.refreshStylePickerVisibility();
 
 		this.refreshSwapObjectImages();
@@ -281,7 +295,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const screenCenter = { x: this.scale.width / 2, y: this.scale.height / 2 };
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, screenCenter);
 
-		const playerColor = ensurePlayerColor(this);
+		const playerColor = ensureStartingPlayerColor(this);
 		this.playerObject = this.add
 			.image(
 				spawnPosition.x,
@@ -396,7 +410,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createToolsToolbar() {
 		const spacing = 56;
-		const startX = this.scale.width / 2 - spacing;
+		const startX = this.scale.width / 2 - spacing * 1.5;
 		const y = 24;
 
 		const selectBorder = this.add.rectangle(startX, y, 40, 32).setStrokeStyle(2, 0x666666);
@@ -426,6 +440,17 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setInteractive({ useHandCursor: true });
 		swapIcon.on('pointerdown', () => this.setEditorTool('characterSwap'));
 		this.toolButtons.push({ tool: 'characterSwap', hitArea: swapIcon, border: swapBorder });
+
+		// Starting-character picker - not an EditorTool, so it isn't
+		// pushed into toolButtons/refreshToolHighlight; its icon reflects
+		// whichever color is currently chosen instead of a fixed one.
+		const startingCharX = startX + spacing * 3;
+		this.add.rectangle(startingCharX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		this.startingCharacterButtonIcon = this.add
+			.image(startingCharX, y, TILES_ATLAS_KEY, getPlayerHudFrame(ensureStartingPlayerColor(this)))
+			.setDisplaySize(24, 24)
+			.setInteractive({ useHandCursor: true });
+		this.startingCharacterButtonIcon.on('pointerdown', () => this.toggleStartingCharacterPicker());
 
 		this.refreshToolHighlight();
 	}
@@ -557,7 +582,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	private refreshCharacterSwapToolbarVisibility() {
 		const isToolActive = this.getEditorTool() === 'characterSwap';
 		const availableColors = new Set(
-			getAvailableSwapColors(this.getPlacedSwapObjects(), ensurePlayerColor(this))
+			getAvailableSwapColors(this.getPlacedSwapObjects(), ensureStartingPlayerColor(this))
 		);
 
 		for (const swatch of this.characterSwapSwatches) {
@@ -583,7 +608,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	private selectSwapColor(color: PlayerColor) {
 		const availableColors = getAvailableSwapColors(
 			this.getPlacedSwapObjects(),
-			ensurePlayerColor(this)
+			ensureStartingPlayerColor(this)
 		);
 		if (!availableColors.includes(color)) {
 			// Shouldn't be reachable (the swatch is disabled), but defensive
@@ -603,7 +628,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		// Re-check availability at placement time, not just at
 		// color-selection time, in case something else changed the
 		// placed set in between (defensive, not expected in practice).
-		if (!getAvailableSwapColors(existing, ensurePlayerColor(this)).includes(this.selectedSwapColor)) {
+		if (!getAvailableSwapColors(existing, ensureStartingPlayerColor(this)).includes(this.selectedSwapColor)) {
 			this.selectedSwapColor = null;
 			this.refreshCharacterSwapToolbarVisibility();
 			return;
@@ -628,6 +653,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.selectedSwapColor = null;
 		this.refreshSwapObjectImages();
 		this.refreshCharacterSwapToolbarVisibility();
+		this.refreshStartingCharacterPickerVisibility();
 	}
 
 	/**
@@ -669,7 +695,97 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, updated);
 		this.refreshSwapObjectImages();
 		// Erasing an object frees up its color - reflect that immediately
-		// if the character-swap toolbar happens to be open.
+		// if either color-picker toolbar happens to be open.
+		this.refreshCharacterSwapToolbarVisibility();
+		this.refreshStartingCharacterPickerVisibility();
+	}
+
+	// ── Starting-character picker ───────────────────────────────────────
+
+	private toggleStartingCharacterPicker() {
+		this.isStartingCharacterPickerOpen = !this.isStartingCharacterPickerOpen;
+		if (this.isStartingCharacterPickerOpen) {
+			// Mutually exclusive with the other bottom-row sub-toolbars -
+			// both clearing any active selection (closes the style picker)
+			// and switching to Select (closes the character-swap picker,
+			// if that was the active tool).
+			this.setActiveGroup(null);
+			this.setEditorTool('select');
+		}
+		this.refreshStartingCharacterPickerVisibility();
+	}
+
+	private createStartingCharacterToolbar() {
+		const swatchSize = 40;
+		const spacing = 10;
+		const totalWidth =
+			PLAYER_COLORS.length * swatchSize + (PLAYER_COLORS.length - 1) * spacing;
+		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
+		const y = this.scale.height - 40;
+
+		this.startingCharacterSwatches = PLAYER_COLORS.map((color, index) => {
+			const x = startX + index * (swatchSize + spacing);
+
+			const border = this.add
+				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+				.setStrokeStyle(3, 0x666666);
+
+			const image = this.add
+				.image(x, y, TILES_ATLAS_KEY, getPlayerHudFrame(color))
+				.setDisplaySize(swatchSize, swatchSize)
+				.setInteractive({ useHandCursor: true });
+
+			image.on('pointerdown', () => this.selectStartingCharacterColor(color));
+
+			return { color, image, border };
+		});
+
+		this.refreshStartingCharacterPickerVisibility();
+	}
+
+	/**
+	 * Shows the color swatches only while the picker is open. A color
+	 * already used by a placed swap object is dimmed and disabled - it
+	 * can't become the starting color without first freeing it up (by
+	 * erasing that object), since a level's starting color and its swap
+	 * objects' colors must always be distinct.
+	 */
+	private refreshStartingCharacterPickerVisibility() {
+		const currentColor = ensureStartingPlayerColor(this);
+		const usedByObjects = new Set(this.getPlacedSwapObjects().map((object) => object.color));
+
+		for (const swatch of this.startingCharacterSwatches) {
+			swatch.image.setVisible(this.isStartingCharacterPickerOpen);
+			swatch.border.setVisible(this.isStartingCharacterPickerOpen);
+
+			const isTakenByObject = usedByObjects.has(swatch.color) && swatch.color !== currentColor;
+			if (this.isStartingCharacterPickerOpen && !isTakenByObject) {
+				swatch.image.setInteractive({ useHandCursor: true });
+				swatch.image.setAlpha(1);
+			} else {
+				swatch.image.disableInteractive();
+				swatch.image.setAlpha(this.isStartingCharacterPickerOpen ? 0.3 : 1);
+			}
+
+			swatch.border.setStrokeStyle(3, swatch.color === currentColor ? 0xffd23f : 0x666666);
+		}
+	}
+
+	private selectStartingCharacterColor(color: PlayerColor) {
+		const usedByObjects = new Set(this.getPlacedSwapObjects().map((object) => object.color));
+		if (usedByObjects.has(color) && color !== ensureStartingPlayerColor(this)) {
+			// Shouldn't be reachable (the swatch is disabled), but
+			// defensive against any state drift.
+			return;
+		}
+
+		setStartingPlayerColor(this, color);
+		this.isStartingCharacterPickerOpen = false;
+		this.refreshStartingCharacterPickerVisibility();
+		this.startingCharacterButtonIcon.setTexture(TILES_ATLAS_KEY, getPlayerHudFrame(color));
+		this.playerObject.setTexture(CHARACTERS_ATLAS_KEY, getPlayerPoseConfig(color).idle.frame);
+		// The newly-chosen starting color must now be excluded from
+		// character-swap-object placement too.
 		this.refreshCharacterSwapToolbarVisibility();
 	}
 

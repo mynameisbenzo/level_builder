@@ -34,8 +34,33 @@ import {
 	isWithinSwapRange,
 	type CharacterSwapObject
 } from './characterSwapObjects';
+import {
+	canOpenDoor,
+	DOOR_OBJECTS_REGISTRY_KEY,
+	getDoorClosedFrame,
+	getDoorOpenFrame,
+	isNearDoor,
+	type DoorObject
+} from './winConditions';
+import {
+	getKeyFrame,
+	isNearKey,
+	KEY_OBJECTS_REGISTRY_KEY,
+	type KeyColor,
+	type KeyObject
+} from './keys';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
+import {
+	ensureCameraMode,
+	getQuadrantCenter,
+	getQuadrantIndex,
+	VIEWPORT_HEIGHT,
+	VIEWPORT_WIDTH,
+	WORLD_HEIGHT,
+	WORLD_WIDTH,
+	type CameraMode
+} from './camera';
 import {
 	DEFAULT_PLAYER_POSITION,
 	EDITOR_PLAYER_POSITION_KEY,
@@ -80,6 +105,68 @@ const SWAP_REACTIVATE_OVERSHOOT_DURATION_MS = 200;
 const SWAP_REACTIVATE_SETTLE_DURATION_MS = 150;
 const HUD_PORTRAIT_SIZE = 48;
 
+// Doors: stationary, two-tile-tall, so a bigger interaction radius than
+// the small floating swap objects feels appropriate - the whole point is
+// a large, easy-to-reach target once the player arrives.
+const DOOR_INTERACTION_DISTANCE = 32;
+// How long "Level Cleared!" stays on screen before returning to the
+// Editor.
+const WIN_DISPLAY_DURATION_MS = 2000;
+
+// Explicit render depths (Phaser defaults everything to 0 and draws by
+// creation order otherwise, which put doors - created after the player -
+// visually in front of it). Ground tiles, doors, and swap objects all
+// stay at the default depth (0); the player renders above them; HUD
+// elements render above the player. This scene has no camera scrolling,
+// so world and screen coordinates share the same space - without an
+// explicit HUD depth, the player could walk under and visually obscure
+// the top-left HUD.
+const PLAYER_DEPTH = 1;
+const HUD_DEPTH = 10;
+// Collected keys render above the player (visible trailing behind them),
+// but below the fixed-screen HUD.
+const KEY_FOLLOW_DEPTH = PLAYER_DEPTH + 1;
+
+// Keys bob continuously (collected or not), same sine-wave approach in
+// both states rather than a tween - a tween fights for control once a
+// collected key also needs to be manually repositioned every frame to
+// follow the trailing chain (see updateKeys).
+const KEY_BOB_AMPLITUDE = 6;
+const KEY_BOB_PERIOD_MS = 1600;
+// Uncollected keys render at a full grid tile, matching every other
+// placed object; once carried, a smaller size reads better as a held
+// item trailing behind the player rather than a world object.
+const KEY_COLLECTED_DISPLAY_SIZE = 24;
+// How many frames of delay separate each link in the trailing chain of
+// collected keys - the first collected key trails this many frames
+// behind the player's own path, the second trails that far behind the
+// first, and so on. Tune for a tighter or looser-looking chain.
+const KEY_TRAIL_SPACING_FRAMES = 10;
+// At most 4 keys can ever exist (one per KEY_COLORS entry) - caps how
+// much position history needs to be retained.
+const MAX_POSSIBLE_KEYS = 4;
+
+// How long the camera takes to pan to a new quadrant's center in
+// 'quadrant' camera mode. Linear easing specifically (not eased) - a
+// constant-speed pan, not an accelerate/decelerate curve.
+const QUADRANT_TRANSITION_DURATION_MS = 500;
+
+interface TrackedDoor {
+	data: DoorObject;
+	sprite: Phaser.GameObjects.Image;
+	/** Runtime-only, like the door's existence in Play mode at all - a
+	 * door always starts closed each session (see winConditions.ts). */
+	isOpen: boolean;
+}
+
+interface TrackedKey {
+	data: KeyObject;
+	sprite: Phaser.Physics.Arcade.Sprite;
+	/** Runtime-only, like a door's isOpen - a key always starts
+	 * uncollected each session (see keys.ts). */
+	isCollected: boolean;
+}
+
 interface TrackedSwapObject {
 	data: CharacterSwapObject;
 	sprite: Phaser.GameObjects.Image;
@@ -104,6 +191,27 @@ export class PlatformerScene extends Phaser.Scene {
 	private playerPoseConfig!: ReturnType<typeof getPlayerPoseConfig>;
 	private hudPortrait!: Phaser.GameObjects.Image;
 	private swapObjects: TrackedSwapObject[] = [];
+	private doors: TrackedDoor[] = [];
+	private keys: TrackedKey[] = [];
+	private uncollectedKeysGroup!: Phaser.Physics.Arcade.Group;
+	/** Which key colors the player currently holds - runtime-only, reset
+	 * every fresh Play session, same principle as everything else that
+	 * shouldn't leak between sessions (see the create() reset block). */
+	private collectedKeyColors = new Set<KeyColor>();
+	/** Keys in the order they were collected (not placement order) -
+	 * drives the trailing-chain position, where the Nth collected key
+	 * follows KEY_TRAIL_SPACING_FRAMES * N frames behind the player. */
+	private collectedKeysInOrder: TrackedKey[] = [];
+	/** Recent player positions, oldest first, used to compute each
+	 * trailing key's delayed target position. Trimmed each frame to the
+	 * longest delay any currently-collected key could need. */
+	private playerPositionHistory: { x: number; y: number }[] = [];
+	private hasWon = false;
+	private cameraMode!: CameraMode;
+	/** Only meaningful in 'quadrant' mode - which quadrant the camera is
+	 * currently centered on, so update() can detect when the player has
+	 * crossed into a different one. */
+	private currentQuadrantIndex = 0;
 	private wasPadJumpButtonDown = false;
 	private wasTouchJumpDown = false;
 	private gamepadStatusText!: Phaser.GameObjects.Text;
@@ -121,6 +229,22 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	create() {
+		// Phaser reuses this same scene instance every time Play mode is
+		// (re)entered rather than constructing a fresh one - field
+		// declarations' default values (e.g. `hasWon = false`) only apply
+		// once, at the object's true construction, not on a later
+		// create() re-run. Anything that needs "fresh session" semantics
+		// has to be explicitly reset here. Forgetting this for hasWon
+		// specifically was a real bug: winning once left it permanently
+		// true, so update() would return on its very first line - no
+		// movement, not even Tab - on every session after the first win.
+		this.hasWon = false;
+		this.wasPadJumpButtonDown = false;
+		this.wasTouchJumpDown = false;
+		this.collectedKeyColors = new Set();
+		this.collectedKeysInOrder = [];
+		this.playerPositionHistory = [];
+
 		currentMode.set(CURRENT_MODE);
 
 		this.physics.world.gravity.y = GRAVITY_Y;
@@ -131,6 +255,10 @@ export class PlatformerScene extends Phaser.Scene {
 		// body's own checkCollision (which governs body-to-body collisions,
 		// not world-bounds collisions).
 		this.physics.world.checkCollision.down = false;
+
+		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+		this.cameraMode = ensureCameraMode(this);
 
 		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as
 			| PlayerPosition
@@ -151,6 +279,7 @@ export class PlatformerScene extends Phaser.Scene {
 			CHARACTERS_ATLAS_KEY,
 			this.playerPoseConfig.idle.frame
 		);
+		this.player.setDepth(PLAYER_DEPTH);
 		this.player.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE);
 		// The source frame (128x128) is bigger than our 32px hitbox AND the
 		// character art doesn't fill the frame edge-to-edge - Kenney pads
@@ -175,6 +304,17 @@ export class PlatformerScene extends Phaser.Scene {
 		this.currentPose = 'idle';
 		this.player.setCollideWorldBounds(true);
 		ensurePlayerWalkAnimation(this, playerColor);
+
+		if (this.cameraMode === 'follow') {
+			// A little smoothing (lerp < 1) reads as more polished than an
+			// exact 1:1 follow - tune toward 1 for a snappier, more
+			// immediate camera.
+			this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
+		} else {
+			this.currentQuadrantIndex = getQuadrantIndex(this.player.x, this.player.y);
+			const center = getQuadrantCenter(this.currentQuadrantIndex);
+			this.cameras.main.centerOn(center.x, center.y);
+		}
 
 		this.platforms = this.physics.add.staticGroup();
 		const placedObjects =
@@ -237,6 +377,47 @@ export class PlatformerScene extends Phaser.Scene {
 			return { data, sprite, bobTween, onCooldown: false };
 		});
 
+		const doorsData =
+			(this.registry.get(DOOR_OBJECTS_REGISTRY_KEY) as DoorObject[] | undefined) ?? [];
+
+		// Doors are stationary (no bobbing tween needed) and always start
+		// closed - see the TrackedDoor.isOpen comment for why that's
+		// runtime-only rather than read from the registry.
+		this.doors = doorsData.map((data) => {
+			const sprite = this.add
+				.image(data.x, data.y, TILES_ATLAS_KEY, getDoorClosedFrame(data.requiresKey))
+				.setDisplaySize(GRID_SIZE, GRID_SIZE);
+
+			return { data: { ...data }, sprite, isOpen: false };
+		});
+
+		const keysData =
+			(this.registry.get(KEY_OBJECTS_REGISTRY_KEY) as KeyObject[] | undefined) ?? [];
+
+		// Keys use a real physics body and Arcade overlap detection
+		// (rather than the distance-check pattern doors/swap objects use)
+		// since collection specifically requires the player to touch one,
+		// not just be nearby. Gravity is disabled so a key doesn't fall;
+		// using overlap (not a collider) means nothing physically blocks
+		// movement, matching "will not collide with anything."
+		this.uncollectedKeysGroup = this.physics.add.group();
+		this.keys = keysData.map((data) => {
+			const sprite = this.physics.add.sprite(data.x, data.y, TILES_ATLAS_KEY, getKeyFrame(data.color));
+			sprite.setDisplaySize(GRID_SIZE, GRID_SIZE);
+			const body = sprite.body as Phaser.Physics.Arcade.Body;
+			body.setAllowGravity(false);
+			this.uncollectedKeysGroup.add(sprite);
+
+			return { data: { ...data }, sprite, isCollected: false };
+		});
+
+		this.physics.add.overlap(this.player, this.uncollectedKeysGroup, (_player, keySprite) => {
+			const tracked = this.keys.find((key) => key.sprite === keySprite);
+			if (tracked && !tracked.isCollected) {
+				this.collectKey(tracked);
+			}
+		});
+
 		if (!this.input.keyboard) {
 			throw new Error('Keyboard input plugin is not available');
 		}
@@ -264,16 +445,23 @@ export class PlatformerScene extends Phaser.Scene {
 				TILES_ATLAS_KEY,
 				getPlayerHudFrame(playerColor)
 			)
-			.setDisplaySize(HUD_PORTRAIT_SIZE, HUD_PORTRAIT_SIZE);
+			.setDisplaySize(HUD_PORTRAIT_SIZE, HUD_PORTRAIT_SIZE)
+			.setDepth(HUD_DEPTH)
+			.setScrollFactor(0);
 
-		this.add.text(68, 26, 'Tab: switch to Edit Mode', {
-			font: '14px monospace',
-			color: '#aaaaaa'
-		});
+		this.add
+			.text(68, 26, 'Tab: switch to Edit Mode', {
+				font: '14px monospace',
+				color: '#aaaaaa'
+			})
+			.setDepth(HUD_DEPTH)
+			.setScrollFactor(0);
 
 		this.gamepadStatusText = this.add
 			.text(10, 68, '', { font: '14px monospace', color: '#ffffff' })
-			.setAlpha(0);
+			.setAlpha(0)
+			.setDepth(HUD_DEPTH)
+			.setScrollFactor(0);
 
 		this.input.gamepad?.on('connected', (pad: Phaser.Input.Gamepad.Gamepad) => {
 			this.showGamepadStatus(`Gamepad connected: ${pad.id}`);
@@ -413,7 +601,142 @@ export class PlatformerScene extends Phaser.Scene {
 		});
 	}
 
-	update(_time: number, delta: number) {
+	/**
+	 * Opens a door: swaps both halves to their open frames and triggers
+	 * the win state. Opening a door *is* the win condition for this
+	 * first pass - there's no separate "walk through it" step.
+	 */
+	private openDoor(door: TrackedDoor) {
+		door.isOpen = true;
+		door.sprite.setTexture(TILES_ATLAS_KEY, getDoorOpenFrame(door.data.requiresKey));
+		this.triggerWin();
+	}
+
+	/**
+	 * Marks a key as collected: removes it from overlap checking (so it
+	 * can't be "collected" again), shrinks it to its carried size, moves
+	 * it above the player in the render order, records its color as held
+	 * (for canOpenDoor checks), and appends it to the trailing-chain
+	 * order (see updateKeys).
+	 */
+	private collectKey(key: TrackedKey) {
+		key.isCollected = true;
+		this.uncollectedKeysGroup.remove(key.sprite, false, false);
+		key.sprite.disableBody(false, false);
+		key.sprite.setDisplaySize(KEY_COLLECTED_DISPLAY_SIZE, KEY_COLLECTED_DISPLAY_SIZE);
+		key.sprite.setDepth(KEY_FOLLOW_DEPTH);
+		this.collectedKeyColors.add(key.data.color);
+		this.collectedKeysInOrder.push(key);
+		playSfx(this, 'key');
+	}
+
+	/**
+	 * Positions every key each frame: uncollected keys bob in place at
+	 * their placed position; collected keys form a trailing chain behind
+	 * the player, each one following a delayed sample of the player's own
+	 * recent path (not a fixed offset) - the Nth collected key trails
+	 * KEY_TRAIL_SPACING_FRAMES * N frames behind, so the chain visibly
+	 * follows wherever the player actually walked, including turns and
+	 * jumps.
+	 */
+	private updateKeys(time: number) {
+		const bobOffset = Math.sin((time / KEY_BOB_PERIOD_MS) * Math.PI * 2) * KEY_BOB_AMPLITUDE;
+
+		this.playerPositionHistory.push({ x: this.player.x, y: this.player.y });
+		const maxHistoryLength =
+			KEY_TRAIL_SPACING_FRAMES * Math.min(this.collectedKeysInOrder.length, MAX_POSSIBLE_KEYS) + 1;
+		while (this.playerPositionHistory.length > maxHistoryLength) {
+			this.playerPositionHistory.shift();
+		}
+
+		this.collectedKeysInOrder.forEach((key, index) => {
+			const delayFrames = KEY_TRAIL_SPACING_FRAMES * (index + 1);
+			const historyIndex = this.playerPositionHistory.length - 1 - delayFrames;
+			const target =
+				this.playerPositionHistory[Math.max(0, historyIndex)] ??
+				this.playerPositionHistory[0];
+			key.sprite.setPosition(target.x, target.y + bobOffset);
+		});
+
+		for (const key of this.keys) {
+			if (!key.isCollected) {
+				// body.reset() rather than sprite.setPosition() - the key
+				// still has an active physics body (needed for overlap
+				// detection), and setPosition() alone doesn't stop Arcade
+				// Physics from separately integrating gravity/velocity onto
+				// the body each step and overwriting our manual position.
+				// reset() moves both the sprite and the body together and
+				// zeroes velocity, so nothing is left to drift. This was
+				// the actual cause of keys slowly sinking off-screen.
+				const body = key.sprite.body as Phaser.Physics.Arcade.Body;
+				body.reset(key.data.x, key.data.y + bobOffset);
+			}
+		}
+	}
+
+	/**
+	 * In 'quadrant' camera mode, checks whether the player has crossed
+	 * into a different quadrant this frame and, if so, pans the camera
+	 * there with a linear (constant-speed) tween. No-op in 'follow' mode
+	 * - that camera tracks the player continuously via startFollow
+	 * instead, set up once in create().
+	 */
+	private updateQuadrantCamera() {
+		if (this.cameraMode !== 'quadrant') {
+			return;
+		}
+
+		const quadrant = getQuadrantIndex(this.player.x, this.player.y);
+		if (quadrant === this.currentQuadrantIndex) {
+			return;
+		}
+		this.currentQuadrantIndex = quadrant;
+
+		const center = getQuadrantCenter(quadrant);
+		this.tweens.add({
+			targets: this.cameras.main,
+			scrollX: center.x - VIEWPORT_WIDTH / 2,
+			scrollY: center.y - VIEWPORT_HEIGHT / 2,
+			duration: QUADRANT_TRANSITION_DURATION_MS,
+			ease: 'Linear'
+		});
+	}
+
+	/**
+	 * Freezes the player, shows a brief "Level Cleared!" message, and
+	 * returns to the Editor after a short delay. update() checks hasWon
+	 * first thing and returns early once true, so nothing else (movement,
+	 * jumping, falling off screen, Tab) can interrupt this once it starts.
+	 */
+	private triggerWin() {
+		this.hasWon = true;
+		this.player.setVelocity(0, 0);
+		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+		if (body) {
+			body.allowGravity = false;
+		}
+		playSfx(this, 'win');
+
+		this.add
+			.text(this.scale.width / 2, this.scale.height / 2, 'Level Cleared!', {
+				font: '32px monospace',
+				color: '#ffd23f'
+			})
+			.setOrigin(0.5)
+			.setDepth(HUD_DEPTH)
+			.setScrollFactor(0);
+
+		this.time.delayedCall(WIN_DISPLAY_DURATION_MS, () => {
+			const nextMode = toggleMode(CURRENT_MODE);
+			this.scene.start(getSceneKeyForMode(nextMode));
+		});
+	}
+
+	update(time: number, delta: number) {
+		if (this.hasWon) {
+			return;
+		}
+
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
 			clearModeTogglePressed();
 			const nextMode = toggleMode(CURRENT_MODE);
@@ -421,12 +744,15 @@ export class PlatformerScene extends Phaser.Scene {
 			return;
 		}
 
-		if (hasFallenOffScreen(this.player.y, this.scale.height, FALL_OFF_SCREEN_THRESHOLD_PX)) {
+		if (hasFallenOffScreen(this.player.y, WORLD_HEIGHT, FALL_OFF_SCREEN_THRESHOLD_PX)) {
 			playSfx(this, 'death');
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;
 		}
+
+		this.updateKeys(time);
+		this.updateQuadrantCamera();
 
 		for (const swapObject of this.swapObjects) {
 			if (
@@ -531,10 +857,35 @@ export class PlatformerScene extends Phaser.Scene {
 			Phaser.Input.Keyboard.JustDown(this.arrows.up) ||
 			padJumpJustPressed ||
 			touchJumpJustPressed;
-		const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
-		if (velocityY !== null) {
-			this.player.setVelocityY(velocityY);
-			playSfx(this, 'jump');
+
+		// Door interaction uses the same "up" input as jumping - pressing
+		// up while near a closed door opens it instead of jumping, rather
+		// than doing both at once, which would feel like an unintended
+		// hop right as the door opens. Key-required doors are skipped
+		// here entirely (canOpenDoor) - they can't be opened at all until
+		// key-collection exists, so standing near one and pressing Up
+		// just jumps normally rather than silently doing nothing.
+		let openedDoorThisFrame = false;
+		if (jumpJustPressed) {
+			for (const door of this.doors) {
+				if (
+					!door.isOpen &&
+					canOpenDoor(door.data, this.collectedKeyColors) &&
+					isNearDoor(this.player.x, this.player.y, door.data, DOOR_INTERACTION_DISTANCE)
+				) {
+					this.openDoor(door);
+					openedDoorThisFrame = true;
+					break;
+				}
+			}
+		}
+
+		if (!openedDoorThisFrame) {
+			const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
+			if (velocityY !== null) {
+				this.player.setVelocityY(velocityY);
+				playSfx(this, 'jump');
+			}
 		}
 
 		// Variable jump height: if jump isn't currently held and the player

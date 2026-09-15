@@ -293,7 +293,7 @@ manual gating required.
       only removes ground tiles right now; there's no way to delete a
       placed swap object once it's down. A natural, contained extension
       of the existing eraser.
-- [ ] **Animated HUD portrait transition** — done (see above); leaving
+- [x] **Animated HUD portrait transition** — done (see above); leaving
       this line struck through in spirit, no longer a TODO.
 - [ ] **Manual character selection** — currently the player's color is
       randomized once per session (see `pickPlayerColor`); let the user

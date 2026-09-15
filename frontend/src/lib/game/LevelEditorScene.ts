@@ -28,6 +28,26 @@ import {
 	type CharacterSwapObject
 } from './characterSwapObjects';
 import {
+	canPlaceDoorAt,
+	DEFAULT_REQUIRED_KEY_COLOR,
+	DOOR_KEY_REQUIRED_CLOSED_FRAME,
+	DOOR_NO_KEY_CLOSED_FRAME,
+	DOOR_OBJECTS_REGISTRY_KEY,
+	getDoorClosedFrame,
+	removeDoorAt,
+	setDoorRequiredKeyColor,
+	type DoorObject
+} from './winConditions';
+import {
+	canPlaceKeyAt,
+	getKeyFrame,
+	KEY_COLORS,
+	KEY_OBJECTS_REGISTRY_KEY,
+	removeKeyAt,
+	type KeyColor,
+	type KeyObject
+} from './keys';
+import {
 	DEFAULT_GROUND_TILE_STYLE,
 	getGroupFrames,
 	GROUND_TILE_FRAME_SETS,
@@ -38,6 +58,7 @@ import {
 	type PositionedTile
 } from './groundTiling';
 import {
+	DEFAULT_PLAYER_POSITION,
 	EDITOR_PLAYER_POSITION_KEY,
 	resolveInitialPlayerPosition,
 	type PlayerPosition
@@ -59,10 +80,40 @@ import {
 import { DEFAULT_EDITOR_TOOL, EDITOR_TOOL_REGISTRY_KEY, EDITOR_TOOLS, type EditorTool } from './tools';
 import { clearModeTogglePressed, touchInputState } from './touchInput';
 import { currentMode } from './currentMode';
+import {
+	CAMERA_MODES,
+	clampScroll,
+	ensureCameraMode,
+	getEdgeScrollVelocity,
+	getQuadrantCenter,
+	setCameraMode,
+	VIEWPORT_HEIGHT,
+	VIEWPORT_WIDTH,
+	WORLD_HEIGHT,
+	WORLD_WIDTH,
+	type CameraMode
+} from './camera';
 
 const CURRENT_MODE: GameMode = 'edit';
 const GRID_COLOR = 0x333344;
 const BACKGROUND_COLOR = 0x14141f;
+
+// Mouse-based edge-scroll panning, active only in 'navigate' interaction
+// mode (see EditorInteractionMode) - hovering within this many pixels of
+// a viewport edge scrolls the camera in that direction, continuously, at
+// this speed. No animation involved (unlike Play mode's quadrant snap),
+// just a direct per-frame scroll while the pointer stays near an edge.
+const EDGE_SCROLL_THRESHOLD_PX = 50;
+const EDGE_SCROLL_SPEED_PX_PER_SEC = 400;
+
+// A small, fixed guard around the toolbar content itself (not tied to
+// edge-scroll math at all now that the two are mutually exclusive by
+// mode) - clicking in the gaps between toolbar buttons, or near but not
+// exactly on one, should never fall through to world placement/erasure
+// underneath. Sized to the toolbars' actual content, with a little
+// margin, not to any scroll-trigger distance.
+const TOP_UI_GUARD_HEIGHT = 100;
+const BOTTOM_UI_GUARD_HEIGHT = 70;
 
 /**
  * Which UI the user prefers for changing a selected platform's style.
@@ -81,11 +132,31 @@ function createGroupId(): string {
 	return crypto.randomUUID();
 }
 
+// What's currently armed for placement via the win-condition toolbar -
+// either flavor of door, or one of the four key colors.
+type PlaceableWinConditionItem =
+	| { kind: 'door'; requiresKey: boolean }
+	| { kind: 'key'; color: KeyColor };
+
+/**
+ * The two top-level interaction modes, mutually exclusive by design so
+ * camera panning and world editing never compete for the same mouse
+ * input. 'edit' (the default) behaves like the Editor always has -
+ * clicking places/erases/selects, no camera movement. 'navigate' is the
+ * opposite - hovering near a viewport edge pans the camera, and nothing
+ * places/erases/selects while it's active. Not persisted - always
+ * starts fresh as 'edit' each time the Editor is (re)entered, same
+ * reasoning as PlatformerScene's session-only runtime state (see its
+ * hasWon comment).
+ */
+type EditorInteractionMode = 'edit' | 'navigate';
+
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
 	private playerObject!: Phaser.GameObjects.Image;
 	private isInstructionsModalOpen = false;
-	private instructionsModalElements: Phaser.GameObjects.GameObject[] = [];
+	private instructionsModalElements: (Phaser.GameObjects.GameObject &
+		Phaser.GameObjects.Components.ScrollFactor)[] = [];
 
 	// Drag placement state. Orientation is undetermined at the start of a
 	// gesture and locks to whichever axis the pointer first moves along -
@@ -131,10 +202,55 @@ export class LevelEditorScene extends Phaser.Scene {
 		border: Phaser.GameObjects.Arc;
 	}[] = [];
 
+	// Generic radial menu - shared by every picker except the style
+	// picker (which keeps its own, more specialized radial above): the
+	// character-swap, starting-character, win-condition, and
+	// door-key-color pickers all place their options in a circle around
+	// a contextual anchor point instead of a shared bottom-row toolbar,
+	// so they can never visually overlap each other or the style picker.
+	// Only one of these pickers is ever open at a time, so one shared
+	// instance is enough - each picker's own refresh method calls
+	// openGenericRadialMenu with its own items/callbacks/anchor.
+	private genericRadialCenter?: Phaser.GameObjects.Arc;
+	private genericRadialOptions: {
+		key: string;
+		swatch: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Arc;
+	}[] = [];
+
 	// UI mode toggle
 	private uiModeToggleButton!: Phaser.GameObjects.Text;
 
+	// Camera mode toggle - a level-wide setting (like starting
+	// character), not a per-object one, so it's a simple button rather
+	// than a swatch picker.
+	private cameraModeToggleButton!: Phaser.GameObjects.Text;
+
+	// Navigate/Edit interaction mode - see the EditorInteractionMode
+	// comment above. Runtime-only, not persisted (always starts as
+	// 'edit'), unlike the other toggles above which are genuine
+	// per-level settings.
+	private interactionMode: EditorInteractionMode = 'edit';
+	private interactionModeToggleButton!: Phaser.GameObjects.Text;
+	private interactionModeToggleKey!: Phaser.Input.Keyboard.Key;
+	/** Every always-on toolbar element (Instructions button, main tools
+	 * row, starting-character button, UI/camera mode toggles) - hidden
+	 * as a group while navigating, since none of them do anything useful
+	 * with the world not interactable there anyway. Does NOT include
+	 * interactionModeToggleButton itself, which must stay visible and
+	 * clickable in both modes to switch back. Swatch pickers aren't
+	 * tracked here either - they already close via
+	 * closeAllBottomRowPickers when Navigate mode is entered. */
+	private persistentToolbarElements: (Phaser.GameObjects.GameObject &
+		Phaser.GameObjects.Components.Visible)[] = [];
+
 	// Character-swap placement tool
+	/** Whether the color-swatch picker is showing. Independent of the
+	 * active tool (see closeAllBottomRowPickers) - being in the
+	 * characterSwap tool no longer implies this is open, since another
+	 * picker (e.g. door-key-color) sharing the same bottom-row space can
+	 * take over without a tool switch happening. */
+	private isCharacterSwapPickerOpen = false;
 	private selectedSwapColor: PlayerColor | null = null;
 	private characterSwapSwatches: {
 		color: PlayerColor;
@@ -154,6 +270,31 @@ export class LevelEditorScene extends Phaser.Scene {
 		border: Phaser.GameObjects.Rectangle;
 	}[] = [];
 
+	// Win-condition placement tool - doors and keys share one toolbar
+	// since keys exist specifically to unlock key-required doors.
+	/** Same independence rationale as isCharacterSwapPickerOpen above. */
+	private isWinConditionPickerOpen = false;
+	private selectedWinConditionItem: PlaceableWinConditionItem | null = null;
+	private winConditionSwatches: {
+		item: PlaceableWinConditionItem;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
+	private placedDoorImages: Phaser.GameObjects.Image[] = [];
+	private placedKeyImages: Phaser.GameObjects.Image[] = [];
+
+	// Door key-color picker - opened by clicking a placed key-required
+	// door from any non-eraser tool, to choose which key color unlocks
+	// that specific door. Shares the same bottom-row space as
+	// the other pickers, so mutual exclusivity matters here too (see
+	// setActiveGroup).
+	private selectedDoorForKeyConfig: { x: number; y: number } | null = null;
+	private doorKeyColorSwatches: {
+		color: KeyColor;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
+
 	constructor() {
 		super('LevelEditorScene');
 	}
@@ -168,25 +309,42 @@ export class LevelEditorScene extends Phaser.Scene {
 	create() {
 		currentMode.set(CURRENT_MODE);
 		this.activeGroupKeys = null;
+		this.interactionMode = 'edit';
 
+		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+		// Default framing is the bottom-left quadrant (index 2), rather
+		// than wherever the camera happens to start by default (0,0 -
+		// top-left). Independent of player spawn position; this is just
+		// the initial view before any edge-scroll panning happens.
+		const initialCenter = getQuadrantCenter(2);
+		this.cameras.main.centerOn(initialCenter.x, initialCenter.y);
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
 		const openInstructionsButton = this.add
 			.text(10, 10, '[?] Instructions', { font: '14px monospace', color: '#ffffff' })
-			.setInteractive({ useHandCursor: true });
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
 
 		openInstructionsButton.on('pointerdown', () => this.openInstructionsModal());
+		this.persistentToolbarElements.push(openInstructionsButton);
 
 		this.createToolsToolbar();
 		this.applyCursorForTool(this.getEditorTool());
 		this.createUiModeToggle();
+		this.createCameraModeToggle();
+		this.createInteractionModeToggle();
 		this.createStyleToolbar();
 		this.createCharacterSwapToolbar();
 		this.createStartingCharacterToolbar();
+		this.createWinConditionToolbar();
+		this.createDoorKeyColorPicker();
 		this.refreshStylePickerVisibility();
 
 		this.refreshSwapObjectImages();
+		this.refreshDoorImages();
+		this.refreshKeyImages();
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -198,9 +356,15 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.input.on(
 			'pointerdown',
 			(pointer: Phaser.Input.Pointer, currentlyOver: Phaser.GameObjects.GameObject[]) => {
-				if (currentlyOver.length > 0) {
-					// Clicked an existing object (e.g. the player, a tile, a
-					// button) - let its own handlers deal with it.
+				if (
+					this.interactionMode !== 'edit' ||
+					currentlyOver.length > 0 ||
+					this.isPointOverUi(pointer.x, pointer.y)
+				) {
+					// Navigating (not editing), clicked an existing object
+					// (e.g. the player, a tile, a button), or clicked
+					// somewhere within a UI strip - let its own handler deal
+					// with it, or just ignore the click.
 					return;
 				}
 
@@ -208,6 +372,11 @@ export class LevelEditorScene extends Phaser.Scene {
 
 				if (tool === 'characterSwap') {
 					this.placeSwapObjectAtPointer(pointer);
+					return;
+				}
+
+				if (tool === 'winCondition') {
+					this.placeWinConditionAtPointer(pointer);
 					return;
 				}
 
@@ -222,8 +391,8 @@ export class LevelEditorScene extends Phaser.Scene {
 				// selected before.
 				this.setActiveGroup(null);
 
-				const x = snapToGrid(pointer.x, GRID_SIZE);
-				const y = snapToGrid(pointer.y, GRID_SIZE);
+				const x = snapToGrid(pointer.worldX, GRID_SIZE);
+				const y = snapToGrid(pointer.worldY, GRID_SIZE);
 
 				this.isDragPlacing = true;
 				this.dragOrientation = 'horizontal';
@@ -237,6 +406,10 @@ export class LevelEditorScene extends Phaser.Scene {
 		);
 
 		this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+			if (this.interactionMode !== 'edit' || this.isPointOverUi(pointer.x, pointer.y)) {
+				return;
+			}
+
 			if (this.getEditorTool() === 'eraser') {
 				if (pointer.isDown) {
 					this.eraseAtPointer(pointer);
@@ -248,8 +421,8 @@ export class LevelEditorScene extends Phaser.Scene {
 				return;
 			}
 
-			const currentX = snapToGrid(pointer.x, GRID_SIZE);
-			const currentY = snapToGrid(pointer.y, GRID_SIZE);
+			const currentX = snapToGrid(pointer.worldX, GRID_SIZE);
+			const currentY = snapToGrid(pointer.worldY, GRID_SIZE);
 
 			// The drag's axis locks in on whichever direction the pointer
 			// first moves away from the anchor point - once locked, it stays
@@ -292,8 +465,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as
 			| PlayerPosition
 			| undefined;
-		const screenCenter = { x: this.scale.width / 2, y: this.scale.height / 2 };
-		const spawnPosition = resolveInitialPlayerPosition(storedPosition, screenCenter);
+		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
 		const playerColor = ensureStartingPlayerColor(this);
 		this.playerObject = this.add
@@ -309,6 +481,9 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.playerObject.on(
 			'drag',
 			(_pointer: Phaser.Input.Pointer, dragX: number, dragY: number) => {
+				if (this.interactionMode !== 'edit') {
+					return;
+				}
 				this.playerObject.setPosition(snapToGrid(dragX, GRID_SIZE), snapToGrid(dragY, GRID_SIZE));
 			}
 		);
@@ -317,9 +492,12 @@ export class LevelEditorScene extends Phaser.Scene {
 			throw new Error('Keyboard input plugin is not available');
 		}
 		this.toggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
+		this.interactionModeToggleKey = this.input.keyboard.addKey(
+			Phaser.Input.Keyboard.KeyCodes.SPACE
+		);
 	}
 
-	update() {
+	update(_time: number, delta: number) {
 		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
 			clearModeTogglePressed();
 			this.registry.set(EDITOR_PLAYER_POSITION_KEY, {
@@ -328,7 +506,70 @@ export class LevelEditorScene extends Phaser.Scene {
 			} satisfies PlayerPosition);
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
+			return;
 		}
+
+		if (Phaser.Input.Keyboard.JustDown(this.interactionModeToggleKey)) {
+			this.toggleInteractionMode();
+		}
+
+		if (this.interactionMode === 'navigate') {
+			this.updateEdgeScroll(delta);
+		}
+	}
+
+	/**
+	 * Whether a screen-space point falls within the toolbar guard region
+	 * (top toolbar row, bottom picker row, or the instructions modal
+	 * while open) - prevents a click in the gaps between buttons (or
+	 * near but not exactly on one) from falling through to world
+	 * placement/erasure underneath. No longer related to edge-scroll -
+	 * that's gated entirely by interaction mode instead (see
+	 * updateEdgeScroll).
+	 */
+	private isPointOverUi(screenX: number, screenY: number): boolean {
+		if (this.isInstructionsModalOpen) {
+			return true;
+		}
+		if (screenY <= TOP_UI_GUARD_HEIGHT) {
+			return true;
+		}
+		if (screenY >= this.scale.height - BOTTOM_UI_GUARD_HEIGHT) {
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Pans the camera when the pointer hovers near a viewport edge - a
+	 * direct, continuous scroll each frame, not an animated transition
+	 * (that's specific to Play mode's quadrant snap).
+	 */
+	private updateEdgeScroll(delta: number) {
+		const pointer = this.input.activePointer;
+
+		const velocity = getEdgeScrollVelocity(
+			pointer.x,
+			pointer.y,
+			VIEWPORT_WIDTH,
+			VIEWPORT_HEIGHT,
+			EDGE_SCROLL_THRESHOLD_PX,
+			EDGE_SCROLL_SPEED_PX_PER_SEC
+		);
+
+		if (velocity.x === 0 && velocity.y === 0) {
+			return;
+		}
+
+		const camera = this.cameras.main;
+		const clamped = clampScroll(
+			camera.scrollX + (velocity.x * delta) / 1000,
+			camera.scrollY + (velocity.y * delta) / 1000,
+			VIEWPORT_WIDTH,
+			VIEWPORT_HEIGHT
+		);
+		camera.scrollX = clamped.x;
+		camera.scrollY = clamped.y;
 	}
 
 	// ── Instructions modal ───────────────────────────────────────────────
@@ -396,6 +637,9 @@ export class LevelEditorScene extends Phaser.Scene {
 		);
 
 		this.instructionsModalElements = [backdrop, panelBg, title, closeButton, ...lineTexts];
+		for (const element of this.instructionsModalElements) {
+			element.setScrollFactor(0);
+		}
 	}
 
 	private closeInstructionsModal() {
@@ -410,47 +654,90 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createToolsToolbar() {
 		const spacing = 56;
-		const startX = this.scale.width / 2 - spacing * 1.5;
+		const startX = this.scale.width / 2 - spacing * 2;
 		const y = 24;
 
-		const selectBorder = this.add.rectangle(startX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		const selectBorder = this.add
+			.rectangle(startX, y, 40, 32)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0);
 		const selectIcon = this.add
 			.image(startX, y, SELECT_CURSOR_ICON_KEY)
 			.setDisplaySize(24, 24)
-			.setInteractive({ useHandCursor: true });
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
 		selectIcon.on('pointerdown', () => this.setEditorTool('select'));
 		this.toolButtons.push({ tool: 'select', hitArea: selectIcon, border: selectBorder });
 
 		const eraserX = startX + spacing;
-		const eraserBorder = this.add.rectangle(eraserX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		const eraserBorder = this.add
+			.rectangle(eraserX, y, 40, 32)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0);
 		const eraserIcon = this.add
 			.image(eraserX, y, ERASER_ICON_KEY)
 			.setDisplaySize(24, 24)
-			.setInteractive({ useHandCursor: true });
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
 		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
 		this.toolButtons.push({ tool: 'eraser', hitArea: eraserIcon, border: eraserBorder });
 
 		const swapX = startX + spacing * 2;
-		const swapBorder = this.add.rectangle(swapX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		const swapBorder = this.add
+			.rectangle(swapX, y, 40, 32)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0);
 		// No dedicated tool icon exists for this - reusing one color's
 		// swap-object frame as a representative icon.
 		const swapIcon = this.add
 			.image(swapX, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame('beige'))
 			.setDisplaySize(24, 24)
-			.setInteractive({ useHandCursor: true });
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
 		swapIcon.on('pointerdown', () => this.setEditorTool('characterSwap'));
 		this.toolButtons.push({ tool: 'characterSwap', hitArea: swapIcon, border: swapBorder });
+
+		const winConditionX = startX + spacing * 3;
+		const winConditionBorder = this.add
+			.rectangle(winConditionX, y, 40, 32)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0);
+		// No dedicated tool icon exists for this category either - reusing
+		// the no-key door's frame as a representative icon.
+		const winConditionIcon = this.add
+			.image(winConditionX, y, TILES_ATLAS_KEY, DOOR_NO_KEY_CLOSED_FRAME)
+			.setDisplaySize(24, 24)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
+		winConditionIcon.on('pointerdown', () => this.setEditorTool('winCondition'));
+		this.toolButtons.push({
+			tool: 'winCondition',
+			hitArea: winConditionIcon,
+			border: winConditionBorder
+		});
 
 		// Starting-character picker - not an EditorTool, so it isn't
 		// pushed into toolButtons/refreshToolHighlight; its icon reflects
 		// whichever color is currently chosen instead of a fixed one.
-		const startingCharX = startX + spacing * 3;
-		this.add.rectangle(startingCharX, y, 40, 32).setStrokeStyle(2, 0x666666);
+		const startingCharX = startX + spacing * 4;
+		const startingCharBorder = this.add
+			.rectangle(startingCharX, y, 40, 32)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0);
 		this.startingCharacterButtonIcon = this.add
 			.image(startingCharX, y, TILES_ATLAS_KEY, getPlayerHudFrame(ensureStartingPlayerColor(this)))
 			.setDisplaySize(24, 24)
-			.setInteractive({ useHandCursor: true });
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
 		this.startingCharacterButtonIcon.on('pointerdown', () => this.toggleStartingCharacterPicker());
+
+		for (const button of this.toolButtons) {
+			this.persistentToolbarElements.push(
+				button.hitArea as Phaser.GameObjects.GameObject & Phaser.GameObjects.Components.Visible,
+				button.border
+			);
+		}
+		this.persistentToolbarElements.push(startingCharBorder, this.startingCharacterButtonIcon);
 
 		this.refreshToolHighlight();
 	}
@@ -476,15 +763,16 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.registry.set(EDITOR_TOOL_REGISTRY_KEY, tool);
 		this.refreshToolHighlight();
 		this.applyCursorForTool(tool);
-		if (tool !== 'select') {
-			// Switching to a non-placement tool clears any selection, so a
-			// leftover style picker doesn't linger while erasing.
-			this.setActiveGroup(null);
+
+		this.closeAllBottomRowPickers();
+
+		if (tool === 'characterSwap') {
+			this.isCharacterSwapPickerOpen = true;
+			this.refreshCharacterSwapToolbarVisibility();
+		} else if (tool === 'winCondition') {
+			this.isWinConditionPickerOpen = true;
+			this.refreshWinConditionToolbarVisibility();
 		}
-		if (tool !== 'characterSwap') {
-			this.selectedSwapColor = null;
-		}
-		this.refreshCharacterSwapToolbarVisibility();
 	}
 
 	/**
@@ -509,10 +797,12 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * each time it's called.
 	 */
 	private eraseAtPointer(pointer: Phaser.Input.Pointer) {
-		const x = snapToGrid(pointer.x, GRID_SIZE);
-		const y = snapToGrid(pointer.y, GRID_SIZE);
+		const x = snapToGrid(pointer.worldX, GRID_SIZE);
+		const y = snapToGrid(pointer.worldY, GRID_SIZE);
 		this.eraseTile(x, y);
 		this.eraseSwapObjectAt(x, y);
+		this.eraseDoorAt(x, y);
+		this.eraseKeyAt(x, y);
 	}
 
 	private eraseTile(x: number, y: number) {
@@ -549,12 +839,14 @@ export class LevelEditorScene extends Phaser.Scene {
 
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666);
+				.setStrokeStyle(3, 0x666666)
+				.setScrollFactor(0);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(color))
 				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true });
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0);
 
 			image.on('pointerdown', () => this.selectSwapColor(color));
 
@@ -580,22 +872,22 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * placed, not just that clicking does nothing.
 	 */
 	private refreshCharacterSwapToolbarVisibility() {
-		const isToolActive = this.getEditorTool() === 'characterSwap';
+		const isOpen = this.isCharacterSwapPickerOpen;
 		const availableColors = new Set(
 			getAvailableSwapColors(this.getPlacedSwapObjects(), ensureStartingPlayerColor(this))
 		);
 
 		for (const swatch of this.characterSwapSwatches) {
-			swatch.image.setVisible(isToolActive);
-			swatch.border.setVisible(isToolActive);
+			swatch.image.setVisible(isOpen);
+			swatch.border.setVisible(isOpen);
 
 			const isAvailable = availableColors.has(swatch.color);
-			if (isToolActive && isAvailable) {
+			if (isOpen && isAvailable) {
 				swatch.image.setInteractive({ useHandCursor: true });
 				swatch.image.setAlpha(1);
 			} else {
 				swatch.image.disableInteractive();
-				swatch.image.setAlpha(isToolActive ? 0.3 : 1);
+				swatch.image.setAlpha(isOpen ? 0.3 : 1);
 			}
 
 			swatch.border.setStrokeStyle(
@@ -634,8 +926,8 @@ export class LevelEditorScene extends Phaser.Scene {
 			return;
 		}
 
-		const x = snapToGrid(pointer.x, GRID_SIZE);
-		const y = snapToGrid(pointer.y, GRID_SIZE);
+		const x = snapToGrid(pointer.worldX, GRID_SIZE);
+		const y = snapToGrid(pointer.worldY, GRID_SIZE);
 		if (existing.some((object) => object.x === x && object.y === y)) {
 			// Something (another swap object) is already exactly here.
 			return;
@@ -703,15 +995,20 @@ export class LevelEditorScene extends Phaser.Scene {
 	// ── Starting-character picker ───────────────────────────────────────
 
 	private toggleStartingCharacterPicker() {
-		this.isStartingCharacterPickerOpen = !this.isStartingCharacterPickerOpen;
 		if (this.isStartingCharacterPickerOpen) {
-			// Mutually exclusive with the other bottom-row sub-toolbars -
-			// both clearing any active selection (closes the style picker)
-			// and switching to Select (closes the character-swap picker,
-			// if that was the active tool).
-			this.setActiveGroup(null);
-			this.setEditorTool('select');
+			this.isStartingCharacterPickerOpen = false;
+			this.refreshStartingCharacterPickerVisibility();
+			return;
 		}
+		// Switching to Select closes every other bottom-row picker (via
+		// setEditorTool -> closeAllBottomRowPickers) and clears whatever
+		// was armed for placement, so clicking in the level while this is
+		// open can't accidentally place something. This has to run
+		// before setting isStartingCharacterPickerOpen true, not after -
+		// closeAllBottomRowPickers would otherwise immediately clobber it
+		// back to false.
+		this.setEditorTool('select');
+		this.isStartingCharacterPickerOpen = true;
 		this.refreshStartingCharacterPickerVisibility();
 	}
 
@@ -728,12 +1025,14 @@ export class LevelEditorScene extends Phaser.Scene {
 
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666);
+				.setStrokeStyle(3, 0x666666)
+				.setScrollFactor(0);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, getPlayerHudFrame(color))
 				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true });
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0);
 
 			image.on('pointerdown', () => this.selectStartingCharacterColor(color));
 
@@ -789,6 +1088,340 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.refreshCharacterSwapToolbarVisibility();
 	}
 
+	// ── Win-condition placement tool ────────────────────────────────────
+
+	private createWinConditionToolbar() {
+		const swatchSize = 40;
+		const spacing = 10;
+		const y = this.scale.height - 40;
+
+		const items: PlaceableWinConditionItem[] = [
+			{ kind: 'door', requiresKey: false },
+			{ kind: 'door', requiresKey: true },
+			...KEY_COLORS.map((color): PlaceableWinConditionItem => ({ kind: 'key', color }))
+		];
+		const totalWidth = items.length * swatchSize + (items.length - 1) * spacing;
+		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
+
+		this.winConditionSwatches = items.map((item, index) => {
+			const x = startX + index * (swatchSize + spacing);
+			const frame =
+				item.kind === 'door' ? getDoorClosedFrame(item.requiresKey) : getKeyFrame(item.color);
+
+			const border = this.add
+				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+				.setStrokeStyle(3, 0x666666)
+				.setScrollFactor(0);
+			const image = this.add
+				.image(x, y, TILES_ATLAS_KEY, frame)
+				.setDisplaySize(swatchSize, swatchSize)
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0);
+			image.on('pointerdown', () => this.selectWinConditionItem(item));
+
+			return { item, image, border };
+		});
+
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	private isSameWinConditionItem(
+		a: PlaceableWinConditionItem | null,
+		b: PlaceableWinConditionItem
+	): boolean {
+		if (a === null || a.kind !== b.kind) {
+			return false;
+		}
+		if (a.kind === 'door' && b.kind === 'door') {
+			return a.requiresKey === b.requiresKey;
+		}
+		if (a.kind === 'key' && b.kind === 'key') {
+			return a.color === b.color;
+		}
+		return false;
+	}
+
+	private refreshWinConditionToolbarVisibility() {
+		const isOpen = this.isWinConditionPickerOpen;
+		for (const swatch of this.winConditionSwatches) {
+			swatch.image.setVisible(isOpen);
+			swatch.border.setVisible(isOpen);
+			if (isOpen) {
+				swatch.image.setInteractive({ useHandCursor: true });
+			} else {
+				swatch.image.disableInteractive();
+			}
+			swatch.border.setStrokeStyle(
+				3,
+				this.isSameWinConditionItem(this.selectedWinConditionItem, swatch.item)
+					? 0xffd23f
+					: 0x666666
+			);
+		}
+	}
+
+	private selectWinConditionItem(item: PlaceableWinConditionItem) {
+		this.selectedWinConditionItem = item;
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	private getPlacedDoors(): DoorObject[] {
+		return (this.registry.get(DOOR_OBJECTS_REGISTRY_KEY) as DoorObject[] | undefined) ?? [];
+	}
+
+	private getPlacedKeys(): KeyObject[] {
+		return (this.registry.get(KEY_OBJECTS_REGISTRY_KEY) as KeyObject[] | undefined) ?? [];
+	}
+
+	/**
+	 * Every grid position currently occupied by anything - ground tiles,
+	 * swap objects, doors, and keys - used to check whether a new door
+	 * or key can be placed without overlapping something else. Doesn't
+	 * check the reverse direction: placing a ground tile or swap object
+	 * on top of an existing door/key isn't currently prevented, a
+	 * narrower scope than full cross-type collision checking in every
+	 * direction.
+	 */
+	private getOccupiedPositionKeys(): Set<string> {
+		const keys = new Set<string>();
+		const placedObjects =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		for (const object of placedObjects) {
+			keys.add(tileKey(object.x, object.y));
+		}
+		for (const swapObject of this.getPlacedSwapObjects()) {
+			keys.add(tileKey(swapObject.x, swapObject.y));
+		}
+		for (const door of this.getPlacedDoors()) {
+			keys.add(tileKey(door.x, door.y));
+		}
+		for (const key of this.getPlacedKeys()) {
+			keys.add(tileKey(key.x, key.y));
+		}
+		return keys;
+	}
+
+	private placeWinConditionAtPointer(pointer: Phaser.Input.Pointer) {
+		if (this.selectedWinConditionItem === null) {
+			return;
+		}
+
+		if (this.selectedWinConditionItem.kind === 'door') {
+			this.placeDoorAtPointer(pointer, this.selectedWinConditionItem.requiresKey);
+		} else {
+			this.placeKeyAtPointer(pointer, this.selectedWinConditionItem.color);
+		}
+	}
+
+	private placeDoorAtPointer(pointer: Phaser.Input.Pointer, requiresKey: boolean) {
+		const x = snapToGrid(pointer.worldX, GRID_SIZE);
+		const y = snapToGrid(pointer.worldY, GRID_SIZE);
+
+		if (!canPlaceDoorAt(x, y, this.getOccupiedPositionKeys())) {
+			return;
+		}
+
+		const updated: DoorObject[] = [
+			...this.getPlacedDoors(),
+			{
+				x,
+				y,
+				requiresKey,
+				requiredKeyColor: requiresKey ? DEFAULT_REQUIRED_KEY_COLOR : null
+			}
+		];
+		this.registry.set(DOOR_OBJECTS_REGISTRY_KEY, updated);
+
+		this.selectedWinConditionItem = null;
+		this.refreshDoorImages();
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	private placeKeyAtPointer(pointer: Phaser.Input.Pointer, color: KeyColor) {
+		const x = snapToGrid(pointer.worldX, GRID_SIZE);
+		const y = snapToGrid(pointer.worldY, GRID_SIZE);
+
+		if (!canPlaceKeyAt(x, y, this.getOccupiedPositionKeys())) {
+			return;
+		}
+
+		const updated: KeyObject[] = [...this.getPlacedKeys(), { x, y, color }];
+		this.registry.set(KEY_OBJECTS_REGISTRY_KEY, updated);
+
+		this.selectedWinConditionItem = null;
+		this.refreshKeyImages();
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	/**
+	 * Destroys and re-renders every placed door - a single static image
+	 * each, always shown closed (frame chosen per door's own type - see
+	 * getDoorClosedFrame). Doors carry no open/closed state in the
+	 * Editor's design data at all (see winConditions.ts) - they always
+	 * start closed in Play mode, so there's nothing else to reflect here.
+	 * Clicking a key-required door while Select is active opens the
+	 * key-color picker for that specific door (see
+	 * selectedDoorForKeyConfig); the door's own appearance doesn't change
+	 * per key color, since only one locked-door sprite exists.
+	 */
+	private refreshDoorImages() {
+		for (const image of this.placedDoorImages) {
+			image.destroy();
+		}
+
+		this.placedDoorImages = this.getPlacedDoors().map((door) => {
+			const image = this.add
+				.image(door.x, door.y, TILES_ATLAS_KEY, getDoorClosedFrame(door.requiresKey))
+				.setDisplaySize(GRID_SIZE, GRID_SIZE)
+				.setInteractive();
+
+			image.on('pointerdown', () => {
+				const tool = this.getEditorTool();
+				if (tool === 'eraser') {
+					this.eraseDoorAt(door.x, door.y);
+				} else if (door.requiresKey) {
+					const isSameDoor =
+						this.selectedDoorForKeyConfig?.x === door.x &&
+						this.selectedDoorForKeyConfig?.y === door.y;
+
+					this.closeAllBottomRowPickers();
+
+					if (!isSameDoor) {
+						this.selectedDoorForKeyConfig = { x: door.x, y: door.y };
+						this.refreshDoorKeyColorPickerVisibility();
+					}
+				}
+			});
+
+			return image;
+		});
+	}
+
+	private eraseDoorAt(x: number, y: number) {
+		const existing = this.getPlacedDoors();
+		const updated = removeDoorAt(existing, x, y);
+		if (updated.length === existing.length) {
+			return;
+		}
+		this.registry.set(DOOR_OBJECTS_REGISTRY_KEY, updated);
+		this.refreshDoorImages();
+		// Erasing a door may free up space another placement was blocked
+		// by.
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	/**
+	 * Destroys and re-renders every placed key - a single static image
+	 * each, always the same frame (keys have no open/closed-style state
+	 * variants). Collection is entirely a Play-mode, runtime concept (see
+	 * PlatformerScene) - the Editor always shows every placed key at its
+	 * design position, regardless of anything that happened in a
+	 * previous Play session.
+	 */
+	private refreshKeyImages() {
+		for (const image of this.placedKeyImages) {
+			image.destroy();
+		}
+
+		this.placedKeyImages = this.getPlacedKeys().map((key) => {
+			const image = this.add
+				.image(key.x, key.y, TILES_ATLAS_KEY, getKeyFrame(key.color))
+				.setDisplaySize(GRID_SIZE, GRID_SIZE)
+				.setInteractive();
+
+			image.on('pointerdown', () => {
+				if (this.getEditorTool() === 'eraser') {
+					this.eraseKeyAt(key.x, key.y);
+				}
+			});
+
+			return image;
+		});
+	}
+
+	private eraseKeyAt(x: number, y: number) {
+		const existing = this.getPlacedKeys();
+		const updated = removeKeyAt(existing, x, y);
+		if (updated.length === existing.length) {
+			return;
+		}
+		this.registry.set(KEY_OBJECTS_REGISTRY_KEY, updated);
+		this.refreshKeyImages();
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	// ── Door key-color picker ───────────────────────────────────────────
+
+	private createDoorKeyColorPicker() {
+		const swatchSize = 40;
+		const spacing = 10;
+		const totalWidth = KEY_COLORS.length * swatchSize + (KEY_COLORS.length - 1) * spacing;
+		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
+		const y = this.scale.height - 40;
+
+		this.doorKeyColorSwatches = KEY_COLORS.map((color, index) => {
+			const x = startX + index * (swatchSize + spacing);
+
+			const border = this.add
+				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+				.setStrokeStyle(3, 0x666666)
+				.setScrollFactor(0);
+			const image = this.add
+				.image(x, y, TILES_ATLAS_KEY, getKeyFrame(color))
+				.setDisplaySize(swatchSize, swatchSize)
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0);
+			image.on('pointerdown', () => this.selectDoorKeyColor(color));
+
+			return { color, image, border };
+		});
+
+		this.refreshDoorKeyColorPickerVisibility();
+	}
+
+	private refreshDoorKeyColorPickerVisibility() {
+		const isOpen = this.selectedDoorForKeyConfig !== null;
+		const currentDoor = this.selectedDoorForKeyConfig
+			? this.getPlacedDoors().find(
+					(door) =>
+						door.x === this.selectedDoorForKeyConfig!.x &&
+						door.y === this.selectedDoorForKeyConfig!.y
+				)
+			: undefined;
+
+		for (const swatch of this.doorKeyColorSwatches) {
+			swatch.image.setVisible(isOpen);
+			swatch.border.setVisible(isOpen);
+			if (isOpen) {
+				swatch.image.setInteractive({ useHandCursor: true });
+			} else {
+				swatch.image.disableInteractive();
+			}
+			const isCurrentColor = currentDoor?.requiredKeyColor === swatch.color;
+			swatch.border.setStrokeStyle(3, isCurrentColor ? 0xffd23f : 0x666666);
+		}
+	}
+
+	private selectDoorKeyColor(color: KeyColor) {
+		if (this.selectedDoorForKeyConfig === null) {
+			return;
+		}
+
+		const updated = setDoorRequiredKeyColor(
+			this.getPlacedDoors(),
+			this.selectedDoorForKeyConfig.x,
+			this.selectedDoorForKeyConfig.y,
+			color
+		);
+		this.registry.set(DOOR_OBJECTS_REGISTRY_KEY, updated);
+
+		// Deliberately not closing the picker here - it stays open so the
+		// highlight moving to the clicked swatch is actually visible.
+		// Click the door again (or switch tools/select something else) to
+		// close it.
+		this.refreshDoorKeyColorPickerVisibility();
+	}
+
 	// ── UI mode toggle (top-right) ──────────────────────────────────────
 
 	private createUiModeToggle() {
@@ -799,7 +1432,9 @@ export class LevelEditorScene extends Phaser.Scene {
 				color: '#00d9ff'
 			})
 			.setOrigin(1, 0)
-			.setInteractive({ useHandCursor: true });
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
+		this.persistentToolbarElements.push(this.uiModeToggleButton);
 
 		this.uiModeToggleButton.on('pointerdown', () => {
 			const current = this.getStylePickerMode();
@@ -815,6 +1450,70 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private uiModeLabel(mode: StylePickerMode): string {
 		return mode === 'toolbar' ? 'Style UI: Toolbar' : 'Style UI: Radial';
+	}
+
+	private createCameraModeToggle() {
+		const mode = ensureCameraMode(this);
+		this.cameraModeToggleButton = this.add
+			.text(this.scale.width - 10, 34, this.cameraModeLabel(mode), {
+				font: '14px monospace',
+				color: '#00d9ff'
+			})
+			.setOrigin(1, 0)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
+		this.persistentToolbarElements.push(this.cameraModeToggleButton);
+
+		this.cameraModeToggleButton.on('pointerdown', () => {
+			const current = ensureCameraMode(this);
+			const next: CameraMode = current === 'follow' ? 'quadrant' : 'follow';
+			setCameraMode(this, next);
+			this.cameraModeToggleButton.setText(this.cameraModeLabel(next));
+		});
+	}
+
+	private cameraModeLabel(mode: CameraMode): string {
+		return mode === 'follow' ? 'Camera: Follow' : 'Camera: Quadrant';
+	}
+
+	private createInteractionModeToggle() {
+		this.interactionModeToggleButton = this.add
+			.text(this.scale.width - 10, 58, this.interactionModeLabel(this.interactionMode), {
+				font: '14px monospace',
+				color: '#ffd23f'
+			})
+			.setOrigin(1, 0)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
+
+		this.interactionModeToggleButton.on('pointerdown', () => this.toggleInteractionMode());
+	}
+
+	private interactionModeLabel(mode: EditorInteractionMode): string {
+		return mode === 'edit' ? 'Mode: Edit (Space)' : 'Mode: Navigate (Space)';
+	}
+
+	/**
+	 * Switches between Edit (place/erase/select, no camera movement) and
+	 * Navigate (pan the camera, no world interaction) - the two are
+	 * mutually exclusive by design, so there's never a moment where
+	 * camera panning and clicking-to-place are both active and competing
+	 * for the same mouse input.
+	 */
+	private toggleInteractionMode() {
+		this.interactionMode = this.interactionMode === 'edit' ? 'navigate' : 'edit';
+		this.interactionModeToggleButton.setText(this.interactionModeLabel(this.interactionMode));
+
+		const showToolbar = this.interactionMode === 'edit';
+		for (const element of this.persistentToolbarElements) {
+			element.setVisible(showToolbar);
+		}
+		if (!showToolbar) {
+			// Entering Navigate mode - nothing toolbar-related is usable
+			// there, so close whichever swatch picker (if any) happened
+			// to be open.
+			this.closeAllBottomRowPickers();
+		}
 	}
 
 	private getStylePickerMode(): StylePickerMode {
@@ -878,12 +1577,14 @@ export class LevelEditorScene extends Phaser.Scene {
 
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666);
+				.setStrokeStyle(3, 0x666666)
+				.setScrollFactor(0);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
 				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true });
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0);
 
 			image.on('pointerdown', () => this.applyStyleToActiveGroup(style));
 
@@ -1038,6 +1739,47 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.activeGroupKeys = keys;
 		this.refreshActiveGroupBorders();
 		this.refreshStylePickerVisibility();
+		// Selecting a tile (or clearing the selection) and configuring a
+		// door's key color share the same bottom-row space - opening one
+		// closes the other.
+		this.selectedDoorForKeyConfig = null;
+		this.refreshDoorKeyColorPickerVisibility();
+		if (keys !== null) {
+			// An actual tile just got selected (not cleared) - this can
+			// happen from any tool (see refreshGroup's click handler), so
+			// it needs to close the other pickers itself rather than
+			// relying on a tool switch to have already done it.
+			this.isCharacterSwapPickerOpen = false;
+			this.refreshCharacterSwapToolbarVisibility();
+			this.isWinConditionPickerOpen = false;
+			this.refreshWinConditionToolbarVisibility();
+			this.isStartingCharacterPickerOpen = false;
+			this.refreshStartingCharacterPickerVisibility();
+		}
+	}
+
+	/**
+	 * Closes every bottom-row picker (style, character-swap,
+	 * starting-character, win-condition, door-key-color) - they all
+	 * share the same visual space. Tool switching already closes
+	 * whichever picker belonged to the previous tool (see
+	 * setEditorTool), but the door-key picker can now open from any
+	 * non-eraser tool without a tool switch happening at all, so it
+	 * needs to explicitly clear the others itself rather than relying on
+	 * that.
+	 */
+	private closeAllBottomRowPickers() {
+		this.setActiveGroup(null);
+		this.isCharacterSwapPickerOpen = false;
+		this.selectedSwapColor = null;
+		this.refreshCharacterSwapToolbarVisibility();
+		this.isStartingCharacterPickerOpen = false;
+		this.refreshStartingCharacterPickerVisibility();
+		this.isWinConditionPickerOpen = false;
+		this.selectedWinConditionItem = null;
+		this.refreshWinConditionToolbarVisibility();
+		this.selectedDoorForKeyConfig = null;
+		this.refreshDoorKeyColorPickerVisibility();
 	}
 
 	private refreshActiveGroupBorders() {
@@ -1161,15 +1903,14 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private drawGrid() {
-		const { width, height } = this.scale;
 		const graphics = this.add.graphics();
 		graphics.lineStyle(1, GRID_COLOR, 1);
 
-		for (let x = 0; x <= width; x += GRID_SIZE) {
-			graphics.lineBetween(x, 0, x, height);
+		for (let x = 0; x <= WORLD_WIDTH; x += GRID_SIZE) {
+			graphics.lineBetween(x, 0, x, WORLD_HEIGHT);
 		}
-		for (let y = 0; y <= height; y += GRID_SIZE) {
-			graphics.lineBetween(0, y, width, y);
+		for (let y = 0; y <= WORLD_HEIGHT; y += GRID_SIZE) {
+			graphics.lineBetween(0, y, WORLD_WIDTH, y);
 		}
 	}
 }

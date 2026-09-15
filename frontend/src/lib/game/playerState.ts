@@ -3,7 +3,12 @@ export interface PlayerPosition {
 	y: number;
 }
 
-export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 450 };
+// Bottom-left quadrant (matches the Editor's default camera framing -
+// see camera.ts), horizontally centered and positioned toward the
+// bottom of that quadrant (same relative spot the old top-left default
+// held within its own quadrant), so the player starts near ground level
+// rather than floating in open space.
+export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 1050 };
 export const EDITOR_PLAYER_POSITION_KEY = 'editorPlayerPosition';
 
 /**

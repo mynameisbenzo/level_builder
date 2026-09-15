@@ -14,7 +14,9 @@ import type Phaser from 'phaser';
 export const SOUND_ASSETS = {
 	jump: '/assets/kenney/platformer-pack/Sounds/sfx_jump.ogg',
 	characterSwap: '/assets/kenney/platformer-pack/Sounds/sfx_magic.ogg',
-	death: '/assets/kenney/platformer-pack/Sounds/sfx_disappear.ogg'
+	death: '/assets/kenney/platformer-pack/Sounds/sfx_disappear.ogg',
+	win: '/assets/kenney/platformer-pack/Sounds/sfx_gem.ogg',
+	key: '/assets/kenney/platformer-pack/Sounds/sfx_coin.ogg'
 } as const;
 
 export type SoundKey = keyof typeof SOUND_ASSETS;

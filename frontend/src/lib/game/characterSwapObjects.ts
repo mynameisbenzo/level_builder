@@ -69,22 +69,11 @@ export function getSwapResult(currentPlayerColor: PlayerColor, objectColor: Play
 }
 
 /**
- * Whether the player is close enough to a swap object to trigger it,
- * using simple circular distance rather than full physics-body overlap.
+ * Whether the player is close enough to a swap object to trigger it.
  * These objects bob via a visual tween rather than a physics body (a
  * tween writing the GameObject's position directly would fight an Arcade
  * body for authority over it), so a lightweight distance check is used
- * instead of a collider/overlap pair.
- * Pure function, no Phaser dependency, safe to unit test directly.
+ * instead of a collider/overlap pair - see isWithinRange in geometry.ts,
+ * shared with doors for the same reason.
  */
-export function isWithinSwapRange(
-	playerX: number,
-	playerY: number,
-	objectX: number,
-	objectY: number,
-	thresholdDistance: number
-): boolean {
-	const dx = playerX - objectX;
-	const dy = playerY - objectY;
-	return Math.sqrt(dx * dx + dy * dy) <= thresholdDistance;
-}
+export { isWithinRange as isWithinSwapRange } from './geometry';

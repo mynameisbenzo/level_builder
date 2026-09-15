@@ -27,48 +27,55 @@ level.
 > **Windows note:** this project uses `psycopg[binary]` (not `psycopg2-binary`) specifically to avoid native-compile issues on Windows. Keep the pinned version in `requirements.txt`.
 
 ## Project structure
+
+```
 level-builder/
-├── backend/ # Flask API
-│ ├── app/
-│ │ ├── main.py # create_app() factory, landing page route
-│ │ ├── config.py # Testing/Development/Production config
-│ │ ├── extensions.py # shared Flask-SQLAlchemy instance
-│ │ ├── templates/ # Jinja - portfolio landing page
-│ │ └── models/ # SQLAlchemy models
-│ ├── tests/
-│ ├── requirements.txt
-│ └── requirements-dev.txt
-├── frontend/ # SvelteKit app
-│ ├── static/assets/
-│ │ ├── kenney/ # Kenney platformer pack (sprites, tiles, sfx)
-│ │ └── icons/ # Eraser + select-tool cursor icons
-│ └── src/
-│ ├── lib/
-│ │ ├── api.ts # backend API client
-│ │ └── game/ # Phaser scenes + supporting logic:
-│ │ ├── PlatformerScene.ts # Play mode
-│ │ ├── LevelEditorScene.ts # Edit mode (default scene)
-│ │ ├── movement.ts # pure input/physics/pose logic (tested)
-│ │ ├── gridSnap.ts # grid snapping + drag fill (tested)
-│ │ ├── groundTiling.ts # auto-tiling + platform run logic (tested)
-│ │ ├── placedObjects.ts # placed-tile data, selection, group merge (tested)
-│ │ ├── characterSwapObjects.ts # floating swap-object logic (tested)
-│ │ ├── tools.ts # editor tool constants (select/eraser/characterSwap)
-│ │ ├── atlases.ts # raw texture/atlas/icon loading
-│ │ ├── playerColor.ts # player color selection + frame mappings (tested)
-│ │ ├── playerPose.ts # pose config, hitbox bounds, walk animation
-│ │ ├── sounds.ts # SFX loading, mute/volume settings (tested)
-│ │ ├── playerState.ts # position carryover (tested)
-│ │ ├── mode.ts # Play/Edit mode logic (tested)
-│ │ ├── touchInput.ts # mobile touch input state (tested)
-│ │ ├── currentMode.ts # Svelte store for active mode
-│ │ ├── TouchControls.svelte # on-screen mobile buttons
-│ │ └── LandscapeGuard.svelte # portrait-mode block screen
-│ └── routes/
-│ └── play/ # the game itself
-├── .github/workflows/ # CI: backend-ci.yml, frontend-ci.yml
-├── render.yaml # Render Blueprint (backend + frontend)
-└── .python-version # pins Python 3.10.13 via pyenv
+├── backend/                    # Flask API
+│   ├── app/
+│   │   ├── main.py              # create_app() factory, landing page route
+│   │   ├── config.py            # Testing/Development/Production config
+│   │   ├── extensions.py        # shared Flask-SQLAlchemy instance
+│   │   ├── templates/           # Jinja - portfolio landing page
+│   │   └── models/               # SQLAlchemy models
+│   ├── tests/
+│   ├── requirements.txt
+│   └── requirements-dev.txt
+├── frontend/                   # SvelteKit app
+│   ├── static/assets/
+│   │   ├── kenney/               # Kenney platformer pack (sprites, tiles, sfx)
+│   │   └── icons/                 # Eraser + select-tool cursor icons
+│   └── src/
+│       ├── lib/
+│       │   ├── api.ts                    # backend API client
+│       │   └── game/                     # Phaser scenes + supporting logic:
+│       │       ├── PlatformerScene.ts      # Play mode
+│       │       ├── LevelEditorScene.ts     # Edit mode (default scene)
+│       │       ├── movement.ts             # pure input/physics/pose logic (tested)
+│       │       ├── gridSnap.ts             # grid snapping + drag fill (tested)
+│       │       ├── groundTiling.ts         # auto-tiling + platform run logic (tested)
+│       │       ├── placedObjects.ts        # placed-tile data, selection, group merge (tested)
+│       │       ├── characterSwapObjects.ts # floating swap-object logic (tested)
+│       │       ├── winConditions.ts        # door win-condition logic (tested)
+│       │       ├── keys.ts                 # key entity logic (tested)
+│       │       ├── camera.ts               # world/viewport sizing, quadrant + edge-scroll math (tested)
+│       │       ├── geometry.ts             # shared distance-check utility (tested)
+│       │       ├── sounds.ts               # SFX loading, mute/volume settings (tested)
+│       │       ├── tools.ts                # editor tool constants
+│       │       ├── atlases.ts              # raw texture/atlas/icon loading
+│       │       ├── playerColor.ts          # player color selection + frame mappings (tested)
+│       │       ├── playerPose.ts           # pose config, hitbox bounds, walk animation
+│       │       ├── playerState.ts          # position carryover (tested)
+│       │       ├── mode.ts                 # Play/Edit mode logic (tested)
+│       │       ├── touchInput.ts           # mobile touch input state (tested)
+│       │       ├── currentMode.ts          # Svelte store for active mode
+│       │       ├── TouchControls.svelte    # on-screen mobile buttons
+│       │       └── LandscapeGuard.svelte   # portrait-mode block screen
+│       └── routes/
+│           └── play/             # the game itself
+├── .github/workflows/          # CI: backend-ci.yml, frontend-ci.yml
+├── render.yaml                 # Render Blueprint (backend + frontend)
+└── .python-version              # pins Python 3.10.13 via pyenv
+```
 
 ## Backend setup
 
@@ -126,8 +133,42 @@ connected."** (This page is due for a real overhaul - see TODOs.)
 With both servers running, visit **`localhost:5173/play`**. It opens
 directly into the **Level Editor** (Edit mode is the default scene).
 
+### World size and the camera
+
+A level ("screen") is **1600×1200** — twice the 800×600 viewport in each
+dimension, forming a fixed 2×2 grid of four quadrants, each the same size
+as the viewport itself. The viewport itself never changes size in either
+scene; what changes is how much of the (now larger) world it can show at
+once.
+
+**In Play mode**, a level has a per-level **camera mode**, chosen in the
+Editor:
+- **Follow** (the default) — the camera smoothly tracks the player
+  anywhere in the world.
+- **Quadrant** — the camera stays fixed until the player crosses into a
+  different quadrant, then pans there with a linear (constant-speed, not
+  eased) animation.
+
+**In the Editor**, switching between **Edit** and **Navigate** modes (a
+toolbar button, top-right, or press **Space**) controls what the mouse
+does:
+- **Edit** (the default) — clicking places/erases/selects, exactly as
+  described below. The camera never moves on its own.
+- **Navigate** — the toolbar hides entirely, and hovering near a
+  viewport edge pans the camera in that direction, continuously, for as
+  long as the pointer stays there. Nothing places, erases, or selects
+  while navigating.
+
+These two modes are deliberately mutually exclusive - an earlier design
+tried to let the mouse both edit *and* edge-scroll at the same time
+(guarding toolbar regions well enough to avoid conflicts), which turned
+out to be a genuinely hard problem to get right. Splitting them into
+distinct modes removed the conflict entirely instead of trying to
+reconcile it spatially.
+
 **Level Editor (Edit mode):**
-- Drag the player character to reposition it (snaps to the grid)
+- Drag the player character to reposition it (snaps to the grid) - this
+  sets the level's starting spawn point
 - Click-and-drag empty grid space to place a platform — drag horizontally
   or vertically, whichever way you move first
 - Click a platform to select it (highlights the whole thing, not just one
@@ -138,16 +179,15 @@ directly into the **Level Editor** (Edit mode is the default scene).
   [Platform grouping](#platform-grouping)
 - A style picker (toolbar by default, or a radial menu — toggle between
   them top-right) appears only while a platform is selected
-- Tools toolbar (top-center): **Select**, **Eraser**, and **Character
-  Swap** — the eraser removes ground tiles *and* placed swap objects, by
-  click or click-drag; the character-swap tool opens a row of color
-  swatches below - click an available color, then click in the level to
-  place that character's floating object (see
-  [Character swapping](#character-swapping))
-- **Starting Character** toolbar button (4th icon) — opens a row of all
-  5 color swatches; picking one sets which character the level begins
-  with in Play mode. Defaults to green. A color already used by a placed
-  swap object can't be chosen until that object is erased.
+- Tools toolbar (top-center): **Select**, **Eraser**, **Character
+  Swap**, and **Win Condition** — the eraser removes ground tiles,
+  swap objects, doors, and keys, by click or click-drag; Character Swap
+  and Win Condition each open a row of placeable options below (see
+  [Character swapping](#character-swapping) and
+  [Win conditions: doors and keys](#win-conditions-doors-and-keys))
+- **Starting Character** toolbar button — opens a row of all 5 color
+  swatches; picking one sets which character the level begins with in
+  Play mode. Defaults to green.
 - `[?] Instructions` opens a quick reference modal
 - Tab, or the on-screen ⇄ button on mobile, switches to Play mode
 
@@ -161,8 +201,9 @@ directly into the **Level Editor** (Edit mode is the default scene).
 
 Platforms built in the Editor become real, solid ground in Play mode.
 There's no ground unless you've placed some — walk/fall off the edge of
-what you've built (or off nothing at all) and falling far enough below
-the screen automatically sends you back to the Editor.
+what you've built (or off nothing at all) and falling below the bottom
+of the *world* (not just the current camera view) automatically sends
+you back to the Editor.
 
 **Player feel:**
 - Horizontal movement **accelerates and decelerates** rather than
@@ -177,9 +218,10 @@ the screen automatically sends you back to the Editor.
   driven by one pose-priority state machine (`getPlayerPose` in
   `movement.ts`) so adding a new pose later is a one-line addition, not
   a new branch of scene code
-- **Sound effects** for jumping, character swapping, and falling off a
-  level (a stand-in "disappear" sound until a purpose-made death sound
-  exists) - all from the bundled Kenney pack. Volume/mute settings
+- **Sound effects** for jumping, character swapping, collecting a key,
+  winning, and falling off a level - all from the bundled Kenney pack
+  (win and "falling off" use the closest available stand-ins, since the
+  pack has no purpose-made sounds for either). Volume/mute settings
   persist via `localStorage` (deliberately, unlike most other settings
   in this project - see Testing philosophy)
 - A **character HUD portrait** (top-left) always reflects the current
@@ -251,25 +293,80 @@ runtime state, discarded when the session ends).
 This is a foundational piece for a planned feature (see TODOs) where each
 character eventually plays differently, not just looks different.
 
+### Win conditions: doors and keys
+
+The first (and so far only) way to clear a level. Placed via the
+**Win Condition** toolbar tool, which shows six options: two door types
+and four key colors.
+
+**Doors** are single-tile, two independent types:
+- **Plain door** (`door_closed_top` / `door_open_top`) - no prerequisite.
+  Walk up and press Up to open it, which immediately clears the level:
+  a sound plays, "Level Cleared!" displays briefly, and the game returns
+  to the Editor.
+- **Key-required door** (`door_closed` / `door_open`) - needs a
+  matching-color key collected first. Defaults to requiring **yellow**
+  the moment it's placed; click a placed locked door (from any tool
+  except the eraser) to open a picker and choose a different color.
+
+**Keys** come in four colors (blue, green, red, yellow) and are
+collected by physically **touching** one (real Arcade Physics overlap,
+not just proximity) - no button press needed. An uncollected key bobs in
+place at wherever it was placed. Once collected, it joins a **trailing
+chain** behind the player: each collected key follows a delayed sample
+of the player's own recent path (not a fixed offset), so the chain
+visibly bends around corners and follows jumps rather than floating at a
+static angle. No placement cap - a level can have as many keys of each
+color as needed, since (unlike swap objects) there's no uniqueness
+invariant to protect; a door just checks whether the matching color has
+been collected at all.
+
+Pressing Up near a key-required door that hasn't been unlocked yet does
+nothing special - it just jumps normally, rather than silently failing
+to open.
+
 ## Testing philosophy
 
 Pure logic (input calculations, mode switching, position resolution, grid
 snapping, auto-tiling, platform grouping/merging, player pose priority,
-acceleration/jump physics, color-to-frame mappings, character-swap
-distance/availability checks, sound settings parsing) lives in
-Phaser-free TypeScript modules and is fully unit tested. Phaser-specific
-wiring (scene setup, rendering, tweens, drag/click events) is verified
-manually in the browser rather than unit tested — faking a canvas in a
-test runner requires a compiled native dependency (`canvas`), which risks
-the exact kind of cross-platform build issues (see the Windows note
-above) this project has already run into once.
+acceleration/jump physics, color-to-frame mappings, character-swap and
+door/key distance/availability checks, quadrant and edge-scroll math,
+sound settings parsing) lives in Phaser-free TypeScript modules and is
+fully unit tested. Phaser-specific wiring (scene setup, rendering,
+tweens, drag/click events, camera control) is verified manually in the
+browser rather than unit tested — faking a canvas in a test runner
+requires a compiled native dependency (`canvas`), which risks the exact
+kind of cross-platform build issues (see the Windows note above) this
+project has already run into once.
 
-Most settings (editor tool, style picker mode, starting player color) are
-registry-only and reset on a hard page refresh - a known limitation.
-Sound volume/mute is the one exception, using `localStorage` instead,
-since nobody expects to have to re-mute a game after every reload. If the
-other settings ever get fixed to persist too, `sounds.ts` is a working
-example to copy.
+Most settings (editor tool, style picker mode, starting player color,
+camera mode) are registry-only and reset on a hard page refresh - a
+known limitation. Sound volume/mute is the one exception, using
+`localStorage` instead, since nobody expects to have to re-mute a game
+after every reload. If the other settings ever get fixed to persist too,
+`sounds.ts` is a working example to copy.
+
+Several genuinely subtle bugs surfaced and got fixed during development,
+worth knowing about since the underlying *patterns* they represent could
+recur:
+- **Stale runtime state across scene restarts** - Phaser reuses the same
+  scene instance every time a scene is re-entered rather than
+  constructing a fresh one, so a plain class field's declared default
+  only applies once, at true construction. Anything meant to reset each
+  session (win state, collected keys, player position history, editor
+  interaction mode) has to be explicitly reset at the top of `create()`.
+- **Shared object references from the registry** - `registry.get()`
+  returns the actual stored object, not a copy. Reading an array of
+  placed objects and mutating one of them in place (e.g. a swap
+  object's color changing during Play) was silently corrupting the
+  level's persisted design data with no explicit `registry.set()` call
+  even involved. Fixed by shallow-copying on read wherever runtime code
+  might mutate what it read.
+- **Screen-space vs. world-space pointer coordinates** - `pointer.x`/
+  `pointer.y` are viewport-relative; once the camera could scroll,
+  placement logic needed `pointer.worldX`/`pointer.worldY` instead
+  (Phaser's built-in world-space equivalents) or clicks would land
+  offset by however far the camera had panned.
 
 ## CI
 
@@ -307,21 +404,27 @@ manual gating required.
       instead of instant velocity snapping
 - [x] Variable jump height ("jump cut") — tap for a short hop, hold for
       the full arc
-- [x] Sound effects for jump, character swap, and falling off a level
+- [x] Sound effects for jump, character swap, key collection, winning,
+      and falling off a level
 - [x] Player starting character, configurable per level (Editor toolbar
-      picker, defaults to green) - replaces the earlier per-session
-      randomization entirely
+      picker, defaults to green)
 - [x] Character HUD portrait (top-left), with an animated pop transition
       on every swap
 - [x] Character-swap floating objects — full loop: touch to swap,
       cooldown with dim/shrink/frozen-bob visual state, distance-gated
       reactivation with a pop animation, Editor placement and erasure,
-      correctly isolated from a level's persisted design data (no
-      leaking between Play sessions or back into the Editor)
-- [ ] **Win condition — at least one type.** Currently there's no way to
-      "clear" a level at all. This is a blocker for backend work (see
-      Phase 3 notes below) - a publishable level needs something to
-      capture as "cleared."
+      correctly isolated from a level's persisted design data
+- [x] **Win condition — first type built.** Doors (plain and
+      key-required) plus collectible keys, fully playable end-to-end
+      (see [Win conditions](#win-conditions-doors-and-keys)). This was
+      the blocker noted for backend work in Phase 3 - now cleared, see
+      the Phase 3 note below.
+- [x] **World size doubled + full camera system.** Every level is now
+      four quadrants (2x2 grid); Play mode has Follow/Quadrant camera
+      modes per level; the Editor has a Navigate/Edit interaction-mode
+      toggle for panning around the larger world. Not originally on this
+      roadmap - added mid-session as a deliberate scope expansion (see
+      [World size and the camera](#world-size-and-the-camera)).
 - [ ] **Character-specific abilities (SMB2-style)** — explore giving each
       of the five character colors a distinct gameplay trait instead of
       being purely cosmetic (e.g. one jumps higher, one can float
@@ -331,21 +434,23 @@ manual gating required.
       currently uses identically (`getPlayerPose`,
       `getAcceleratedVelocity`, `getJumpVelocity`/`getJumpCutVelocity`
       are all color-agnostic right now). The character-swap system above
-      is the foundational piece this was building toward - swapping
-      "which character" fully works now; it just doesn't change how
-      anything plays yet.
-- [ ] Interactable objects (coins, keys)
+      is the foundational piece this was building toward.
+- [ ] Interactable objects beyond keys (coins, etc.)
 - [ ] Enemies, mini-enemies, bosses
 - [ ] Climb animation exists in the sprite atlas but isn't wired to
       anything yet (no climbable surfaces)
+- [ ] Second win-condition variant: doors requiring a *specific* key
+      already works (color-matching is built); a more elaborate
+      variant (e.g. requiring multiple keys, or a key that's consumed
+      on use) hasn't been explored.
 
 ### Phase 3 — Level creation, accounts & persistence
 
 > **Backend work below (Accounts, Screens/Levels) is intentionally on
-> hold** until (1) at least one win condition exists (see Phase 2) and
-> (2) the Screens/Levels scope itself has been revisited - the design
-> below is no longer considered settled; a scope change is planned
-> before any of it gets built.
+> hold** until the Screens/Levels scope itself has been revisited - the
+> design below is no longer considered settled; a scope change is
+> planned before any of it gets built. (The other original blocker - at
+> least one win condition existing - is now cleared; see Phase 2 above.)
 
 Building a level or playing your own in-progress level requires **no
 account** — it's entirely client-side (Phaser's registry + in-memory)
@@ -366,11 +471,11 @@ until the moment someone wants to save or share.
 - [x] Style picker UI: toolbar (default) and a radial menu, switchable
       via a top-right toggle; either UI only appears while a platform is
       selected
-- [x] Eraser tool — click or click-drag to remove ground tiles *and*
-      placed character-swap objects (player excluded by construction),
-      with its own custom cursor
-- [x] Character Swap placement tool + Starting Character picker (see
-      Phase 2 above)
+- [x] Eraser tool — click or click-drag to remove ground tiles, swap
+      objects, doors, and keys (player excluded by construction), with
+      its own custom cursor
+- [x] Character Swap and Win Condition placement tools + Starting
+      Character picker (see Phase 2 above)
 - [x] Tools toolbar (top-center), extensible for future tools
 - [x] Custom cursors per tool
 - [x] Instructions modal (replacing an earlier inline-panel version)
@@ -381,17 +486,13 @@ until the moment someone wants to save or share.
       automatically reverts to the Editor
 - [x] Mobile support: touch controls, landscape-only enforcement,
       scale-to-fit canvas
-- [ ] **Mobile experience needs real work, especially in the Editor** —
-      the current feel isn't good on mobile. Likely needs a zoomed-in
-      view/mode among other changes; not yet scoped in detail beyond
-      that.
-- [ ] **Toolbar touch-target priority bug** — tapping near (but not
-      directly on) a toolbar button, particularly on mobile, can
-      register as a tile placement on the canvas underneath the toolbar
-      instead of hitting the intended button, making the toolbar
-      unreliable to reach. Fix direction: toolbar UI should take input
-      priority over the level canvas - any tap on or near toolbar
-      chrome should never fall through to tile placement.
+- [x] World size doubled to four quadrants, with Editor navigation via a
+      Navigate/Edit mode toggle (mouse edge-scroll while navigating)
+- [ ] **Toolbar touch-target priority on mobile** — this was flagged
+      before the Navigate/Edit split existed; worth re-checking whether
+      it's still an issue now that panning and editing are separate
+      modes, since the original bug was specifically about a tap
+      falling through to tile placement underneath the toolbar.
 - [ ] **Vertical/horizontal junction piece** — a horizontal and vertical
       platform touching currently render with no visual connection
       between them. A junction was built and tried (a horizontal tile
@@ -399,7 +500,10 @@ until the moment someone wants to save or share.
       switching to a middle piece) but removed - the available tile art
       didn't look right for it. Revisit if better-suited assets turn up.
 - [ ] **Placement rules** beyond "no duplicate stacking" — e.g. what's
-      allowed to be adjacent to what — are still undecided.
+      allowed to be adjacent to what — are still undecided. Currently, a
+      door or key can't be placed on top of existing content, but the
+      reverse (a ground tile placed on top of an existing door/key)
+      isn't prevented.
 - [ ] **UI mode preference doesn't survive a full page reload** — the
       toolbar/radial choice is stored in Phaser's registry, so it
       persists across Play/Edit toggles within a session, but resets to

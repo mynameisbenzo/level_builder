@@ -13,7 +13,7 @@ import {
 	shouldStopFloating,
 	type PlayerPose
 } from './movement';
-import { canFloat } from './characterAbilities';
+import { canFloat, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
 import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
@@ -25,7 +25,6 @@ import {
 	type PlayerColor
 } from './playerColor';
 import {
-	ensurePlayerWalkAnimation,
 	getPlayerPoseConfig,
 	PLAYER_DISPLAY_SIZE,
 	setPlayerWalkAnimationColor
@@ -94,7 +93,7 @@ const FLOAT_BOUNCE_PERIOD_MS = 600;
 // Floating stops being sustainable after this long, even with jump held
 // continuously - keeps the ability from letting the character float
 // indefinitely.
-const FLOAT_MAX_DURATION_MS = 5000;
+const FLOAT_MAX_DURATION_MS = 2500;
 const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
 const GAMEPAD_MESSAGE_FADE_MS = 800;
@@ -329,7 +328,13 @@ export class PlatformerScene extends Phaser.Scene {
 		);
 		this.currentPose = 'idle';
 		this.player.setCollideWorldBounds(true);
-		ensurePlayerWalkAnimation(this, playerColor);
+		// Unconditional rebuild, not a guarded ensure* - the Animation
+		// Manager is global and persists across scene restarts, so a
+		// guard would wrongly skip rebuilding if a previous session's
+		// character-swap left this animation registered for a different
+		// color than this session's starting color. See
+		// setPlayerWalkAnimationColor's own comment for the full story.
+		setPlayerWalkAnimationColor(this, playerColor);
 
 		if (this.cameraMode === 'follow') {
 			// A little smoothing (lerp < 1) reads as more polished than an
@@ -534,6 +539,17 @@ export class PlatformerScene extends Phaser.Scene {
 		this.registry.set(PLAYER_COLOR_REGISTRY_KEY, newPlayerColor);
 		this.playerPoseConfig = getPlayerPoseConfig(newPlayerColor);
 		setPlayerWalkAnimationColor(this, newPlayerColor);
+		// Stop whatever's currently playing before the animation swap -
+		// setPlayerWalkAnimationColor rebuilds the 'player-walk'
+		// animation under the same key, but the sprite's own animation
+		// state can still report "already playing player-walk" by key
+		// match alone, even though the underlying frames just changed.
+		// anims.play(key, true) below (see the pose-transition block)
+		// would then silently skip rebinding to the new frames, since its
+		// ignoreIfPlaying guard only checks the key, not whether the
+		// definition changed. Stopping first guarantees the next play()
+		// call always binds fresh.
+		this.player.anims.stop();
 		// Force the pose-transition block in update() to re-apply on the
 		// very next frame even if the pose name itself (e.g. "idle")
 		// hasn't changed - only its underlying frame/hitbox meaning has,
@@ -810,6 +826,11 @@ export class PlatformerScene extends Phaser.Scene {
 		this.updateKeys(time);
 		this.updateQuadrantCamera();
 
+		const currentPlayerColor = this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
+			| PlayerColor
+			| undefined;
+		const speedMultiplier = currentPlayerColor ? getSpeedMultiplier(currentPlayerColor) : 1;
+
 		for (const swapObject of this.swapObjects) {
 			if (
 				!swapObject.onCooldown &&
@@ -863,8 +884,8 @@ export class PlatformerScene extends Phaser.Scene {
 		const velocityX = getAcceleratedVelocity(
 			{ left: leftDown, right: rightDown },
 			currentVelocityX,
-			MOVE_SPEED,
-			ACCELERATION,
+			MOVE_SPEED * speedMultiplier,
+			ACCELERATION * speedMultiplier,
 			delta / 1000
 		);
 		this.player.setVelocityX(velocityX);
@@ -948,9 +969,6 @@ export class PlatformerScene extends Phaser.Scene {
 				this.stopFloating();
 			}
 
-			const currentPlayerColor = this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
-				| PlayerColor
-				| undefined;
 			if (
 				currentPlayerColor &&
 				shouldStartFloating(

@@ -11,3 +11,15 @@ import type { PlayerColor } from './playerColor';
 export function canFloat(color: PlayerColor): boolean {
 	return color === 'pink';
 }
+
+/**
+ * The horizontal speed multiplier for the given character color -
+ * applied to both acceleration and top speed, so the whole movement
+ * curve scales together rather than just the cap or just the ramp-up.
+ * Yellow moves faster than the baseline; everyone else is unaffected
+ * (multiplier of 1).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getSpeedMultiplier(color: PlayerColor): number {
+	return color === 'yellow' ? 1.7 : 1;
+}

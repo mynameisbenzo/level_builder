@@ -43,11 +43,16 @@ export const PLAYER_WALK_ANIMATION_KEY = 'player-walk';
 
 /**
  * (Re)builds the player's two-frame walk-cycle animation for the given
- * color, replacing any existing registration. Use this (not
- * ensurePlayerWalkAnimation) when the player's color changes mid-session
- * (e.g. a character-swap object) - the animation needs to be rebuilt with
- * the new color's frames, not just left as whatever color it was
- * originally registered with.
+ * color, replacing any existing registration. Always rebuilds
+ * unconditionally rather than guarding on "does this animation already
+ * exist" - the Animation Manager is global and persists across scene
+ * restarts, so a guard would skip rebuilding even when the *previous*
+ * registration is for the wrong color (e.g. a character-swap object
+ * changed it mid-session, then a fresh Play session starts as a
+ * different color - a guard would silently leave the walk animation
+ * showing the old session's color while every other part of the
+ * character, from the registry to the static idle texture, correctly
+ * shows the new one). This was a real bug, not a hypothetical.
  */
 export function setPlayerWalkAnimationColor(scene: Phaser.Scene, color: PlayerColor) {
 	if (scene.anims.exists(PLAYER_WALK_ANIMATION_KEY)) {
@@ -63,22 +68,6 @@ export function setPlayerWalkAnimationColor(scene: Phaser.Scene, color: PlayerCo
 		frameRate: 8,
 		repeat: -1
 	});
-}
-
-/**
- * Registers the player's walk-cycle animation, in the given color, only
- * if it isn't already registered. Animations live in the scene's global
- * Animation Manager (shared across scene restarts within the same Game
- * instance, same as textures), so this guard avoids a duplicate-key
- * warning when a scene restarts (e.g. toggling between Play and Edit
- * mode) - for the initial setup only. If the color changes later, use
- * setPlayerWalkAnimationColor instead, which rebuilds unconditionally.
- */
-export function ensurePlayerWalkAnimation(scene: Phaser.Scene, color: PlayerColor) {
-	if (scene.anims.exists(PLAYER_WALK_ANIMATION_KEY)) {
-		return;
-	}
-	setPlayerWalkAnimationColor(scene, color);
 }
 
 interface PlayerPoseConfig {

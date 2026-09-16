@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity, shouldStartFloating, shouldStopFloating, getFloatVelocity, hasFloatBudgetExpired } from './movement';
+
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
 		const velocity = getHorizontalVelocity({ left: true, right: false }, 200);
@@ -117,22 +118,25 @@ describe('getPlayerPose', () => {
 	});
 
 	it('prioritizes airborne over ducking', () => {
+		// Ducking key held while airborne should not produce 'duck'.
 		expect(getPlayerPose(false, true, 0)).not.toBe('duck');
 	});
 
 	it('prioritizes ducking over walking', () => {
+		// Moving while ducking (grounded) should not produce 'walk'.
 		expect(getPlayerPose(true, true, 200)).not.toBe('walk');
 	});
 });
-
 describe('getAcceleratedVelocity', () => {
 	it('ramps up gradually toward max speed rather than snapping instantly', () => {
+		// accel=800, dt=0.1s -> +80 this frame, well short of maxSpeed=200
 		const result = getAcceleratedVelocity({ left: false, right: true }, 0, 200, 800, 0.1);
 		expect(result).toBe(80);
 		expect(result).toBeLessThan(200);
 	});
 
 	it('does not overshoot max speed when the step would exceed it', () => {
+		// accel=800, dt=0.5s -> +400 this frame, way past maxSpeed=200
 		const result = getAcceleratedVelocity({ left: false, right: true }, 0, 200, 800, 0.5);
 		expect(result).toBe(200);
 	});
@@ -158,6 +162,8 @@ describe('getAcceleratedVelocity', () => {
 	});
 
 	it('reverses direction by decelerating through zero, not snapping', () => {
+		// Moving right at 200, right released and left pressed - should
+		// move toward -200 by the accel step, not jump straight there.
 		const result = getAcceleratedVelocity({ left: true, right: false }, 200, 200, 800, 0.1);
 		expect(result).toBe(120);
 	});
@@ -197,5 +203,93 @@ describe('getJumpCutVelocity', () => {
 	it('a held button always wins regardless of velocity direction', () => {
 		expect(getJumpCutVelocity(-450, true, 0.5)).toBeNull();
 		expect(getJumpCutVelocity(100, true, 0.5)).toBeNull();
+	});
+});
+
+describe('shouldStartFloating', () => {
+	it('starts floating when every condition is met', () => {
+		expect(shouldStartFloating(true, false, false, true, false)).toBe(true);
+	});
+
+	it('does not start without the float ability', () => {
+		expect(shouldStartFloating(false, false, false, true, false)).toBe(false);
+	});
+
+	it('does not start while grounded (that is just a normal jump)', () => {
+		expect(shouldStartFloating(true, true, false, true, false)).toBe(false);
+	});
+
+	it('does not start if already floating', () => {
+		expect(shouldStartFloating(true, false, true, true, false)).toBe(false);
+	});
+
+	it('does not start without a fresh press', () => {
+		expect(shouldStartFloating(true, false, false, false, false)).toBe(false);
+	});
+
+	it('does not (re-)start once the float budget for this airborne period is used up - this is what closes the exploit of releasing and re-pressing jump to keep floating indefinitely', () => {
+		expect(shouldStartFloating(true, false, false, true, true)).toBe(false);
+	});
+});
+
+describe('shouldStopFloating', () => {
+	it('does nothing if not currently floating', () => {
+		expect(shouldStopFloating(false, false, true)).toBe(false);
+	});
+
+	it('stops on landing, even while jump is still held', () => {
+		expect(shouldStopFloating(true, true, true)).toBe(true);
+	});
+
+	it('stops when jump is released, even while still airborne', () => {
+		expect(shouldStopFloating(true, false, false)).toBe(true);
+	});
+
+	it('keeps floating while airborne and jump is held', () => {
+		expect(shouldStopFloating(true, false, true)).toBe(false);
+	});
+});
+
+describe('getFloatVelocity', () => {
+	it('is zero at the start of a cycle', () => {
+		expect(getFloatVelocity(0, 40, 600)).toBeCloseTo(0);
+	});
+
+	it('reaches peak positive velocity a quarter of the way through', () => {
+		expect(getFloatVelocity(150, 40, 600)).toBeCloseTo(40);
+	});
+
+	it('returns to zero halfway through the cycle', () => {
+		expect(getFloatVelocity(300, 40, 600)).toBeCloseTo(0);
+	});
+
+	it('reaches peak negative velocity three-quarters of the way through', () => {
+		expect(getFloatVelocity(450, 40, 600)).toBeCloseTo(-40);
+	});
+
+	it('completes a full cycle back to zero', () => {
+		expect(getFloatVelocity(600, 40, 600)).toBeCloseTo(0);
+	});
+
+	it('scales with the given amplitude', () => {
+		expect(getFloatVelocity(150, 100, 600)).toBeCloseTo(100);
+	});
+});
+
+describe('hasFloatBudgetExpired', () => {
+	it('has not expired right at the start', () => {
+		expect(hasFloatBudgetExpired(1000, 1000, 5000)).toBe(false);
+	});
+
+	it('has not expired just under the max duration', () => {
+		expect(hasFloatBudgetExpired(1000, 5999, 5000)).toBe(false);
+	});
+
+	it('has expired at exactly the max duration', () => {
+		expect(hasFloatBudgetExpired(1000, 6000, 5000)).toBe(true);
+	});
+
+	it('has expired well past the max duration', () => {
+		expect(hasFloatBudgetExpired(1000, 20000, 5000)).toBe(true);
 	});
 });

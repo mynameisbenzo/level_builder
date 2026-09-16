@@ -60,6 +60,7 @@ export function getJumpVelocity(input: JumpInput, jumpVelocity: number): number 
 	}
 	return null;
 }
+
 /**
  * Implements variable jump height ("jump cut"): releasing the jump button
  * while still moving upward reduces the remaining upward velocity,
@@ -83,6 +84,7 @@ export function getJumpCutVelocity(
 	}
 	return velocityY * cutMultiplier;
 }
+
 /**
  * Determines whether an analog stick axis value counts as "pressed" in a
  * direction, ignoring small values caused by stick drift/noise.
@@ -115,6 +117,97 @@ export function hasFallenOffScreen(
  */
 export function hasRisingEdge(isDownNow: boolean, wasDownLastFrame: boolean): boolean {
 	return isDownNow && !wasDownLastFrame;
+}
+
+/**
+ * Whether a jump-button press while airborne should engage floating -
+ * requires the character to have the ability, be airborne already (a
+ * grounded press is just a normal jump instead), not already floating,
+ * and for this to be a fresh press specifically - not a continued hold
+ * from the jump that got the character airborne in the first place.
+ * That's what makes this a deliberate second action rather than "hold
+ * jump the whole time to float", which would remove the meaning of the
+ * existing jump-cut mechanic.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+/**
+ * Whether a jump-button press while airborne should engage floating -
+ * requires the character to have the ability, be airborne already (a
+ * grounded press is just a normal jump instead), not already floating,
+ * for this to be a fresh press specifically (not a continued hold from
+ * the jump that got the character airborne in the first place), and for
+ * the float time budget not to already be used up for this airborne
+ * period (see hasFloatBudgetExpired) - otherwise letting the budget run
+ * out, falling briefly, and immediately re-pressing jump would reset the
+ * clock and let floating continue indefinitely. Landing and jumping
+ * again is the only way to get a fresh budget.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function shouldStartFloating(
+	hasFloatAbility: boolean,
+	onGround: boolean,
+	isFloating: boolean,
+	jumpJustPressed: boolean,
+	floatBudgetExpired: boolean
+): boolean {
+	return hasFloatAbility && !onGround && !isFloating && jumpJustPressed && !floatBudgetExpired;
+}
+
+/**
+ * Whether floating should end this frame - releasing jump, or landing,
+ * both stop it (combined with OR, so either alone is sufficient).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function shouldStopFloating(
+	isFloating: boolean,
+	onGround: boolean,
+	isJumpHeld: boolean
+): boolean {
+	return isFloating && (onGround || !isJumpHeld);
+}
+
+/**
+ * The vertical velocity to apply while floating: a continuous sine-wave
+ * oscillation rather than a flat, motionless hold - this is what gives
+ * floating its "hover and gently bounce in place" feel, and doubles as
+ * the visual bounce animation itself (no separate sprite animation
+ * needed - the physical motion is the animation). Net velocity across
+ * one full cycle is zero, so the character's average height stays put
+ * rather than slowly sinking or climbing. time is in milliseconds
+ * (matches Phaser's update() time parameter); periodMs is how long one
+ * full up-down cycle takes; amplitudePxPerSec is the peak velocity
+ * magnitude in each direction.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getFloatVelocity(
+	time: number,
+	amplitudePxPerSec: number,
+	periodMs: number
+): number {
+	return Math.sin((time / periodMs) * Math.PI * 2) * amplitudePxPerSec;
+}
+
+/**
+ * Whether the float time budget for the current airborne period has run
+ * out - tracked from the moment the character left the ground (any
+ * jump, not specifically when floating started), not from when floating
+ * itself began. This is what closes an exploit where floating for the
+ * full duration, falling briefly once it's cut off, and immediately
+ * re-pressing jump would otherwise reset the clock and allow floating
+ * indefinitely via repeated release-and-re-press. The budget only
+ * resets on landing - the next jump from grounded overwrites the
+ * tracked start time fresh (see PlatformerScene).
+ * airborneStartTime and currentTime are both in milliseconds (matching
+ * Phaser's update() time parameter) - currentTime is expected to be the
+ * larger of the two.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function hasFloatBudgetExpired(
+	airborneStartTime: number,
+	currentTime: number,
+	maxDurationMs: number
+): boolean {
+	return currentTime - airborneStartTime >= maxDurationMs;
 }
 
 export type PlayerPose = 'jump' | 'duck' | 'walk' | 'idle';

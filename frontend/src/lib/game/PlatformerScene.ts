@@ -2,13 +2,18 @@ import Phaser from 'phaser';
 import {
 	exceedsDeadzone,
 	getAcceleratedVelocity,
+	getFloatVelocity,
 	getJumpCutVelocity,
 	getJumpVelocity,
 	getPlayerPose,
 	hasFallenOffScreen,
+	hasFloatBudgetExpired,
 	hasRisingEdge,
+	shouldStartFloating,
+	shouldStopFloating,
 	type PlayerPose
 } from './movement';
+import { canFloat } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
 import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
@@ -82,6 +87,14 @@ const JUMP_VELOCITY = -450;
 // regardless of this value.
 const JUMP_CUT_MULTIPLIER = 0.5;
 const GRAVITY_Y = 900;
+// Pink's float ability: peak vertical velocity of the hover/bounce
+// oscillation (px/sec) and how long one full up-down cycle takes.
+const FLOAT_BOUNCE_AMPLITUDE = 40;
+const FLOAT_BOUNCE_PERIOD_MS = 600;
+// Floating stops being sustainable after this long, even with jump held
+// continuously - keeps the ability from letting the character float
+// indefinitely.
+const FLOAT_MAX_DURATION_MS = 5000;
 const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
 const GAMEPAD_MESSAGE_FADE_MS = 800;
@@ -207,6 +220,18 @@ export class PlatformerScene extends Phaser.Scene {
 	 * longest delay any currently-collected key could need. */
 	private playerPositionHistory: { x: number; y: number }[] = [];
 	private hasWon = false;
+	/** Runtime-only, reset each session like everything else above -
+	 * whether the player is currently using the float ability (see
+	 * shouldStartFloating/shouldStopFloating in movement.ts). */
+	private isFloating = false;
+	/** When the current airborne period began (Phaser's update() time,
+	 * ms) - recorded the moment a normal jump triggers from the ground,
+	 * used with FLOAT_MAX_DURATION_MS to cap the float budget for that
+	 * whole airborne period (not per individual float - see
+	 * hasFloatBudgetExpired in movement.ts for why). Always overwritten
+	 * before it's ever compared against, so it doesn't need a separate
+	 * session reset the way isFloating does. */
+	private airborneStartTime = 0;
 	private cameraMode!: CameraMode;
 	/** Only meaningful in 'quadrant' mode - which quadrant the camera is
 	 * currently centered on, so update() can detect when the player has
@@ -244,6 +269,7 @@ export class PlatformerScene extends Phaser.Scene {
 		this.collectedKeyColors = new Set();
 		this.collectedKeysInOrder = [];
 		this.playerPositionHistory = [];
+		this.isFloating = false;
 
 		currentMode.set(CURRENT_MODE);
 
@@ -515,6 +541,14 @@ export class PlatformerScene extends Phaser.Scene {
 		this.currentPose = null;
 		this.animateHudPortraitSwap(newPlayerColor);
 
+		if (this.isFloating && !canFloat(newPlayerColor)) {
+			// Swapped away from a float-capable character while mid-float -
+			// the new character can't float, so stop immediately rather
+			// than leaving gravity disabled for a character that shouldn't
+			// have this ability at all.
+			this.stopFloating();
+		}
+
 		// The object's color is only updated in memory here, for the rest
 		// of this Play session - deliberately not written back to
 		// CHARACTER_SWAP_OBJECTS_REGISTRY_KEY. That key is the level's
@@ -732,6 +766,28 @@ export class PlatformerScene extends Phaser.Scene {
 		});
 	}
 
+	/**
+	 * Engages the float ability: disables gravity so the oscillating
+	 * velocity applied in update() (see getFloatVelocity) isn't fighting
+	 * gravity's own contribution each frame, same reasoning as the win
+	 * sequence freezing the player.
+	 */
+	private startFloating() {
+		this.isFloating = true;
+		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+		if (body) {
+			body.allowGravity = false;
+		}
+	}
+
+	private stopFloating() {
+		this.isFloating = false;
+		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+		if (body) {
+			body.allowGravity = true;
+		}
+	}
+
 	update(time: number, delta: number) {
 		if (this.hasWon) {
 			return;
@@ -857,6 +913,8 @@ export class PlatformerScene extends Phaser.Scene {
 			Phaser.Input.Keyboard.JustDown(this.arrows.up) ||
 			padJumpJustPressed ||
 			touchJumpJustPressed;
+		const isJumpHeld =
+			this.wasd.w.isDown || this.arrows.up.isDown || padJumpButtonDown || touchInputState.jump;
 
 		// Door interaction uses the same "up" input as jumping - pressing
 		// up while near a closed door opens it instead of jumping, rather
@@ -881,24 +939,64 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 
 		if (!openedDoorThisFrame) {
-			const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
-			if (velocityY !== null) {
-				this.player.setVelocityY(velocityY);
-				playSfx(this, 'jump');
+			const floatBudgetExpired = hasFloatBudgetExpired(
+				this.airborneStartTime,
+				time,
+				FLOAT_MAX_DURATION_MS
+			);
+			if (shouldStopFloating(this.isFloating, onGround, isJumpHeld) || (this.isFloating && floatBudgetExpired)) {
+				this.stopFloating();
+			}
+
+			const currentPlayerColor = this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
+				| PlayerColor
+				| undefined;
+			if (
+				currentPlayerColor &&
+				shouldStartFloating(
+					canFloat(currentPlayerColor),
+					onGround,
+					this.isFloating,
+					jumpJustPressed,
+					floatBudgetExpired
+				)
+			) {
+				this.startFloating();
 			}
 		}
 
-		// Variable jump height: if jump isn't currently held and the player
-		// is still moving upward, cut the ascent short rather than letting
-		// gravity alone carry it to the full height. Checked every frame
-		// (not just on release) since velocity keeps changing under
-		// gravity regardless of when the button came up.
-		const isJumpHeld =
-			this.wasd.w.isDown || this.arrows.up.isDown || padJumpButtonDown || touchInputState.jump;
-		const currentVelocityY = this.player.body?.velocity.y ?? 0;
-		const cutVelocityY = getJumpCutVelocity(currentVelocityY, isJumpHeld, JUMP_CUT_MULTIPLIER);
-		if (cutVelocityY !== null) {
-			this.player.setVelocityY(cutVelocityY);
+		if (this.isFloating) {
+			// Floating overrides the normal jump/jump-cut physics entirely
+			// while active - see getFloatVelocity in movement.ts for why
+			// this single call handles both "stay airborne" and the
+			// visible bounce as the same motion.
+			this.player.setVelocityY(getFloatVelocity(time, FLOAT_BOUNCE_AMPLITUDE, FLOAT_BOUNCE_PERIOD_MS));
+		} else {
+			if (!openedDoorThisFrame) {
+				const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
+				if (velocityY !== null) {
+					this.player.setVelocityY(velocityY);
+					// A fresh jump from the ground starts a new airborne
+					// period, resetting the float budget - this is the
+					// "only way to get more float time is to land and jump
+					// again" rule that closes the release-and-re-press
+					// exploit.
+					this.airborneStartTime = time;
+					playSfx(this, 'jump');
+				}
+			}
+
+			// Variable jump height: if jump isn't currently held and the
+			// player is still moving upward, cut the ascent short rather
+			// than letting gravity alone carry it to the full height.
+			// Checked every frame (not just on release) since velocity
+			// keeps changing under gravity regardless of when the button
+			// came up.
+			const currentVelocityY = this.player.body?.velocity.y ?? 0;
+			const cutVelocityY = getJumpCutVelocity(currentVelocityY, isJumpHeld, JUMP_CUT_MULTIPLIER);
+			if (cutVelocityY !== null) {
+				this.player.setVelocityY(cutVelocityY);
+			}
 		}
 	}
 }

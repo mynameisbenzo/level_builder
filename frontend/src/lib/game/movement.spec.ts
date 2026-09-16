@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity, shouldStartFloating, shouldStopFloating, getFloatVelocity, hasFloatBudgetExpired } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity, shouldStartFloating, shouldStopFloating, getFloatVelocity, hasFloatBudgetExpired, getJumpVelocityMultiplier, getPMeterValue, isPMeterFull, getMaxSpeedForDashState } from './movement';
 
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
@@ -291,5 +291,82 @@ describe('hasFloatBudgetExpired', () => {
 
 	it('has expired well past the max duration', () => {
 		expect(hasFloatBudgetExpired(1000, 20000, 5000)).toBe(true);
+	});
+});
+describe('getJumpVelocityMultiplier', () => {
+	it('is 1 (no change) for a height multiplier of 1', () => {
+		expect(getJumpVelocityMultiplier(1)).toBe(1);
+	});
+
+	it('is the square root of the height multiplier, not the value itself', () => {
+		expect(getJumpVelocityMultiplier(1.5)).toBeCloseTo(1.2247, 4);
+	});
+
+	it('squaring the result recovers the original height multiplier', () => {
+		const heightMultiplier = 1.5;
+		const velocityMultiplier = getJumpVelocityMultiplier(heightMultiplier);
+		expect(velocityMultiplier * velocityMultiplier).toBeCloseTo(heightMultiplier);
+	});
+
+	it('a 4x height multiplier requires exactly 2x velocity', () => {
+		expect(getJumpVelocityMultiplier(4)).toBe(2);
+	});
+});
+
+describe('getPMeterValue', () => {
+	it('fills while both dash and a direction are held', () => {
+		expect(getPMeterValue(0, true, true, 100, 2000)).toBe(100);
+	});
+
+	it('does not fill while dash is held but not moving', () => {
+		expect(getPMeterValue(500, true, false, 100, 2000)).toBe(400);
+	});
+
+	it('does not fill while moving but dash is not held', () => {
+		expect(getPMeterValue(500, false, true, 100, 2000)).toBe(400);
+	});
+
+	it('drains when neither condition holds', () => {
+		expect(getPMeterValue(500, false, false, 100, 2000)).toBe(400);
+	});
+
+	it('clamps fill at the max', () => {
+		expect(getPMeterValue(1950, true, true, 100, 2000)).toBe(2000);
+	});
+
+	it('clamps drain at zero', () => {
+		expect(getPMeterValue(50, false, false, 100, 2000)).toBe(0);
+	});
+});
+
+describe('isPMeterFull', () => {
+	it('is not full below the max', () => {
+		expect(isPMeterFull(1999, 2000)).toBe(false);
+	});
+
+	it('is full exactly at the max', () => {
+		expect(isPMeterFull(2000, 2000)).toBe(true);
+	});
+
+	it('is full above the max', () => {
+		expect(isPMeterFull(2500, 2000)).toBe(true);
+	});
+});
+
+describe('getMaxSpeedForDashState', () => {
+	it('is walk speed when dash is not held', () => {
+		expect(getMaxSpeedForDashState(false, false, 200, 280, 360)).toBe(200);
+	});
+
+	it('is run speed when dash is held but the meter is not full', () => {
+		expect(getMaxSpeedForDashState(true, false, 200, 280, 360)).toBe(280);
+	});
+
+	it('is full P-speed once the meter is full', () => {
+		expect(getMaxSpeedForDashState(true, true, 200, 280, 360)).toBe(360);
+	});
+
+	it('a full meter wins even if dash is somehow reported not held', () => {
+		expect(getMaxSpeedForDashState(false, true, 200, 280, 360)).toBe(360);
 	});
 });

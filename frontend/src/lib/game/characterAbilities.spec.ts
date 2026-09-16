@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canFloat, getSpeedMultiplier } from './characterAbilities';
+import { canFloat, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { PLAYER_COLORS } from './playerColor';
 
 describe('canFloat', () => {
@@ -28,6 +28,20 @@ describe('getSpeedMultiplier', () => {
 				continue;
 			}
 			expect(getSpeedMultiplier(color)).toBe(1);
+		}
+	});
+});
+describe('getJumpHeightMultiplier', () => {
+	it('is 2 for beige', () => {
+		expect(getJumpHeightMultiplier('beige')).toBe(2);
+	});
+
+	it('is 1 (no change) for every other color', () => {
+		for (const color of PLAYER_COLORS) {
+			if (color === 'beige') {
+				continue;
+			}
+			expect(getJumpHeightMultiplier(color)).toBe(1);
 		}
 	});
 });

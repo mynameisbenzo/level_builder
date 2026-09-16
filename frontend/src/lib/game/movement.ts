@@ -44,6 +44,67 @@ export function getAcceleratedVelocity(
 	return currentVelocity;
 }
 
+/**
+ * The P-meter's new value after this frame. Fills only while both the
+ * dash button AND a direction are held (matching SMW: holding the run
+ * button alone, standing still, doesn't build the meter) - drains
+ * otherwise, at the same rate, whenever either condition stops holding.
+ * Deliberately continuous rather than a snap to 0/full, so briefly
+ * letting go doesn't instantly discard progress the way a boolean flag
+ * would. Independent of grounded/airborne state - the meter keeps
+ * filling or draining the same way in the air as on the ground.
+ * Clamped to [0, maxMeterMs]. deltaMs matches Phaser's update() delta
+ * parameter (ms since last frame).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getPMeterValue(
+	currentMeterMs: number,
+	isDashHeld: boolean,
+	isMoving: boolean,
+	deltaMs: number,
+	maxMeterMs: number
+): number {
+	if (isDashHeld && isMoving) {
+		return Math.min(maxMeterMs, currentMeterMs + deltaMs);
+	}
+	return Math.max(0, currentMeterMs - deltaMs);
+}
+
+/**
+ * Whether the P-meter has filled all the way - true P-speed only
+ * unlocks once the meter is completely full, not just from holding
+ * dash. A meter that's partway full (e.g. still draining from a recent
+ * release) does not count.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function isPMeterFull(meterMs: number, maxMeterMs: number): boolean {
+	return meterMs >= maxMeterMs;
+}
+
+/**
+ * The effective top speed for the current dash/P-speed state - three
+ * tiers, matching SMW's walk/run/P-speed progression: walking (dash not
+ * held), running (dash held, but the meter hasn't filled yet), or full
+ * P-speed (meter full). Each tier is a progressively higher cap; which
+ * one applies is a simple priority check, not a blend between them.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getMaxSpeedForDashState(
+	isDashHeld: boolean,
+	pMeterFull: boolean,
+	walkSpeed: number,
+	runSpeed: number,
+	pSpeedTopSpeed: number
+): number {
+	if (pMeterFull) {
+		return pSpeedTopSpeed;
+	}
+	if (isDashHeld) {
+		return runSpeed;
+	}
+	return walkSpeed;
+}
+
 export interface JumpInput {
 	jumpJustPressed: boolean;
 	onGround: boolean;
@@ -83,6 +144,19 @@ export function getJumpCutVelocity(
 		return null;
 	}
 	return velocityY * cutMultiplier;
+}
+
+/**
+ * Converts a jump apex-height multiplier into the velocity multiplier
+ * that actually produces it. Jump height scales with the square of
+ * initial velocity under constant gravity (h = v^2 / (2g)), so reaching
+ * an apex that's N times higher requires velocity scaled by sqrt(N), not
+ * N directly - a "50% higher jump" is not the same thing as "50% more
+ * launch velocity", which would actually produce a 125% higher apex.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getJumpVelocityMultiplier(heightMultiplier: number): number {
+	return Math.sqrt(heightMultiplier);
 }
 
 /**

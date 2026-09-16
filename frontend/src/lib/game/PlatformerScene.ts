@@ -5,15 +5,19 @@ import {
 	getFloatVelocity,
 	getJumpCutVelocity,
 	getJumpVelocity,
+	getJumpVelocityMultiplier,
+	getMaxSpeedForDashState,
 	getPlayerPose,
+	getPMeterValue,
 	hasFallenOffScreen,
 	hasFloatBudgetExpired,
 	hasRisingEdge,
+	isPMeterFull,
 	shouldStartFloating,
 	shouldStopFloating,
 	type PlayerPose
 } from './movement';
-import { canFloat, getSpeedMultiplier } from './characterAbilities';
+import { canFloat, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
 import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
@@ -73,10 +77,24 @@ import {
 } from './playerState';
 
 const CURRENT_MODE: GameMode = 'play';
-const MOVE_SPEED = 200;
-// Time to reach MOVE_SPEED from a standstill: MOVE_SPEED / ACCELERATION
-// seconds (200 / 800 = 0.25s) - the P-speed-style build-up test. Tune
-// this to taste; higher = snappier ramp, lower = more gradual.
+// Three-tier dash/P-speed system, matching Super Mario World's actual
+// mechanic (not just "hold a direction and speed ramps up automatically"
+// - that alone isn't P-speed, it's just acceleration). Holding a
+// direction alone caps at WALK_SPEED; holding the dash key too caps at
+// RUN_SPEED and starts filling the P-meter; only once the meter is
+// completely full does the character reach P_SPEED_TOP_SPEED. See
+// getMaxSpeedForDashState/getPMeterValue in movement.ts.
+const WALK_SPEED = 200;
+const RUN_SPEED = 280;
+const P_SPEED_TOP_SPEED = 360;
+// How long the dash key (and a direction) need to be held continuously
+// to fill the P-meter from empty. Draining uses the same rate, so
+// releasing dash for this same duration fully resets it.
+const P_METER_MAX_MS = 2000;
+// Time to reach WALK_SPEED from a standstill: WALK_SPEED / ACCELERATION
+// seconds (200 / 800 = 0.25s) - the build-up feel underlying every
+// speed tier above, not just walking. Tune this to taste; higher =
+// snappier ramp, lower = more gradual.
 const ACCELERATION = 800;
 const JUMP_VELOCITY = -450;
 // Variable jump height ("jump cut"): releasing jump early while still
@@ -231,6 +249,10 @@ export class PlatformerScene extends Phaser.Scene {
 	 * before it's ever compared against, so it doesn't need a separate
 	 * session reset the way isFloating does. */
 	private airborneStartTime = 0;
+	/** Runtime-only, reset each session like everything else above - how
+	 * long (ms) the dash key + a direction have been held continuously.
+	 * See getPMeterValue/getMaxSpeedForDashState in movement.ts. */
+	private pMeterMs = 0;
 	private cameraMode!: CameraMode;
 	/** Only meaningful in 'quadrant' mode - which quadrant the camera is
 	 * currently centered on, so update() can detect when the player has
@@ -241,6 +263,7 @@ export class PlatformerScene extends Phaser.Scene {
 	private gamepadStatusText!: Phaser.GameObjects.Text;
 	private gamepadStatusTween?: Phaser.Tweens.Tween;
 	private toggleKey!: Phaser.Input.Keyboard.Key;
+	private dashKey!: Phaser.Input.Keyboard.Key;
 
 	constructor() {
 		super('PlatformerScene');
@@ -269,6 +292,7 @@ export class PlatformerScene extends Phaser.Scene {
 		this.collectedKeysInOrder = [];
 		this.playerPositionHistory = [];
 		this.isFloating = false;
+		this.pMeterMs = 0;
 
 		currentMode.set(CURRENT_MODE);
 
@@ -461,6 +485,7 @@ export class PlatformerScene extends Phaser.Scene {
 		};
 		this.arrows = this.input.keyboard.createCursorKeys();
 		this.toggleKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.TAB);
+		this.dashKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SHIFT);
 
 		// Character HUD - top-left corner. Portraits live in the TILES
 		// atlas (not the character atlas).
@@ -830,6 +855,9 @@ export class PlatformerScene extends Phaser.Scene {
 			| PlayerColor
 			| undefined;
 		const speedMultiplier = currentPlayerColor ? getSpeedMultiplier(currentPlayerColor) : 1;
+		const jumpVelocityMultiplier = currentPlayerColor
+			? getJumpVelocityMultiplier(getJumpHeightMultiplier(currentPlayerColor))
+			: 1;
 
 		for (const swapObject of this.swapObjects) {
 			if (
@@ -880,11 +908,21 @@ export class PlatformerScene extends Phaser.Scene {
 			(pad?.right ?? false) ||
 			padStickRight ||
 			touchInputState.right;
+		const isMoving = leftDown || rightDown;
+		const isDashHeld = this.dashKey.isDown;
+		this.pMeterMs = getPMeterValue(this.pMeterMs, isDashHeld, isMoving, delta, P_METER_MAX_MS);
+		const maxSpeed = getMaxSpeedForDashState(
+			isDashHeld,
+			isPMeterFull(this.pMeterMs, P_METER_MAX_MS),
+			WALK_SPEED,
+			RUN_SPEED,
+			P_SPEED_TOP_SPEED
+		);
 		const currentVelocityX = this.player.body?.velocity.x ?? 0;
 		const velocityX = getAcceleratedVelocity(
 			{ left: leftDown, right: rightDown },
 			currentVelocityX,
-			MOVE_SPEED * speedMultiplier,
+			maxSpeed * speedMultiplier,
 			ACCELERATION * speedMultiplier,
 			delta / 1000
 		);
@@ -991,7 +1029,10 @@ export class PlatformerScene extends Phaser.Scene {
 			this.player.setVelocityY(getFloatVelocity(time, FLOAT_BOUNCE_AMPLITUDE, FLOAT_BOUNCE_PERIOD_MS));
 		} else {
 			if (!openedDoorThisFrame) {
-				const velocityY = getJumpVelocity({ jumpJustPressed, onGround }, JUMP_VELOCITY);
+				const velocityY = getJumpVelocity(
+					{ jumpJustPressed, onGround },
+					JUMP_VELOCITY * jumpVelocityMultiplier
+				);
 				if (velocityY !== null) {
 					this.player.setVelocityY(velocityY);
 					// A fresh jump from the ground starts a new airborne

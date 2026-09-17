@@ -105,6 +105,33 @@ export function getMaxSpeedForDashState(
 	return walkSpeed;
 }
 
+/**
+ * EXPERIMENTAL (purple's phase ability, on its own branch). Whether
+ * phasing (passing through platforms and other solid objects) should be
+ * active this frame - requires the character to have the ability, the
+ * dash button to currently be held, and for less than maxDurationMs to
+ * have elapsed since dash was last pressed (dashHeldSinceTime is the
+ * timestamp of that press, not of whenever phasing itself started).
+ * Deliberately does NOT restart the window just because dash is still
+ * held past the cap - dash has to be released and pressed again to
+ * phase a second time. Without that, holding dash continuously would
+ * let phasing simply resume every frame past the cap, making the "1
+ * second max" limit meaningless - the same "no free indefinite renewal"
+ * principle as the float ability's budget (hasFloatBudgetExpired),
+ * adapted here to a directly-held ability rather than one triggered by
+ * a release-then-repress gesture.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function isPhasingActive(
+	hasPhaseAbility: boolean,
+	isDashHeld: boolean,
+	dashHeldSinceTime: number,
+	currentTime: number,
+	maxDurationMs: number
+): boolean {
+	return hasPhaseAbility && isDashHeld && currentTime - dashHeldSinceTime < maxDurationMs;
+}
+
 export interface JumpInput {
 	jumpJustPressed: boolean;
 	onGround: boolean;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity, shouldStartFloating, shouldStopFloating, getFloatVelocity, hasFloatBudgetExpired, getJumpVelocityMultiplier, getPMeterValue, isPMeterFull, getMaxSpeedForDashState } from './movement';
+import { getHorizontalVelocity, getJumpVelocity, exceedsDeadzone, hasFallenOffScreen, hasRisingEdge, getPlayerPose, getAcceleratedVelocity, getJumpCutVelocity, shouldStartFloating, shouldStopFloating, getFloatVelocity, hasFloatBudgetExpired, getJumpVelocityMultiplier, getPMeterValue, isPMeterFull, getMaxSpeedForDashState, isPhasingActive } from './movement';
 
 describe('getHorizontalVelocity', () => {
 	it('moves left when only the left key is down', () => {
@@ -368,5 +368,31 @@ describe('getMaxSpeedForDashState', () => {
 
 	it('a full meter wins even if dash is somehow reported not held', () => {
 		expect(getMaxSpeedForDashState(false, true, 200, 280, 360)).toBe(360);
+	});
+});
+
+describe('isPhasingActive', () => {
+	it('is active when every condition is met, right at the start of the hold', () => {
+		expect(isPhasingActive(true, true, 1000, 1000, 1000)).toBe(true);
+	});
+
+	it('is active just under the max duration', () => {
+		expect(isPhasingActive(true, true, 1000, 1999, 1000)).toBe(true);
+	});
+
+	it('is not active without the phase ability', () => {
+		expect(isPhasingActive(false, true, 1000, 1000, 1000)).toBe(false);
+	});
+
+	it('is not active when dash is not held', () => {
+		expect(isPhasingActive(true, false, 1000, 1000, 1000)).toBe(false);
+	});
+
+	it('is not active once the max duration has elapsed', () => {
+		expect(isPhasingActive(true, true, 1000, 2000, 1000)).toBe(false);
+	});
+
+	it('does not restart just because dash is still held well past the cap', () => {
+		expect(isPhasingActive(true, true, 1000, 5000, 1000)).toBe(false);
 	});
 });

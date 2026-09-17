@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canFloat, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
+import { canFloat, canPhase, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { PLAYER_COLORS } from './playerColor';
 
 describe('canFloat', () => {
@@ -42,6 +42,20 @@ describe('getJumpHeightMultiplier', () => {
 				continue;
 			}
 			expect(getJumpHeightMultiplier(color)).toBe(1);
+		}
+	});
+});
+describe('canPhase', () => {
+	it('is true only for purple', () => {
+		expect(canPhase('purple')).toBe(true);
+	});
+
+	it('is false for every other color', () => {
+		for (const color of PLAYER_COLORS) {
+			if (color === 'purple') {
+				continue;
+			}
+			expect(canPhase(color)).toBe(false);
 		}
 	});
 });

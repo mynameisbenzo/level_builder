@@ -27,7 +27,7 @@ export function getSpeedMultiplier(color: PlayerColor): number {
 /**
  * The jump apex-height multiplier for the given character color - how
  * much higher (not how much more initial launch velocity) the
- * character's jump peaks at, compared to the baseline. Beige jumps 50%
+ * character's jump peaks at, compared to the baseline. Beige jumps
  * higher; everyone else is unaffected (multiplier of 1). This is
  * deliberately expressed in height-space, not velocity-space - jump
  * height scales with the square of initial velocity under constant
@@ -38,4 +38,16 @@ export function getSpeedMultiplier(color: PlayerColor): number {
  */
 export function getJumpHeightMultiplier(color: PlayerColor): number {
 	return color === 'beige' ? 2 : 1;
+}
+
+/**
+ * Whether the given character color has the phase ability - holding the
+ * dash button lets the character pass through platforms and other solid
+ * objects, up to a capped duration per dash-hold (see PHASE_MAX_DURATION_MS
+ * and isPhasingActive in movement.ts). Currently just purple. Experimental -
+ * built on its own branch, not yet merged to main.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function canPhase(color: PlayerColor): boolean {
+	return color === 'purple';
 }

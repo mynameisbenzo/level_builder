@@ -12,12 +12,13 @@ import {
 	hasFallenOffScreen,
 	hasFloatBudgetExpired,
 	hasRisingEdge,
+	isPhasingActive,
 	isPMeterFull,
 	shouldStartFloating,
 	shouldStopFloating,
 	type PlayerPose
 } from './movement';
-import { canFloat, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
+import { canFloat, canPhase, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
 import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
@@ -91,6 +92,11 @@ const P_SPEED_TOP_SPEED = 360;
 // to fill the P-meter from empty. Draining uses the same rate, so
 // releasing dash for this same duration fully resets it.
 const P_METER_MAX_MS = 2000;
+// EXPERIMENTAL (purple's phase ability, on its own branch). Purple can
+// pass through platforms while holding dash, capped at this long per
+// dash-hold - see isPhasingActive in movement.ts for why holding dash
+// continuously past this doesn't just resume phasing.
+const PHASE_MAX_DURATION_MS = 1000;
 // Time to reach WALK_SPEED from a standstill: WALK_SPEED / ACCELERATION
 // seconds (200 / 800 = 0.25s) - the build-up feel underlying every
 // speed tier above, not just walking. Tune this to taste; higher =
@@ -253,6 +259,19 @@ export class PlatformerScene extends Phaser.Scene {
 	 * long (ms) the dash key + a direction have been held continuously.
 	 * See getPMeterValue/getMaxSpeedForDashState in movement.ts. */
 	private pMeterMs = 0;
+	// EXPERIMENTAL (purple's phase ability, on its own branch).
+	/** Reference to the player/platforms collider so it can be toggled
+	 * off while phasing and back on when not - Phaser colliders support
+	 * this via their .active property without needing to destroy and
+	 * recreate them. */
+	private platformCollider!: Phaser.Physics.Arcade.Collider;
+	/** When the dash key was last pressed (a fresh rising edge, not a
+	 * continued hold) - used with PHASE_MAX_DURATION_MS to cap how long
+	 * one dash-hold can phase for. Runtime-only, reset each session. */
+	private dashHeldSinceTime = 0;
+	/** For detecting the dash key's rising edge each frame - see
+	 * dashHeldSinceTime above. Runtime-only, reset each session. */
+	private wasDashHeldLastFrame = false;
 	private cameraMode!: CameraMode;
 	/** Only meaningful in 'quadrant' mode - which quadrant the camera is
 	 * currently centered on, so update() can detect when the player has
@@ -293,6 +312,8 @@ export class PlatformerScene extends Phaser.Scene {
 		this.playerPositionHistory = [];
 		this.isFloating = false;
 		this.pMeterMs = 0;
+		this.dashHeldSinceTime = 0;
+		this.wasDashHeldLastFrame = false;
 
 		currentMode.set(CURRENT_MODE);
 
@@ -392,7 +413,7 @@ export class PlatformerScene extends Phaser.Scene {
 				tile.refreshBody();
 			}
 		}
-		this.physics.add.collider(this.player, this.platforms);
+		this.platformCollider = this.physics.add.collider(this.player, this.platforms);
 
 		const swapObjectsData =
 			(this.registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as
@@ -859,6 +880,24 @@ export class PlatformerScene extends Phaser.Scene {
 			? getJumpVelocityMultiplier(getJumpHeightMultiplier(currentPlayerColor))
 			: 1;
 
+		// EXPERIMENTAL (purple's phase ability, on its own branch).
+		const isDashHeld = this.dashKey.isDown;
+		if (hasRisingEdge(isDashHeld, this.wasDashHeldLastFrame)) {
+			this.dashHeldSinceTime = time;
+		}
+		this.wasDashHeldLastFrame = isDashHeld;
+		const isPhasing = currentPlayerColor
+			? isPhasingActive(
+					canPhase(currentPlayerColor),
+					isDashHeld,
+					this.dashHeldSinceTime,
+					time,
+					PHASE_MAX_DURATION_MS
+				)
+			: false;
+		this.platformCollider.active = !isPhasing;
+		this.player.setAlpha(isPhasing ? 0.5 : 1);
+
 		for (const swapObject of this.swapObjects) {
 			if (
 				!swapObject.onCooldown &&
@@ -909,7 +948,6 @@ export class PlatformerScene extends Phaser.Scene {
 			padStickRight ||
 			touchInputState.right;
 		const isMoving = leftDown || rightDown;
-		const isDashHeld = this.dashKey.isDown;
 		this.pMeterMs = getPMeterValue(this.pMeterMs, isDashHeld, isMoving, delta, P_METER_MAX_MS);
 		const maxSpeed = getMaxSpeedForDashState(
 			isDashHeld,

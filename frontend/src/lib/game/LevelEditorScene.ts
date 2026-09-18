@@ -111,9 +111,9 @@ const EDGE_SCROLL_SPEED_PX_PER_SEC = 400;
 // mode) - clicking in the gaps between toolbar buttons, or near but not
 // exactly on one, should never fall through to world placement/erasure
 // underneath. Sized to the toolbars' actual content, with a little
-// margin, not to any scroll-trigger distance.
-const TOP_UI_GUARD_HEIGHT = 100;
-const BOTTOM_UI_GUARD_HEIGHT = 70;
+// margin, not to any scroll-trigger distance. See the
+// topUiGuardHeight/bottomUiGuardHeight instance getters, which also
+// scale up on touch devices to match the larger toolbar there.
 
 /**
  * Which UI the user prefers for changing a selected platform's style.
@@ -154,6 +154,72 @@ type EditorInteractionMode = 'edit' | 'navigate';
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
 	private playerObject!: Phaser.GameObjects.Image;
+	/** Detected once in create() via Phaser's own device info - true on
+	 * touch-capable devices (phones/tablets), false for mouse-only
+	 * desktop use. Every toolbar/swatch size getter below branches on
+	 * this, so touch users get meaningfully larger tap targets (roughly
+	 * matching Apple/Google's ~44px minimum touch-target guidance once
+	 * scaled to a typical phone screen) without changing anything for
+	 * desktop mouse users, who keep the original sizes exactly as they
+	 * were. */
+	private isTouchDevice = false;
+
+	/** Icon display size (the tappable image itself) for the main tools
+	 * toolbar (select/eraser/swap/winCondition/startingChar). */
+	private get toolIconSize(): number {
+		return this.isTouchDevice ? 44 : 24;
+	}
+	/** The border rectangle behind each main-toolbar icon - deliberately
+	 * larger than the icon itself, giving a bigger effective tap target
+	 * than the visible icon alone would (the border isn't interactive,
+	 * but sizing the icon's own hit area to roughly match it keeps the
+	 * visual and tappable areas consistent). */
+	private get toolIconBorderSize(): { width: number; height: number } {
+		return this.isTouchDevice ? { width: 64, height: 56 } : { width: 40, height: 32 };
+	}
+	/** Horizontal spacing between adjacent main-toolbar icon centers. */
+	private get toolbarSpacing(): number {
+		return this.isTouchDevice ? 80 : 56;
+	}
+	/** Display size for every bottom-row picker swatch (character-swap,
+	 * starting-character, win-condition, door-key-color, style). */
+	private get swatchSize(): number {
+		return this.isTouchDevice ? 60 : 40;
+	}
+	/** Horizontal spacing between adjacent swatch centers. */
+	private get swatchSpacing(): number {
+		return this.isTouchDevice ? 16 : 10;
+	}
+	/** Font size for the standalone text buttons (Instructions, UI mode,
+	 * camera mode, interaction mode toggles). */
+	private get toolbarFontSize(): string {
+		return this.isTouchDevice ? '20px' : '14px';
+	}
+	/** Vertical center of the main tools toolbar row - needs to sit
+	 * lower on touch devices so the taller icon borders (see
+	 * toolIconBorderSize) don't clip off the top of the screen. */
+	private get mainToolbarY(): number {
+		return this.isTouchDevice ? 36 : 24;
+	}
+	/** Vertical spacing between the three stacked top-right text buttons
+	 * (UI mode / camera mode / interaction mode toggles) - needs to be
+	 * taller on touch devices so the larger font doesn't crowd or
+	 * overlap between rows. */
+	private get toolbarRowHeight(): number {
+		return this.isTouchDevice ? 32 : 24;
+	}
+	/** Screen-space height of the click-through guard strip at the top
+	 * of the screen (see isPointOverUi) - must stay tall enough to
+	 * cover the actual toolbar content above, which is itself taller on
+	 * touch devices. */
+	private get topUiGuardHeight(): number {
+		return this.isTouchDevice ? 155 : 115;
+	}
+	/** Same as topUiGuardHeight, but for the bottom-row swatch pickers. */
+	private get bottomUiGuardHeight(): number {
+		return this.isTouchDevice ? 90 : 70;
+	}
+
 	private isInstructionsModalOpen = false;
 	private instructionsModalElements: (Phaser.GameObjects.GameObject &
 		Phaser.GameObjects.Components.ScrollFactor)[] = [];
@@ -233,6 +299,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	private interactionMode: EditorInteractionMode = 'edit';
 	private interactionModeToggleButton!: Phaser.GameObjects.Text;
 	private interactionModeToggleKey!: Phaser.Input.Keyboard.Key;
+	private fullscreenToggleButton!: Phaser.GameObjects.Text;
 	/** Every always-on toolbar element (Instructions button, main tools
 	 * row, starting-character button, UI/camera mode toggles) - hidden
 	 * as a group while navigating, since none of them do anything useful
@@ -310,6 +377,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		currentMode.set(CURRENT_MODE);
 		this.activeGroupKeys = null;
 		this.interactionMode = 'edit';
+		this.isTouchDevice = this.sys.game.device.input.touch;
 
 		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -323,7 +391,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.drawGrid();
 
 		const openInstructionsButton = this.add
-			.text(10, 10, '[?] Instructions', { font: '14px monospace', color: '#ffffff' })
+			.text(10, 10, '[?] Instructions', { font: this.toolbarFontSize + ' monospace', color: '#ffffff' })
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0);
 
@@ -335,6 +403,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.createUiModeToggle();
 		this.createCameraModeToggle();
 		this.createInteractionModeToggle();
+		this.createFullscreenToggle();
 		this.createStyleToolbar();
 		this.createCharacterSwapToolbar();
 		this.createStartingCharacterToolbar();
@@ -531,10 +600,10 @@ export class LevelEditorScene extends Phaser.Scene {
 		if (this.isInstructionsModalOpen) {
 			return true;
 		}
-		if (screenY <= TOP_UI_GUARD_HEIGHT) {
+		if (screenY <= this.topUiGuardHeight) {
 			return true;
 		}
-		if (screenY >= this.scale.height - BOTTOM_UI_GUARD_HEIGHT) {
+		if (screenY >= this.scale.height - this.bottomUiGuardHeight) {
 			return true;
 		}
 		return false;
@@ -612,7 +681,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const closeButton = this.add
 			.text(centerX + panelWidth / 2 - 24, centerY - panelHeight / 2 + 14, '[X]', {
-				font: '14px monospace',
+				font: this.toolbarFontSize + ' monospace',
 				color: '#ff6b6b'
 			})
 			.setInteractive({ useHandCursor: true });
@@ -653,17 +722,19 @@ export class LevelEditorScene extends Phaser.Scene {
 	// ── Tools toolbar (top-center) ──────────────────────────────────────
 
 	private createToolsToolbar() {
-		const spacing = 56;
+		const spacing = this.toolbarSpacing;
 		const startX = this.scale.width / 2 - spacing * 2;
-		const y = 24;
+		const y = this.mainToolbarY;
+		const borderSize = this.toolIconBorderSize;
+		const iconSize = this.toolIconSize;
 
 		const selectBorder = this.add
-			.rectangle(startX, y, 40, 32)
+			.rectangle(startX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
 			.setScrollFactor(0);
 		const selectIcon = this.add
 			.image(startX, y, SELECT_CURSOR_ICON_KEY)
-			.setDisplaySize(24, 24)
+			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0);
 		selectIcon.on('pointerdown', () => this.setEditorTool('select'));
@@ -671,12 +742,12 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const eraserX = startX + spacing;
 		const eraserBorder = this.add
-			.rectangle(eraserX, y, 40, 32)
+			.rectangle(eraserX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
 			.setScrollFactor(0);
 		const eraserIcon = this.add
 			.image(eraserX, y, ERASER_ICON_KEY)
-			.setDisplaySize(24, 24)
+			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0);
 		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
@@ -684,14 +755,14 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const swapX = startX + spacing * 2;
 		const swapBorder = this.add
-			.rectangle(swapX, y, 40, 32)
+			.rectangle(swapX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
 			.setScrollFactor(0);
 		// No dedicated tool icon exists for this - reusing one color's
 		// swap-object frame as a representative icon.
 		const swapIcon = this.add
 			.image(swapX, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame('beige'))
-			.setDisplaySize(24, 24)
+			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0);
 		swapIcon.on('pointerdown', () => this.setEditorTool('characterSwap'));
@@ -699,14 +770,14 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const winConditionX = startX + spacing * 3;
 		const winConditionBorder = this.add
-			.rectangle(winConditionX, y, 40, 32)
+			.rectangle(winConditionX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
 			.setScrollFactor(0);
 		// No dedicated tool icon exists for this category either - reusing
 		// the no-key door's frame as a representative icon.
 		const winConditionIcon = this.add
 			.image(winConditionX, y, TILES_ATLAS_KEY, DOOR_NO_KEY_CLOSED_FRAME)
-			.setDisplaySize(24, 24)
+			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0);
 		winConditionIcon.on('pointerdown', () => this.setEditorTool('winCondition'));
@@ -721,12 +792,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		// whichever color is currently chosen instead of a fixed one.
 		const startingCharX = startX + spacing * 4;
 		const startingCharBorder = this.add
-			.rectangle(startingCharX, y, 40, 32)
+			.rectangle(startingCharX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
 			.setScrollFactor(0);
 		this.startingCharacterButtonIcon = this.add
 			.image(startingCharX, y, TILES_ATLAS_KEY, getPlayerHudFrame(ensureStartingPlayerColor(this)))
-			.setDisplaySize(24, 24)
+			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0);
 		this.startingCharacterButtonIcon.on('pointerdown', () => this.toggleStartingCharacterPicker());
@@ -827,8 +898,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	// ── Character-swap placement tool ───────────────────────────────────
 
 	private createCharacterSwapToolbar() {
-		const swatchSize = 40;
-		const spacing = 10;
+		const swatchSize = this.swatchSize;
+		const spacing = this.swatchSpacing;
 		const totalWidth =
 			PLAYER_COLORS.length * swatchSize + (PLAYER_COLORS.length - 1) * spacing;
 		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
@@ -1013,8 +1084,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private createStartingCharacterToolbar() {
-		const swatchSize = 40;
-		const spacing = 10;
+		const swatchSize = this.swatchSize;
+		const spacing = this.swatchSpacing;
 		const totalWidth =
 			PLAYER_COLORS.length * swatchSize + (PLAYER_COLORS.length - 1) * spacing;
 		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
@@ -1091,8 +1162,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	// ── Win-condition placement tool ────────────────────────────────────
 
 	private createWinConditionToolbar() {
-		const swatchSize = 40;
-		const spacing = 10;
+		const swatchSize = this.swatchSize;
+		const spacing = this.swatchSpacing;
 		const y = this.scale.height - 40;
 
 		const items: PlaceableWinConditionItem[] = [
@@ -1353,8 +1424,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	// ── Door key-color picker ───────────────────────────────────────────
 
 	private createDoorKeyColorPicker() {
-		const swatchSize = 40;
-		const spacing = 10;
+		const swatchSize = this.swatchSize;
+		const spacing = this.swatchSpacing;
 		const totalWidth = KEY_COLORS.length * swatchSize + (KEY_COLORS.length - 1) * spacing;
 		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
 		const y = this.scale.height - 40;
@@ -1428,7 +1499,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		const mode = this.getStylePickerMode();
 		this.uiModeToggleButton = this.add
 			.text(this.scale.width - 10, 10, this.uiModeLabel(mode), {
-				font: '14px monospace',
+				font: this.toolbarFontSize + ' monospace',
 				color: '#00d9ff'
 			})
 			.setOrigin(1, 0)
@@ -1455,8 +1526,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	private createCameraModeToggle() {
 		const mode = ensureCameraMode(this);
 		this.cameraModeToggleButton = this.add
-			.text(this.scale.width - 10, 34, this.cameraModeLabel(mode), {
-				font: '14px monospace',
+			.text(this.scale.width - 10, 10 + this.toolbarRowHeight, this.cameraModeLabel(mode), {
+				font: this.toolbarFontSize + ' monospace',
 				color: '#00d9ff'
 			})
 			.setOrigin(1, 0)
@@ -1478,8 +1549,8 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createInteractionModeToggle() {
 		this.interactionModeToggleButton = this.add
-			.text(this.scale.width - 10, 58, this.interactionModeLabel(this.interactionMode), {
-				font: '14px monospace',
+			.text(this.scale.width - 10, 10 + this.toolbarRowHeight * 2, this.interactionModeLabel(this.interactionMode), {
+				font: this.toolbarFontSize + ' monospace',
 				color: '#ffd23f'
 			})
 			.setOrigin(1, 0)
@@ -1487,6 +1558,48 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setScrollFactor(0);
 
 		this.interactionModeToggleButton.on('pointerdown', () => this.toggleInteractionMode());
+	}
+
+	/**
+	 * Toggles browser fullscreen (hides the browser's own chrome - address
+	 * bar, etc. - to maximize usable screen space), especially relevant
+	 * on mobile where that chrome eats into an already-small screen. Uses
+	 * Phaser's Scale Manager, which wraps the standard Fullscreen Web
+	 * API; that API requires a direct user gesture to invoke, which the
+	 * pointerdown handler here satisfies. Not every browser/context
+	 * supports it (checked via scale.fullscreen.available), so the
+	 * button is hidden entirely rather than shown as a dead click if
+	 * unsupported.
+	 */
+	private createFullscreenToggle() {
+		if (!this.scale.fullscreen.available) {
+			return;
+		}
+
+		this.fullscreenToggleButton = this.add
+			.text(this.scale.width - 10, 10 + this.toolbarRowHeight * 3, this.fullscreenLabel(), {
+				font: this.toolbarFontSize + ' monospace',
+				color: '#00ff9f'
+			})
+			.setOrigin(1, 0)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0);
+		this.persistentToolbarElements.push(this.fullscreenToggleButton);
+
+		this.fullscreenToggleButton.on('pointerdown', () => {
+			this.scale.toggleFullscreen();
+		});
+
+		this.scale.on(Phaser.Scale.Events.ENTER_FULLSCREEN, this.refreshFullscreenLabel, this);
+		this.scale.on(Phaser.Scale.Events.LEAVE_FULLSCREEN, this.refreshFullscreenLabel, this);
+	}
+
+	private refreshFullscreenLabel() {
+		this.fullscreenToggleButton.setText(this.fullscreenLabel());
+	}
+
+	private fullscreenLabel(): string {
+		return this.scale.isFullscreen ? 'Fullscreen: On' : 'Fullscreen: Off';
 	}
 
 	private interactionModeLabel(mode: EditorInteractionMode): string {
@@ -1565,8 +1678,8 @@ export class LevelEditorScene extends Phaser.Scene {
 	// ── Style toolbar UI ─────────────────────────────────────────────────
 
 	private createStyleToolbar() {
-		const swatchSize = 40;
-		const spacing = 10;
+		const swatchSize = this.swatchSize;
+		const spacing = this.swatchSpacing;
 		const totalWidth =
 			GROUND_TILE_STYLES.length * swatchSize + (GROUND_TILE_STYLES.length - 1) * spacing;
 		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;

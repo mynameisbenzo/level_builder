@@ -154,6 +154,14 @@ type EditorInteractionMode = 'edit' | 'navigate';
 export class LevelEditorScene extends Phaser.Scene {
 	private toggleKey!: Phaser.Input.Keyboard.Key;
 	private playerObject!: Phaser.GameObjects.Image;
+	// Method A: dual-camera setup for zoomed world + fixed-size UI.
+	/** Detected once in create() via Phaser's own device info. */
+	private isTouchDevice = false;
+	/** A second camera, layered on top of the main one, dedicated to
+	 * rendering only UI - never zoomed, regardless of what the main
+	 * camera is doing. See markAsWorldObject/markAsUiObject below for
+	 * how content is routed to the correct camera only. */
+	private uiCamera!: Phaser.Cameras.Scene2D.Camera;
 	private isInstructionsModalOpen = false;
 	private instructionsModalElements: (Phaser.GameObjects.GameObject &
 		Phaser.GameObjects.Components.ScrollFactor)[] = [];
@@ -313,6 +321,18 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+		this.isTouchDevice = this.sys.game.device.input.touch;
+		// UI camera created early - markAsUiObject/markAsWorldObject calls
+		// happen throughout the rest of create() and other methods, so
+		// this needs to exist before any of them run. Left with no
+		// explicit background color, which defaults to transparent for
+		// any camera beyond the main one - this is what lets the main
+		// camera's (possibly zoomed) world content show through
+		// underneath it.
+		this.uiCamera = this.cameras.add(0, 0, VIEWPORT_WIDTH, VIEWPORT_HEIGHT);
+		if (this.isTouchDevice) {
+			this.cameras.main.setZoom(1.5);
+		}
 		// Default framing is the bottom-left quadrant (index 2), rather
 		// than wherever the camera happens to start by default (0,0 -
 		// top-left). Independent of player spawn position; this is just
@@ -322,10 +342,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
-		const openInstructionsButton = this.add
-			.text(10, 10, '[?] Instructions', { font: '14px monospace', color: '#ffffff' })
-			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+		const openInstructionsButton = this.markAsUiObject(
+			this.add
+				.text(10, 10, '[?] Instructions', { font: '14px monospace', color: '#ffffff' })
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0)
+		);
 
 		openInstructionsButton.on('pointerdown', () => this.openInstructionsModal());
 		this.persistentToolbarElements.push(openInstructionsButton);
@@ -468,15 +490,17 @@ export class LevelEditorScene extends Phaser.Scene {
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
 		const playerColor = ensureStartingPlayerColor(this);
-		this.playerObject = this.add
-			.image(
-				spawnPosition.x,
-				spawnPosition.y,
-				CHARACTERS_ATLAS_KEY,
-				getPlayerPoseConfig(playerColor).idle.frame
-			)
-			.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
-			.setInteractive({ draggable: true });
+		this.playerObject = this.markAsWorldObject(
+			this.add
+				.image(
+					spawnPosition.x,
+					spawnPosition.y,
+					CHARACTERS_ATLAS_KEY,
+					getPlayerPoseConfig(playerColor).idle.frame
+				)
+				.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
+				.setInteractive({ draggable: true })
+		);
 
 		this.playerObject.on(
 			'drag',
@@ -495,6 +519,41 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.interactionModeToggleKey = this.input.keyboard.addKey(
 			Phaser.Input.Keyboard.KeyCodes.SPACE
 		);
+	}
+
+	/**
+	 * Registers a game object as world content for the dual-camera setup
+	 * - tells the UI camera to skip rendering it, so it only ever
+	 * appears via the (possibly zoomed) main camera, never duplicated or
+	 * shown at the wrong scale by the UI camera layered on top. Returns
+	 * the object unchanged so call sites can wrap creation calls inline
+	 * (e.g. `this.markAsWorldObject(this.add.image(...))`).
+	 *
+	 * Called at the moment every world object is created - tiles, the
+	 * player marker, swap objects, doors, keys, the grid, selection
+	 * borders, the radial menu. There's no reliable way to retroactively
+	 * catch dynamically created objects after the fact (camera.ignore()
+	 * only takes a snapshot of whatever list you pass it at call time),
+	 * so every world-object creation site needs to route through this
+	 * individually rather than relying on one bulk call somewhere.
+	 */
+	private markAsWorldObject<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+		this.uiCamera.ignore(obj);
+		return obj;
+	}
+
+	/**
+	 * The mirror image of markAsWorldObject - registers a game object as
+	 * UI content, telling the main (world) camera to skip rendering it,
+	 * so UI only ever renders via the dedicated, never-zoomed UI camera.
+	 * Same "every creation site routes through this" reasoning applies,
+	 * even though UI elements are mostly created once at scene startup
+	 * rather than growing dynamically - consistency here matters more
+	 * than the two cases actually needing identical treatment.
+	 */
+	private markAsUiObject<T extends Phaser.GameObjects.GameObject>(obj: T): T {
+		this.cameras.main.ignore(obj);
+		return obj;
 	}
 
 	update(_time: number, delta: number) {
@@ -639,6 +698,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.instructionsModalElements = [backdrop, panelBg, title, closeButton, ...lineTexts];
 		for (const element of this.instructionsModalElements) {
 			element.setScrollFactor(0);
+			this.markAsUiObject(element);
 		}
 	}
 
@@ -738,6 +798,9 @@ export class LevelEditorScene extends Phaser.Scene {
 			);
 		}
 		this.persistentToolbarElements.push(startingCharBorder, this.startingCharacterButtonIcon);
+		for (const element of this.persistentToolbarElements) {
+			this.markAsUiObject(element);
+		}
 
 		this.refreshToolHighlight();
 	}
@@ -837,16 +900,20 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.characterSwapSwatches = PLAYER_COLORS.map((color, index) => {
 			const x = startX + index * (swatchSize + spacing);
 
-			const border = this.add
-				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+			const border = this.markAsUiObject(
+				this.add
+					.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+					.setStrokeStyle(3, 0x666666)
+					.setScrollFactor(0)
+			);
 
-			const image = this.add
-				.image(x, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(color))
-				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+			const image = this.markAsUiObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(color))
+					.setDisplaySize(swatchSize, swatchSize)
+					.setInteractive({ useHandCursor: true })
+					.setScrollFactor(0)
+			);
 
 			image.on('pointerdown', () => this.selectSwapColor(color));
 
@@ -962,10 +1029,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 
 		this.placedSwapObjectImages = this.getPlacedSwapObjects().map((object) => {
-			const image = this.add
-				.image(object.x, object.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(object.color))
-				.setDisplaySize(GRID_SIZE, GRID_SIZE)
-				.setInteractive();
+			const image = this.markAsWorldObject(
+				this.add
+					.image(object.x, object.y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(object.color))
+					.setDisplaySize(GRID_SIZE, GRID_SIZE)
+					.setInteractive()
+			);
 
 			image.on('pointerdown', () => {
 				if (this.getEditorTool() === 'eraser') {
@@ -1023,16 +1092,20 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.startingCharacterSwatches = PLAYER_COLORS.map((color, index) => {
 			const x = startX + index * (swatchSize + spacing);
 
-			const border = this.add
-				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+			const border = this.markAsUiObject(
+				this.add
+					.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+					.setStrokeStyle(3, 0x666666)
+					.setScrollFactor(0)
+			);
 
-			const image = this.add
-				.image(x, y, TILES_ATLAS_KEY, getPlayerHudFrame(color))
-				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+			const image = this.markAsUiObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, getPlayerHudFrame(color))
+					.setDisplaySize(swatchSize, swatchSize)
+					.setInteractive({ useHandCursor: true })
+					.setScrollFactor(0)
+			);
 
 			image.on('pointerdown', () => this.selectStartingCharacterColor(color));
 
@@ -1108,15 +1181,19 @@ export class LevelEditorScene extends Phaser.Scene {
 			const frame =
 				item.kind === 'door' ? getDoorClosedFrame(item.requiresKey) : getKeyFrame(item.color);
 
-			const border = this.add
-				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
-			const image = this.add
-				.image(x, y, TILES_ATLAS_KEY, frame)
-				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+			const border = this.markAsUiObject(
+				this.add
+					.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+					.setStrokeStyle(3, 0x666666)
+					.setScrollFactor(0)
+			);
+			const image = this.markAsUiObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, frame)
+					.setDisplaySize(swatchSize, swatchSize)
+					.setInteractive({ useHandCursor: true })
+					.setScrollFactor(0)
+			);
 			image.on('pointerdown', () => this.selectWinConditionItem(item));
 
 			return { item, image, border };
@@ -1270,10 +1347,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 
 		this.placedDoorImages = this.getPlacedDoors().map((door) => {
-			const image = this.add
-				.image(door.x, door.y, TILES_ATLAS_KEY, getDoorClosedFrame(door.requiresKey))
-				.setDisplaySize(GRID_SIZE, GRID_SIZE)
-				.setInteractive();
+			const image = this.markAsWorldObject(
+				this.add
+					.image(door.x, door.y, TILES_ATLAS_KEY, getDoorClosedFrame(door.requiresKey))
+					.setDisplaySize(GRID_SIZE, GRID_SIZE)
+					.setInteractive()
+			);
 
 			image.on('pointerdown', () => {
 				const tool = this.getEditorTool();
@@ -1324,10 +1403,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 
 		this.placedKeyImages = this.getPlacedKeys().map((key) => {
-			const image = this.add
-				.image(key.x, key.y, TILES_ATLAS_KEY, getKeyFrame(key.color))
-				.setDisplaySize(GRID_SIZE, GRID_SIZE)
-				.setInteractive();
+			const image = this.markAsWorldObject(
+				this.add
+					.image(key.x, key.y, TILES_ATLAS_KEY, getKeyFrame(key.color))
+					.setDisplaySize(GRID_SIZE, GRID_SIZE)
+					.setInteractive()
+			);
 
 			image.on('pointerdown', () => {
 				if (this.getEditorTool() === 'eraser') {
@@ -1362,15 +1443,19 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.doorKeyColorSwatches = KEY_COLORS.map((color, index) => {
 			const x = startX + index * (swatchSize + spacing);
 
-			const border = this.add
-				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
-			const image = this.add
-				.image(x, y, TILES_ATLAS_KEY, getKeyFrame(color))
-				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+			const border = this.markAsUiObject(
+				this.add
+					.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+					.setStrokeStyle(3, 0x666666)
+					.setScrollFactor(0)
+			);
+			const image = this.markAsUiObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, getKeyFrame(color))
+					.setDisplaySize(swatchSize, swatchSize)
+					.setInteractive({ useHandCursor: true })
+					.setScrollFactor(0)
+			);
 			image.on('pointerdown', () => this.selectDoorKeyColor(color));
 
 			return { color, image, border };
@@ -1426,14 +1511,16 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createUiModeToggle() {
 		const mode = this.getStylePickerMode();
-		this.uiModeToggleButton = this.add
-			.text(this.scale.width - 10, 10, this.uiModeLabel(mode), {
-				font: '14px monospace',
-				color: '#00d9ff'
-			})
-			.setOrigin(1, 0)
-			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+		this.uiModeToggleButton = this.markAsUiObject(
+			this.add
+				.text(this.scale.width - 10, 10, this.uiModeLabel(mode), {
+					font: '14px monospace',
+					color: '#00d9ff'
+				})
+				.setOrigin(1, 0)
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0)
+		);
 		this.persistentToolbarElements.push(this.uiModeToggleButton);
 
 		this.uiModeToggleButton.on('pointerdown', () => {
@@ -1454,14 +1541,16 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createCameraModeToggle() {
 		const mode = ensureCameraMode(this);
-		this.cameraModeToggleButton = this.add
-			.text(this.scale.width - 10, 34, this.cameraModeLabel(mode), {
-				font: '14px monospace',
-				color: '#00d9ff'
-			})
-			.setOrigin(1, 0)
-			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+		this.cameraModeToggleButton = this.markAsUiObject(
+			this.add
+				.text(this.scale.width - 10, 34, this.cameraModeLabel(mode), {
+					font: '14px monospace',
+					color: '#00d9ff'
+				})
+				.setOrigin(1, 0)
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0)
+		);
 		this.persistentToolbarElements.push(this.cameraModeToggleButton);
 
 		this.cameraModeToggleButton.on('pointerdown', () => {
@@ -1477,14 +1566,16 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private createInteractionModeToggle() {
-		this.interactionModeToggleButton = this.add
-			.text(this.scale.width - 10, 58, this.interactionModeLabel(this.interactionMode), {
-				font: '14px monospace',
-				color: '#ffd23f'
-			})
-			.setOrigin(1, 0)
-			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+		this.interactionModeToggleButton = this.markAsUiObject(
+			this.add
+				.text(this.scale.width - 10, 58, this.interactionModeLabel(this.interactionMode), {
+					font: '14px monospace',
+					color: '#ffd23f'
+				})
+				.setOrigin(1, 0)
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0)
+		);
 
 		this.interactionModeToggleButton.on('pointerdown', () => this.toggleInteractionMode());
 	}
@@ -1575,16 +1666,20 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.styleSwatches = GROUND_TILE_STYLES.map((style, index) => {
 			const x = startX + index * (swatchSize + spacing);
 
-			const border = this.add
-				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
-				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+			const border = this.markAsUiObject(
+				this.add
+					.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+					.setStrokeStyle(3, 0x666666)
+					.setScrollFactor(0)
+			);
 
-			const image = this.add
-				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
-				.setDisplaySize(swatchSize, swatchSize)
-				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+			const image = this.markAsUiObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
+					.setDisplaySize(swatchSize, swatchSize)
+					.setInteractive({ useHandCursor: true })
+					.setScrollFactor(0)
+			);
 
 			image.on('pointerdown', () => this.applyStyleToActiveGroup(style));
 
@@ -1619,9 +1714,9 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 		this.isRadialMenuOpen = true;
 
-		this.radialMenuCenter = this.add
-			.circle(centerX, centerY, 10, 0xffd23f, 0.9)
-			.setInteractive({ useHandCursor: true });
+		this.radialMenuCenter = this.markAsWorldObject(
+			this.add.circle(centerX, centerY, 10, 0xffd23f, 0.9).setInteractive({ useHandCursor: true })
+		);
 		// Clicking the center deselects, same as clicking an already-active
 		// tile directly would - this closes the menu via the same selection
 		// state the toolbar's visibility already depends on.
@@ -1637,14 +1732,18 @@ export class LevelEditorScene extends Phaser.Scene {
 			const x = centerX + radius * Math.cos(angle);
 			const y = centerY + radius * Math.sin(angle);
 
-			const border = this.add
-				.circle(x, y, 26, 0x000000, 0)
-				.setStrokeStyle(3, style === currentStyle ? 0xffd23f : 0x666666);
+			const border = this.markAsWorldObject(
+				this.add
+					.circle(x, y, 26, 0x000000, 0)
+					.setStrokeStyle(3, style === currentStyle ? 0xffd23f : 0x666666)
+			);
 
-			const swatch = this.add
-				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
-				.setDisplaySize(44, 44)
-				.setInteractive({ useHandCursor: true });
+			const swatch = this.markAsWorldObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
+					.setDisplaySize(44, 44)
+					.setInteractive({ useHandCursor: true })
+			);
 
 			swatch.on('pointerdown', () => {
 				// Menu stays open, mirroring the toolbar staying visible
@@ -1796,9 +1895,9 @@ export class LevelEditorScene extends Phaser.Scene {
 			const [xStr, yStr] = key.split(',');
 			const x = Number(xStr);
 			const y = Number(yStr);
-			const border = this.add
-				.rectangle(x, y, GRID_SIZE + 4, GRID_SIZE + 4)
-				.setStrokeStyle(3, 0xffd23f);
+			const border = this.markAsWorldObject(
+				this.add.rectangle(x, y, GRID_SIZE + 4, GRID_SIZE + 4).setStrokeStyle(3, 0xffd23f)
+			);
 			this.activeTileBorders.push(border);
 		}
 	}
@@ -1869,10 +1968,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		const frameAssignments = getGroupFrames(groupTiles, GRID_SIZE);
 
 		for (const { x, y, frame } of frameAssignments) {
-			const tile = this.add
-				.image(x, y, TILES_ATLAS_KEY, frame)
-				.setDisplaySize(GRID_SIZE, GRID_SIZE)
-				.setInteractive();
+			const tile = this.markAsWorldObject(
+				this.add
+					.image(x, y, TILES_ATLAS_KEY, frame)
+					.setDisplaySize(GRID_SIZE, GRID_SIZE)
+					.setInteractive()
+			);
 
 			tile.on('pointerdown', () => {
 				if (this.getEditorTool() === 'eraser') {
@@ -1903,7 +2004,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private drawGrid() {
-		const graphics = this.add.graphics();
+		const graphics = this.markAsWorldObject(this.add.graphics());
 		graphics.lineStyle(1, GRID_COLOR, 1);
 
 		for (let x = 0; x <= WORLD_WIDTH; x += GRID_SIZE) {

@@ -367,6 +367,22 @@ recur:
   placement logic needed `pointer.worldX`/`pointer.worldY` instead
   (Phaser's built-in world-space equivalents) or clicks would land
   offset by however far the camera had panned.
+- **Touch-drag placement can genuinely only be trusted on a real,
+  HTTPS-hosted deployment, not a local dev server.** A real iPhone
+  could tap to place single objects (swap objects, doors, keys) but
+  not drag-place platforms, while Chrome DevTools' device emulation
+  showed no problem at all. The code was proven byte-identical between
+  `main` and the branch under test, and the *built* production bundle
+  served locally (`vite preview`) had the exact same failure as the
+  dev server - ruling out both "it's a code bug" and "it's Vite's
+  dev-mode client" as explanations. Render's own HTTPS deployment
+  worked immediately with the same code. The mechanism was never
+  fully pinned down (both `localtunnel` and `ngrok` failed before an
+  HTTPS-vs-HTTP tunnel test could complete), but the practical
+  takeaway holds either way: **testing any touch/drag interaction on
+  an actual phone requires a real HTTPS-hosted build, not a local dev
+  server or emulation** - see the Render Preview Environments section
+  below for the workflow this led to.
 
 ## CI
 
@@ -382,6 +398,30 @@ Both run on every push and pull request to `main`. Render's
 `autoDeployTrigger: checksPass` means deployment only happens once these
 checks pass — a failing test or lint blocks the deploy automatically, no
 manual gating required.
+
+### Preview Environments (mobile testing workflow)
+
+`render.yaml` has `previews.generation: automatic` set on both services,
+so **every pull request gets its own live, HTTPS-hosted deployment**,
+separate from `main` and from each other. This exists specifically
+because local dev servers (and even a locally-served production build)
+cannot be trusted for testing touch/drag interactions on a real phone —
+see the Testing philosophy section above for what that cost us to
+discover.
+
+Workflow for testing an in-progress branch on an actual phone:
+1. Push the branch, open a PR into `main` (draft is fine — nothing about
+   opening a PR deploys to or affects `main` itself).
+2. Find the preview URL either on the PR's status checks (look for a
+   `render/...` entry with a "View deployment" link) or in the Render
+   dashboard, as a separate service entry named after the branch/PR.
+3. Open that URL on the actual device. Further commits pushed to the
+   same branch auto-update the same preview URL — no need to open a new
+   PR each time.
+
+Preview services are billed like regular Render services (prorated by
+the second), though this stays within the free tier for a project this
+size.
 
 ## Roadmap
 

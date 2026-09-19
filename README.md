@@ -533,6 +533,53 @@ until the moment someone wants to save or share.
       it's still an issue now that panning and editing are separate
       modes, since the original bug was specifically about a tap
       falling through to tile placement underneath the toolbar.
+- [ ] **Touch controls during Play** — how movement/jump/dash buttons
+      feel, their layout, and responsiveness haven't had a dedicated
+      pass; a separate concern from Editor usability specifically.
+- [ ] **General mobile layout/scaling** — how the canvas fits different
+      phone screen sizes and orientations beyond the existing
+      landscape-only + scale-to-fit baseline hasn't been revisited.
+- [ ] **Revisit Method A (dual-camera zoom) for mobile Editor
+      usability, if picked back up later.** Three approaches were
+      explored for making the Editor easier to use on a phone -
+      bigger touch targets with no camera zoom (`mobile-touch-targets`
+      - the one actually adopted, for now), a naive single-camera zoom
+      with no compensation (`mobile-zoom-naive` - confirmed broken,
+      UI ends up off-screen), and a proper dual-camera setup where a
+      second, dedicated, never-zoomed camera renders UI independently
+      of a zoomed world camera (`mobile-zoom-method-a` - technically
+      correct and confirmed working; this is also the fix Phaser's own
+      maintainers recommend for this exact class of problem, per
+      [phaserjs/phaser#6374](https://github.com/phaserjs/phaser/issues/6374)).
+      A fourth angle - repositioning UI to compensate for zoom on a
+      single camera, without a second camera - was tried
+      (`mobile-zoom-method-b`) and found to be a genuine dead end: that
+      same GitHub issue confirms `scrollFactor` can cancel camera
+      *scroll* but not camera *zoom*, so no amount of repositioning
+      math can fix it - only a second camera can.
+
+      Method A's real, measured cost turned out to be a substantial
+      reduction in how much of the level fits on screen at once - a
+      concrete example found during testing: a repeating "5-wide
+      platform, 1-tile gap" pattern fit 7 platforms at 1.5x zoom versus
+      8 platforms plus a 2-tile platform unzoomed, since zooming in
+      necessarily shows fewer world units at once in exchange for
+      showing them larger (`800 / 1.5 ≈ 533px` visible instead of
+      `800px`, roughly a third fewer tiles across). `mobile-touch-targets`
+      has no such cost - it never touches the camera, so grid/tile size
+      and therefore build capacity per screen stay identical on every
+      device, which is why it was chosen over either zoom approach for
+      now.
+
+      If Method A is revisited, this capacity loss is the specific
+      problem to solve - not by touching `WORLD_WIDTH`/`WORLD_HEIGHT`
+      (those control total buildable area across all four quadrants,
+      not how much is visible at once, so they don't address this at
+      all), but by adjusting how much of the Editor's editing area
+      is actually reachable/visible at a given zoom level, so a mobile
+      user building at 1.5x zoom ends up with genuinely equivalent
+      tile access to a desktop user at 1x - not just a bigger, blurrier
+      version of a smaller working area.
 - [ ] **Vertical/horizontal junction piece** — a horizontal and vertical
       platform touching currently render with no visual connection
       between them. A junction was built and tried (a horizontal tile

@@ -282,11 +282,14 @@ runtime state, discarded when the session ends).
   visual signals that it's temporarily inactive. Clearing the distance
   triggers a shrink→overshoot→settle "pop" before it resumes normal
   floating.
-- **At most 4 objects per level**, enforced by the Editor: every object
-  must hold a genuinely distinct color, and the level's current starting
-  color is also excluded from placement - so a level can never end up in
-  a state where two things share one color, even the moment it first
-  loads.
+- **No cap, and no color-uniqueness requirement** - any color can be
+  placed any number of times, including a duplicate of the level's
+  current starting color. This was a deliberate restriction earlier in
+  development (max 4 objects, every one a distinct color, the starting
+  color excluded from placement entirely), removed to not limit level
+  design creativity - e.g. placing the same color in multiple spots as
+  a deliberate "reset" point, or leaning heavily into one or two colors
+  throughout a level.
 - Placed objects can be removed with the Eraser tool, same as ground
   tiles.
 

@@ -3,6 +3,10 @@ body {
 	margin: 0;
 	padding: 0;
 	height: 100%;
+	font-family:
+		'Manrope',
+		system-ui,
+		sans-serif;
 }
 
 * {

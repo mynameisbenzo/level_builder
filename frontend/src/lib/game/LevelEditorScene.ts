@@ -23,7 +23,6 @@ import {
 import { getPlayerPoseConfig, PLAYER_DISPLAY_SIZE } from './playerPose';
 import {
 	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
-	getAvailableSwapColors,
 	removeSwapObjectAt,
 	type CharacterSwapObject
 } from './characterSwapObjects';
@@ -85,7 +84,6 @@ import {
 	clampScroll,
 	ensureCameraMode,
 	getEdgeScrollVelocity,
-	getQuadrantCenter,
 	setCameraMode,
 	VIEWPORT_HEIGHT,
 	VIEWPORT_WIDTH,
@@ -106,14 +104,17 @@ const BACKGROUND_COLOR = 0x14141f;
 const EDGE_SCROLL_THRESHOLD_PX = 50;
 const EDGE_SCROLL_SPEED_PX_PER_SEC = 400;
 
-// A small, fixed guard around the toolbar content itself (not tied to
-// edge-scroll math at all now that the two are mutually exclusive by
-// mode) - clicking in the gaps between toolbar buttons, or near but not
-// exactly on one, should never fall through to world placement/erasure
-// underneath. Sized to the toolbars' actual content, with a little
-// margin, not to any scroll-trigger distance. See the
-// topUiGuardHeight/bottomUiGuardHeight instance getters, which also
-// scale up on touch devices to match the larger toolbar there.
+// A small, fixed guard at the top of the screen around the main
+// toolbar content itself (not tied to edge-scroll math at all now that
+// the two are mutually exclusive by mode) - clicking in the gaps
+// between toolbar buttons, or near but not exactly on one, should
+// never fall through to world placement/erasure underneath. No
+// equivalent guard at the bottom - the bottom-row pickers only show
+// while their specific tool is active, and blocking that whole strip
+// unconditionally (even when nothing was actually showing there) cost
+// more placeable area than it was worth. See the topUiGuardHeight
+// instance getter, which also scales up on touch devices to match the
+// larger toolbar there.
 
 /**
  * Which UI the user prefers for changing a selected platform's style.
@@ -213,11 +214,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * cover the actual toolbar content above, which is itself taller on
 	 * touch devices. */
 	private get topUiGuardHeight(): number {
-		return this.isTouchDevice ? 155 : 115;
-	}
-	/** Same as topUiGuardHeight, but for the bottom-row swatch pickers. */
-	private get bottomUiGuardHeight(): number {
-		return this.isTouchDevice ? 90 : 70;
+		return (this.isTouchDevice ? 155 : 115) / 2;
 	}
 
 	private isInstructionsModalOpen = false;
@@ -381,12 +378,6 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-		// Default framing is the bottom-left quadrant (index 2), rather
-		// than wherever the camera happens to start by default (0,0 -
-		// top-left). Independent of player spawn position; this is just
-		// the initial view before any edge-scroll panning happens.
-		const initialCenter = getQuadrantCenter(2);
-		this.cameras.main.centerOn(initialCenter.x, initialCenter.y);
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
@@ -546,6 +537,12 @@ export class LevelEditorScene extends Phaser.Scene {
 			)
 			.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
 			.setInteractive({ draggable: true });
+		// Initial framing centers on wherever the player marker actually
+		// is - the default spawn position, or a previous session's
+		// dragged-to position, whichever spawnPosition resolved to above.
+		// This is just where the camera starts, not a lock/follow - the
+		// player can still pan away via Navigate mode afterward.
+		this.cameras.main.centerOn(this.playerObject.x, this.playerObject.y);
 
 		this.playerObject.on(
 			'drag',
@@ -601,9 +598,6 @@ export class LevelEditorScene extends Phaser.Scene {
 			return true;
 		}
 		if (screenY <= this.topUiGuardHeight) {
-			return true;
-		}
-		if (screenY >= this.scale.height - this.bottomUiGuardHeight) {
 			return true;
 		}
 		return false;
@@ -936,29 +930,21 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	/**
-	 * Shows the color swatches only while the character-swap tool is
-	 * active. Colors already used by a placed object, or all colors once
-	 * MAX_CHARACTER_SWAP_OBJECTS is reached, are dimmed and disabled
-	 * rather than hidden - so it's visible *why* nothing more can be
-	 * placed, not just that clicking does nothing.
+	 * Shows the color swatches while the character-swap picker is open.
+	 * No cap or color-uniqueness restriction - every color is always
+	 * placeable, any number of times.
 	 */
 	private refreshCharacterSwapToolbarVisibility() {
 		const isOpen = this.isCharacterSwapPickerOpen;
-		const availableColors = new Set(
-			getAvailableSwapColors(this.getPlacedSwapObjects(), ensureStartingPlayerColor(this))
-		);
 
 		for (const swatch of this.characterSwapSwatches) {
 			swatch.image.setVisible(isOpen);
 			swatch.border.setVisible(isOpen);
 
-			const isAvailable = availableColors.has(swatch.color);
-			if (isOpen && isAvailable) {
+			if (isOpen) {
 				swatch.image.setInteractive({ useHandCursor: true });
-				swatch.image.setAlpha(1);
 			} else {
 				swatch.image.disableInteractive();
-				swatch.image.setAlpha(isOpen ? 0.3 : 1);
 			}
 
 			swatch.border.setStrokeStyle(
@@ -969,15 +955,6 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private selectSwapColor(color: PlayerColor) {
-		const availableColors = getAvailableSwapColors(
-			this.getPlacedSwapObjects(),
-			ensureStartingPlayerColor(this)
-		);
-		if (!availableColors.includes(color)) {
-			// Shouldn't be reachable (the swatch is disabled), but defensive
-			// against any state drift between the two checks.
-			return;
-		}
 		this.selectedSwapColor = color;
 		this.refreshCharacterSwapToolbarVisibility();
 	}
@@ -988,15 +965,6 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 
 		const existing = this.getPlacedSwapObjects();
-		// Re-check availability at placement time, not just at
-		// color-selection time, in case something else changed the
-		// placed set in between (defensive, not expected in practice).
-		if (!getAvailableSwapColors(existing, ensureStartingPlayerColor(this)).includes(this.selectedSwapColor)) {
-			this.selectedSwapColor = null;
-			this.refreshCharacterSwapToolbarVisibility();
-			return;
-		}
-
 		const x = snapToGrid(pointer.worldX, GRID_SIZE);
 		const y = snapToGrid(pointer.worldY, GRID_SIZE);
 		if (existing.some((object) => object.x === x && object.y === y)) {

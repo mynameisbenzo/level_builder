@@ -5,3 +5,5 @@ flask-migrate==4.1.0
 python-dotenv==1.0.1
 flask-cors==5.0.0
 gunicorn==23.0.0
+resend==2.47.0
+flask-jwt-extended==4.7.4

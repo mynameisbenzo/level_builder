@@ -1,4 +1,4 @@
-# Level Builder
+# Pixel Maker
 
 An in-browser, Mario Maker–style platformer where levels are built screen by
 screen — and different screens in the same level can be built by different

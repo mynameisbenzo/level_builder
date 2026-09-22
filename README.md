@@ -1,4 +1,4 @@
-# Level Builder
+# Pixel Maker
 
 An in-browser, Mario Maker–style platformer where levels are built screen by
 screen — and different screens in the same level can be built by different
@@ -86,16 +86,25 @@ python3 -m venv venv
 source venv/bin/activate     # Windows: venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements-dev.txt
+cp .env.example .env         # adjust values if your local setup differs
 ```
 
-Run the test suite (uses in-memory SQLite, no Postgres required):
+`.env` is gitignored and loaded automatically (via `python-dotenv`) -
+`.env.example` documents every variable the app actually reads, with
+safe non-secret defaults. Real secrets (once any exist - Twitch OAuth,
+a magic-link email provider) go here too, locally, and are never
+committed.
+
+Run the test suite (uses in-memory SQLite, no Postgres required, and
+doesn't read `.env` - `TestingConfig` hardcodes its own database URL):
 
 ```bash
 pytest -v
 ruff check .
 ```
 
-Run the dev server (requires Postgres, or set `DATABASE_URL` to override):
+Run the dev server (requires a local Postgres - see below for macOS
+setup without Homebrew if needed):
 
 ```bash
 flask --app "app.main:create_app('development')" run --port 5000
@@ -103,6 +112,29 @@ flask --app "app.main:create_app('development')" run --port 5000
 
 Visit `http://localhost:5000/` for the portfolio landing page, or
 `curl http://localhost:5000/health` → `{"status":"ok"}`.
+
+**Local Postgres, without Homebrew (e.g. on an older macOS Homebrew
+won't run on):** [Postgres.app](https://postgresapp.com) is a
+standalone Mac app, no package manager needed - check their [legacy
+downloads page](https://postgresapp.com/downloads_legacy.html) if on
+macOS older than 11. After installing and clicking "Initialize," create
+the project's database: `createdb level_builder_dev`. If you hit `role
+"<your-username>" does not exist` even after initializing, connect as
+the default superuser instead (`psql -U postgres postgres`) and run
+`CREATE ROLE <your-username> WITH LOGIN SUPERUSER;` - this is a known
+Postgres.app scenario where the default-role creation step fails
+independently of the server itself starting fine.
+
+**On admin/moderation tooling:** Flask-Admin was tried and deliberately
+removed - a generic field-editor bypasses the actual moderation rules
+already designed (recording a reason, flagging direct remixes for
+review, writing an audit trail via `LevelModerationAction`), so it
+would let a moderator silently skip all of that by editing a row
+directly. Real moderation needs purpose-built endpoints that encode
+those rules (see Phase 3/4 below), not raw CRUD - with a UI, admin
+panel or otherwise, layered on top of *those* once they exist, not the
+other way around. For now, inspecting local data directly via `psql`
+is the practical stand-in.
 
 ## Frontend setup
 
@@ -428,7 +460,7 @@ size.
 
 ## Roadmap
 
-### Phase 1 — Foundations ✅ Complete (landing page due for a revisit - see TODOs)
+### Phase 1 — Foundations ✅ Complete
 
 - [x] Backend skeleton, CI for both backend and frontend, Phaser
       integration, deployment on Render + Neon with a CI-gated pipeline,
@@ -489,15 +521,152 @@ size.
 
 ### Phase 3 — Level creation, accounts & persistence
 
-> **Backend work below (Accounts, Screens/Levels) is intentionally on
-> hold** until the Screens/Levels scope itself has been revisited - the
-> design below is no longer considered settled; a scope change is
-> planned before any of it gets built. (The other original blocker - at
-> least one win condition existing - is now cleared; see Phase 2 above.)
+**Accounts, roles & permissions (design settled; implementation in progress):**
 
-Building a level or playing your own in-progress level requires **no
-account** — it's entirely client-side (Phaser's registry + in-memory)
-until the moment someone wants to save or share.
+Two signup paths - verified email (magic-link/passwordless, not
+password-based) or Twitch OAuth, either or both linkable to one
+account. Anonymous visitors can freely build/playtest a level from
+scratch (nothing saved), and read the blog - any interaction with
+*someone else's* level (playing it, editing it, opening a shared
+link) requires an account. Username is a public, unique identity
+chosen as a hard gate right after signup, separate from email/Twitch
+(which the user can hide from public view).
+
+Four roles: **Owner** (the first account ever created, auto-granted;
+alone manages the Developer roster), **Developer** (created by Owner
+or another Developer; otherwise-identical content/moderation powers to
+Owner), **Moderator** (a role granted to/revoked from an existing user
+by any dev; manages user-generated content and regular user accounts,
+but can't touch Developer/Owner accounts or blog posts), and
+**registered user**.
+
+- [x] `User` model — both auth identities (email + Twitch, at least one
+      required via a DB check constraint), role enum, per-identity
+      privacy flags (`hide_email`/`hide_twitch`), suspension and
+      soft-delete state (deleted accounts become an anonymized
+      placeholder rather than cascading deletes)
+- [x] First account ever created automatically becomes Owner (checked
+      via "does an Owner already exist," not "is this the first row" -
+      more robust to edge cases like the original Owner later being
+      deleted); every account after that defaults to a regular user
+- [x] Email verification, fully working end-to-end — `EmailVerificationToken`
+      (single-use, 24h expiry), `POST /api/users` issues one and sends a
+      real email via [Resend](https://resend.com) when signing up with
+      email (not for Twitch - its own OAuth already confirms the
+      account), the frontend's `/verify-email` page reads the token
+      from the link and calls `POST /api/users/verify-email`, which
+      consumes it and sets `User.email_verified_at`. If `RESEND_API_KEY`
+      isn't set (e.g. a fresh local clone with nothing configured yet),
+      sending is skipped and the link is logged instead - the flow
+      still works either way, since in debug mode `POST /api/users`
+      also includes the raw token directly in its response as
+      `dev_verification_token` for testing without any inbox at all.
+      `TestingConfig` hardcodes `RESEND_API_KEY = ""` regardless of what
+      a local `.env` has set, specifically so the test suite can never
+      accidentally trigger real Resend API calls.
+- [x] Login, fully working end-to-end — magic-link, same mechanism as
+      email verification but a genuinely separate token model
+      (`LoginToken`, 15-minute expiry, vs. `EmailVerificationToken`'s
+      24 hours - kept distinct so one could never accidentally double
+      as the other). `POST /api/auth/request-login-link` accepts
+      either a username or an email as the identifier, is
+      enumeration-safe (identical response whether or not the
+      identifier matches a real account - directly tested, not just
+      asserted), and is rate-limited to 3 requests per identifier per
+      day (tracked by the raw submitted identifier, not a matched user,
+      so the rate limit itself can't leak account existence either -
+      also directly tested). `POST /api/auth/login` consumes the token
+      and issues a JWT via Flask-JWT-Extended, deliberately short-lived
+      (1 hour) since it's stored in `localStorage` client-side (not an
+      `HttpOnly` cookie - necessary given the cross-origin Render
+      setup, but more exposed to XSS as a result; a short expiry is the
+      main mitigation until a proper refresh-token pattern exists). The
+      app refuses to start under the production config without a real
+      `JWT_SECRET_KEY` set (fails loudly, not silently falls back to
+      the random-per-process dev default) - both directions of this
+      check are directly tested.
+- [ ] Nothing on the frontend actually uses the issued JWT yet - no
+      `/login` or `/auth/callback` pages wired to the real endpoints,
+      no attaching `Authorization: Bearer <token>` to requests, and
+      none of the existing endpoints (`PATCH`/`DELETE` on users, etc.)
+      check it yet either. The mechanism exists; nothing consumes it.
+- [ ] Twitch OAuth integration - a separate, later flow entirely (a
+      real OAuth redirect dance, not a magic-link), doesn't reuse any
+      of the above
+- [ ] Whether/how unverified email accounts are restricted (e.g. can
+      they save levels before verifying?) hasn't been decided - the
+      mechanism exists now, but nothing currently checks
+      `email_verified_at` to gate any other action
+
+**Levels & versioning (design settled; implementation in progress):**
+
+No more "Screens" — that composable-sub-unit idea from the original
+plan below is superseded by a simpler model: a `Level` is the
+persistent, slug-addressable identity (what a share link points at);
+a `LevelVersion` is an immutable content snapshot. Three-state
+lifecycle per level - `draft` (private) → `testing` (private) →
+`published` (public; gated on the creator personally beating their own
+level via a real playthrough, not a recorded/replayed one). Editing a
+published level demotes it to `testing` while the last published
+version stays live for everyone else; a new version is only created
+once re-beaten and re-published. A separate direct-unpublish action
+also exists, clearing public visibility immediately without editing.
+Anyone can fork a published level into a new one they own, crediting
+the exact version copied from (not a generic "came from this level"
+pointer) — this forms a remix tree, not a chain, with both ancestry
+and descendant views.
+
+- [x] `Level` model — slug (short/random, lives on the level not a
+      version, so share links survive re-publishes), visibility state
+      enum, the `latest_published_version_id` pointer that
+      distinguishes edit-demotion from direct-unpublish at the data
+      level, and remix lineage (exact-version pointer + a denormalized
+      level-level pointer for descendant queries)
+- [x] `LevelVersion` model — JSONB content snapshot, per-version
+      `beaten_at` publish gate, cached difficulty fields
+- [x] Circular FK between `levels` and `level_versions` handled via
+      `use_alter` + `post_update`, specifically tested (publish,
+      edit-demotion, direct-unpublish, and remix lineage each have a
+      dedicated test - see `backend/tests/test_level_model.py`)
+- [ ] `PlayAttempt` model — source of truth for clear rate; only
+      registered users' real playthrough attempts count, anonymous
+      plays don't
+- [ ] Difficulty auto-labeling from clear rate (Easy 50-100%, Medium
+      25-50%, Hard 5-25%, Very Hard 1-5%, "TAS!?!?" under 1%),
+      per-version
+- [ ] `Tag`/`LevelTag` models — dev/moderator-curated pool, two
+      user-suggested tags auto-applied per level, one "Other" free-text
+      slot requiring moderation
+- [ ] Moderation tables — `ModerationReason` (shared pool for level and
+      user actions), `LevelModerationAction`, `LevelReviewFlag` (the
+      "review children" queue for direct remixes of a
+      deleted/suspended level), `UserModerationAction`
+- [ ] **Portals (API endpoints/CRUD) for `User`, `Level`, and
+      `LevelVersion` — next up.** Actual create/read/update endpoints
+      for these three models, plus tests exercising them, before
+      continuing on to the remaining models above.
+- [ ] Alembic migration via `flask db migrate` (schema has so far only
+      been exercised via `db.create_all()` in tests, not a real
+      migration)
+
+**Marketing site & blog:**
+- [x] Revamped landing page — hero section with a looping animation
+      built from the game's own sprites (walk onto a starting
+      platform, jump a gap while the Editor builds a landing spot,
+      walk off, Editor erases it, loops), a "Build Now" CTA, and a
+      devlog preview section (currently a placeholder single post +
+      link, both pointing at not-yet-built `/blog` routes)
+- [ ] Blog with text and image posts, for incremental dev updates -
+      `BlogPost`/`BlogComment`/`BlogReaction` models, plus the actual
+      `/blog` and `/blog/[slug]` pages
+- [x] Blog posting restricted to developers only - covered by the
+      Accounts/roles design above (Owner + Developer only; Moderators
+      explicitly excluded, since posts aren't user-generated content)
+- [ ] All registered users can comment and react (thumbs up/down,
+      more reaction types later) on posts; Developer/Moderator/Owner
+      comments each get their own distinct badge
+
+
 
 **Level Editor:**
 - [x] Level Editor is the default scene; Play mode is entered from it
@@ -609,53 +778,27 @@ until the moment someone wants to save or share.
       playable bounds, once there are other objects (enemies, etc.) that
       need the same handling.
 
-**Scope reconsideration (before any backend work begins):**
-- [ ] **Revisit how levels/screens work.** The Screens & Levels design
-      below was settled earlier in the project, but a scope change is
-      being considered before building any of it. Treat everything in
-      this subsection as provisional, not a spec to implement as-is.
-
-**Accounts (prerequisite for saving/sharing, on hold - see note above):**
-- [ ] `User` auth: JWT-based (not session cookies — frontend and backend
-      live on different Render subdomains, which browsers treat as
-      cross-site; third-party cookies are unreliable there)
-- [ ] Password hashing via Werkzeug's built-in `generate_password_hash`
-- [ ] `POST /auth/register`, `POST /auth/login`, `GET /auth/me`
-
-**Screens & Levels (provisional - see scope reconsideration note above):**
-- [ ] `Screen` model — ownable, savable, playable standalone, and
-      reusable ("borrowable") across other users' levels
-- [ ] `Level` model + `LevelScreen` join — an ordered composition of
-      screens, carrying per-placement connections/goals
-- [ ] Publish workflow: a level must have a set goal and be finishable;
-      the creator must clear it themselves before it can publish, which
-      is auto-verified by capturing an input-log trace
-      (`PlaythroughRecording`) on the clear — not a full replay video,
-      just the input sequence
-- [ ] Level lifecycle: `draft` → `published`, tracking `attempt_count`
-      and `clear_count`
-
-**Marketing site & blog (new scope, not yet built):**
-- [ ] Revamped landing page — hero artwork, a prominent "Build Now"
-      button that sends visitors straight into the Level Editor,
-      replacing the current backend-status-only homepage
-- [ ] Blog with text and image posts, for incremental dev updates
-- [ ] Blog posting restricted to developers only - some form of
-      authorization needed; likely overlaps with the Accounts work
-      above even if it ends up being a simple "developer" role rather
-      than full user accounts
-
 ### Phase 4 — Moderation & community (not started)
 
-- [ ] Content moderation for screens/level names (Flask has no built-in
-      admin panel, so this needs to be hand-built)
-- [ ] Comments and ratings on published levels
-- [ ] User-submitted reports feeding an admin review queue
-- [ ] System-flagged review: a level with climbing attempts but a near-
-      zero clear rate gets surfaced for admin review
-- [ ] `tool_assisted` classification for levels an admin determines
-      aren't legitimately clearable as submitted (stays live, gets
-      relabeled — like a TAS tag in speedrunning, not deletion)
+Most of what this phase originally covered is now part of the settled
+design in Phase 3 above (roles, `LevelModerationAction`/
+`UserModerationAction`, the tag/reason pools, "review children"
+flagging for remixes) rather than a separate, later concern - the
+`tool_assisted` classification idea below is essentially what the new
+per-version "TAS!?!?" difficulty label already is, just auto-computed
+from clear rate instead of manually assigned by an admin.
+
+Still genuinely unbuilt and not yet designed in detail:
+- [ ] User-submitted reports — a "report this level/comment" action
+      feeding a dev/moderator review queue; the settled design so far
+      only covers devs/moderators proactively moderating, not a
+      user-facing flagging mechanism
+- [ ] System-flagged review — e.g. a level with real play attempts but
+      a nose-diving clear rate getting automatically surfaced for
+      review, building on the difficulty-label data once it exists
+- [x] ~~`tool_assisted` classification~~ — superseded by the per-version
+      difficulty label system in Phase 3 (auto-computed "TAS!?!?" tier
+      for near-zero clear rates)
 
 ## Future Considerations (way down the line)
 

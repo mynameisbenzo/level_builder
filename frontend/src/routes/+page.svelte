@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { checkBackendHealth } from '$lib/api';
 	import LevelPreviewHero from '$lib/LevelPreviewHero.svelte';
+	import Navbar from '$lib/Navbar.svelte';
 
 	let backendStatus: 'checking' | 'connected' | 'disconnected' = $state('checking');
 
@@ -22,12 +23,14 @@
 </script>
 
 <svelte:head>
-	<title>Level Builder</title>
+	<title>Pixel Maker</title>
 	<meta
 		name="description"
 		content="An in-browser, Mario Maker-style platformer level editor. Build platforms, swap characters, and set a goal - then play what you built."
 	/>
 </svelte:head>
+
+<Navbar />
 
 <main>
 	<section class="hero">
@@ -84,7 +87,7 @@
 	main {
 		max-width: 1040px;
 		margin: 0 auto;
-		padding: 64px 24px 40px;
+		padding: 40px 24px 40px;
 	}
 
 	.hero {
@@ -254,10 +257,6 @@
 	}
 
 	@media (max-width: 520px) {
-		main {
-			padding-top: 40px;
-		}
-
 		.hero {
 			margin-bottom: 64px;
 		}

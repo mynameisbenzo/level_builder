@@ -18,7 +18,7 @@ def test_landing_page_includes_tech_stack_and_links():
     response = client.get("/")
     body = response.get_data(as_text=True)
 
-    assert "LEVEL BUILDER" in body
+    assert "Pixel Maker" in body
     assert "SvelteKit" in body
     assert "Flask" in body
     assert app.config["GITHUB_URL"] in body

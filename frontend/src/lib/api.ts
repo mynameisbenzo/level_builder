@@ -56,6 +56,70 @@ export async function createUser(payload: {
 	}
 }
 
+export interface RequestLoginLinkResult {
+	success: boolean;
+	message?: string;
+	error?: string;
+	devLoginToken?: string;
+}
+
+/**
+ * Calls POST /api/auth/request-login-link. Accepts either a username or
+ * an email as the identifier - the backend tries both. Deliberately
+ * enumeration-safe on the backend (identical response whether or not
+ * the identifier matches a real account), so this just relays whatever
+ * message the backend sends rather than having its own separate copy -
+ * a second, hand-written message here could drift out of sync with
+ * that guarantee.
+ */
+export async function requestLoginLink(identifier: string): Promise<RequestLoginLinkResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/auth/request-login-link`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ identifier })
+		});
+
+		const data = await response.json();
+
+		if (!response.ok) {
+			return { success: false, error: data.error ?? 'Something went wrong. Please try again.' };
+		}
+
+		return { success: true, message: data.message, devLoginToken: data.dev_login_token };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface LoginResult {
+	success: boolean;
+	accessToken?: string;
+	user?: CreatedUser;
+	error?: string;
+}
+
+/** Calls POST /api/auth/login - consumes a login token and, on success, returns a real JWT. */
+export async function loginWithToken(token: string): Promise<LoginResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ token })
+		});
+
+		const data = await response.json();
+
+		if (!response.ok) {
+			return { success: false, error: data.error ?? 'Login failed. Please try again.' };
+		}
+
+		return { success: true, accessToken: data.access_token, user: data.user };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
 export interface VerifyEmailResult {
 	success: boolean;
 	error?: string;

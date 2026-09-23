@@ -16,8 +16,12 @@ export interface CreatedUser {
 	id: number;
 	username: string;
 	email?: string;
+	email_verified_at?: string | null;
+	twitch_id?: string;
 	twitch_display_name?: string;
 	role: string;
+	hide_email: boolean;
+	hide_twitch: boolean;
 	created_at: string;
 }
 
@@ -141,6 +145,78 @@ export async function verifyEmail(token: string): Promise<VerifyEmailResult> {
 		if (!response.ok) {
 			const data = await response.json().catch(() => ({}));
 			return { success: false, error: data.error ?? 'Verification failed. Please try again.' };
+		}
+
+		return { success: true };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface UpdateProfileResult {
+	success: boolean;
+	user?: CreatedUser;
+	error?: string;
+	/** True specifically when the JWT itself was missing/expired/invalid
+	 * (a 401) - distinct from other failures (e.g. a 409 for a taken
+	 * username), since only this case should trigger logging the user
+	 * out and sending them back to /login. */
+	sessionExpired?: boolean;
+}
+
+/** Calls PATCH /api/users/<id> - self-only, per the backend's ownership check. */
+export async function updateProfile(
+	userId: number,
+	token: string,
+	payload: { username?: string; hide_email?: boolean; hide_twitch?: boolean }
+): Promise<UpdateProfileResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
+			method: 'PATCH',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${token}`
+			},
+			body: JSON.stringify(payload)
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Update failed. Please try again.'
+			};
+		}
+
+		return { success: true, user: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface DeleteAccountResult {
+	success: boolean;
+	error?: string;
+	sessionExpired?: boolean;
+}
+
+/** Calls DELETE /api/users/<id> - self-only, soft-deletes the account. */
+export async function deleteAccount(userId: number, token: string): Promise<DeleteAccountResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/users/${userId}`, {
+			method: 'DELETE',
+			headers: { Authorization: `Bearer ${token}` }
+		});
+
+		if (!response.ok) {
+			const data = await response.json().catch(() => ({}));
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Delete failed. Please try again.'
+			};
 		}
 
 		return { success: true };

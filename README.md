@@ -585,11 +585,37 @@ but can't touch Developer/Owner accounts or blog posts), and
       `JWT_SECRET_KEY` set (fails loudly, not silently falls back to
       the random-per-process dev default) - both directions of this
       check are directly tested.
-- [ ] Nothing on the frontend actually uses the issued JWT yet - no
-      `/login` or `/auth/callback` pages wired to the real endpoints,
-      no attaching `Authorization: Bearer <token>` to requests, and
-      none of the existing endpoints (`PATCH`/`DELETE` on users, etc.)
-      check it yet either. The mechanism exists; nothing consumes it.
+- [x] Frontend login, fully wired to the real backend - `/login` (accepts
+      username or email), `/auth/callback` (completes the exchange for
+      a JWT), and `/profile` (edit username/privacy, delete account) all
+      actually call the real endpoints, attaching
+      `Authorization: Bearer <token>` on the two that need it
+      (`PATCH`/`DELETE` on users). Auth state is a shared, reactive
+      Svelte 5 store (`auth.svelte.ts`) persisted to `localStorage`,
+      initialized via SvelteKit's `browser` check at module-load time
+      rather than a component's `onMount` - deliberately, so it doesn't
+      depend on parent/child `onMount` ordering, which Svelte doesn't
+      actually guarantee.
+- [x] **`/verify-email` and `/auth/callback` both require an explicit
+      button click before consuming their single-use token** - neither
+      auto-verifies/auto-logs-in on page load anymore. This isn't
+      stylistic: email security scanners (Microsoft Safe Links,
+      Proofpoint, Mimecast, Gmail's link checker) visit every link in
+      an email within seconds of delivery to check it's safe, before
+      the recipient ever opens it. A page that consumes its token the
+      instant it loads gets that token burned by the scanner, not the
+      actual person - a real, hit-in-practice bug during this session,
+      not a hypothetical. A scanner renders a page but doesn't click a
+      button on it, which is the actual fix.
+- [ ] **The 1-hour JWT expiry may be a real problem once actual level-
+      building sessions exist, not just a minor UX tradeoff.** Building
+      a level could plausibly take well over an hour - maybe most of a
+      day for something involved. With no refresh-token mechanism, a
+      long, uninterrupted building session risks the JWT silently
+      expiring mid-session, only surfacing when the person finally
+      tries to save. Worth solving before real users hit it, but not
+      before actual level-saving exists to hit it against - noted here
+      to revisit once that's built, not acted on now.
 - [ ] Twitch OAuth integration - a separate, later flow entirely (a
       real OAuth redirect dance, not a magic-link), doesn't reuse any
       of the above

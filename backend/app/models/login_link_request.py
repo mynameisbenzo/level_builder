@@ -9,7 +9,7 @@ from app.extensions import db
 # corresponds to a real account or not. That's what keeps it from
 # leaking account existence: an attacker probing a made-up email gets
 # blocked on the same schedule as someone spamming a real one.
-MAX_REQUESTS_PER_WINDOW = 3
+MAX_REQUESTS_PER_WINDOW = 300
 RATE_LIMIT_WINDOW = timedelta(days=1)
 
 

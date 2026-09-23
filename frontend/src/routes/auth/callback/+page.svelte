@@ -6,18 +6,28 @@
 	import { auth } from '$lib/auth.svelte';
 	import Navbar from '$lib/Navbar.svelte';
 
-	let status: 'verifying' | 'success' | 'error' = $state('verifying');
+	// Same fix as /verify-email, same reason - starts at 'ready', not
+	// an auto-firing 'verifying'. Auto-consuming a single-use login
+	// token the instant this page loads means an email security
+	// scanner visiting the link to check it's safe (before the human
+	// ever opens the email) would log the scanner in and burn the
+	// token, not the actual person.
+	let status: 'ready' | 'verifying' | 'success' | 'error' = $state('ready');
 	let errorMessage = $state('');
+	let token = $state('');
 
-	onMount(async () => {
-		const token = page.url.searchParams.get('token');
-
-		if (!token) {
+	onMount(() => {
+		const urlToken = page.url.searchParams.get('token');
+		if (!urlToken) {
 			status = 'error';
 			errorMessage = 'No login token found in this link.';
 			return;
 		}
+		token = urlToken;
+	});
 
+	async function handleLogin() {
+		status = 'verifying';
 		const result = await loginWithToken(token);
 
 		if (result.success && result.accessToken && result.user) {
@@ -30,20 +40,23 @@
 			status = 'error';
 			errorMessage = result.error ?? 'Login failed. Please try again.';
 		}
-	});
+	}
 </script>
 
 <svelte:head>
-	<title>Logging In — Pixel Maker</title>
+	<title>Log In — Pixel Maker</title>
 </svelte:head>
 
 <Navbar />
 
 <main>
 	<div class="card">
-		<h1>Logging in</h1>
+		<h1>Log in</h1>
 
-		{#if status === 'verifying'}
+		{#if status === 'ready'}
+			<p class="note">Click below to complete logging in.</p>
+			<button onclick={handleLogin}>Log in</button>
+		{:else if status === 'verifying'}
 			<p class="note">One moment…</p>
 		{:else if status === 'success'}
 			<p class="success">You're logged in — redirecting…</p>
@@ -86,7 +99,7 @@
 		font-size: 0.95rem;
 		line-height: 1.6;
 		color: #b6baec;
-		margin: 0;
+		margin: 0 0 20px;
 	}
 
 	.note.secondary {
@@ -109,5 +122,31 @@
 		line-height: 1.6;
 		color: #ff8a7a;
 		margin: 0;
+	}
+
+	button {
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 1rem;
+		color: #142013;
+		background: #4ecb71;
+		border: 3px solid #142013;
+		border-radius: 10px;
+		padding: 12px 24px;
+		box-shadow: 0 4px 0 #142013;
+		cursor: pointer;
+		transition:
+			transform 0.15s ease,
+			box-shadow 0.15s ease;
+	}
+
+	button:hover {
+		transform: translateY(2px);
+		box-shadow: 0 2px 0 #142013;
+	}
+
+	button:focus-visible {
+		outline: 3px solid #ffd23f;
+		outline-offset: 3px;
 	}
 </style>

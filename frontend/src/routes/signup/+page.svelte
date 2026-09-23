@@ -26,7 +26,7 @@
 </script>
 
 <svelte:head>
-	<title>Sign Up — Level Builder</title>
+	<title>Sign Up — Pixel Maker</title>
 </svelte:head>
 
 <Navbar />

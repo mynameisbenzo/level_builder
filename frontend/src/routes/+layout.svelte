@@ -1,14 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
-	import { auth } from '$lib/auth.svelte';
 
 	let { children } = $props();
-
-	onMount(() => {
-		auth.hydrate();
-	});
 </script>
 
 <svelte:head>

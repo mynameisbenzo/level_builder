@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import type { CreatedUser } from './api';
 
 const STORAGE_KEY = 'pixelmaker_auth';
@@ -7,13 +8,26 @@ interface AuthState {
 	user: CreatedUser | null;
 }
 
-// Starts empty, not hydrated from localStorage here - this file is
-// evaluated at module-import time, which would also run during any SSR
-// pass (localStorage doesn't exist there). Actual hydration happens via
-// the exported hydrate() function below, called explicitly from the
-// root layout's onMount, which is guaranteed to only ever run
-// client-side.
-let state = $state<AuthState>({ accessToken: null, user: null });
+function loadInitialState(): AuthState {
+	// `browser` is SvelteKit's own check for "actually running client-
+	// side" (false during any SSR pass, where localStorage doesn't
+	// exist). Reading this at module-load time - not from a component's
+	// onMount - means state is already correct before any component
+	// even starts rendering, which sidesteps entirely having to reason
+	// about onMount ordering between a page and its parent layout.
+	if (!browser) return { accessToken: null, user: null };
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		if (!raw) return { accessToken: null, user: null };
+		const parsed = JSON.parse(raw);
+		return { accessToken: parsed.accessToken ?? null, user: parsed.user ?? null };
+	} catch {
+		// Corrupt or inaccessible storage - just start logged out.
+		return { accessToken: null, user: null };
+	}
+}
+
+let state = $state<AuthState>(loadInitialState());
 
 function persist() {
 	try {
@@ -36,22 +50,16 @@ export const auth = {
 		return state.accessToken !== null;
 	},
 
-	/** Client-only - call once, from the root layout's onMount. */
-	hydrate() {
-		try {
-			const raw = localStorage.getItem(STORAGE_KEY);
-			if (!raw) return;
-			const parsed = JSON.parse(raw);
-			state.accessToken = parsed.accessToken ?? null;
-			state.user = parsed.user ?? null;
-		} catch {
-			// Corrupt or inaccessible storage - just start logged out
-			// rather than throwing.
-		}
-	},
-
 	login(accessToken: string, user: CreatedUser) {
 		state.accessToken = accessToken;
+		state.user = user;
+		persist();
+	},
+
+	/** Updates just the stored user (after a successful profile edit) -
+	 * keeps the Navbar greeting and anything else reading auth.user in
+	 * sync immediately, without needing to log in again. */
+	updateUser(user: CreatedUser) {
 		state.user = user;
 		persist();
 	},

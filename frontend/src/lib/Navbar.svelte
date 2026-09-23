@@ -6,7 +6,7 @@
 	<a class="wordmark" href="/">Pixel Maker</a>
 	<div class="auth-links">
 		{#if auth.isLoggedIn}
-			<span class="greeting">Hi, {auth.user?.username}</span>
+			<a class="greeting" href="/profile">Hi, {auth.user?.username}</a>
 			<button class="nav-link nav-link-ghost" onclick={() => auth.logout()}>Log Out</button>
 		{:else}
 			<a class="nav-link nav-link-ghost" href="/login">Log In</a>
@@ -66,6 +66,17 @@
 	.greeting {
 		font-size: 0.9rem;
 		color: #c7cbef;
+		text-decoration: none;
+		transition: color 0.15s ease;
+	}
+
+	.greeting:hover {
+		color: #f4f6ff;
+	}
+
+	.greeting:focus-visible {
+		outline: 3px solid #ffd23f;
+		outline-offset: 2px;
 	}
 
 	.nav-link-ghost {

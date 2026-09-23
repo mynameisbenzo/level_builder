@@ -43,7 +43,7 @@ class LoginToken(db.Model):
     def is_valid(self) -> bool:
         if self.used_at is not None:
             return False
-        return datetime.now(timezone.utc) <= self.expires_at.replace(tzinfo=timezone.utc)
+        return datetime.now() <= self.expires_at
 
     def __repr__(self):
         return f"<LoginToken user_id={self.user_id} used={self.used_at is not None}>"

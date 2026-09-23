@@ -9,7 +9,7 @@ def test_can_create_and_query_a_user():
     with app.app_context():
         db.create_all()
 
-        user = User(username="lorenzo")
+        user = User(username="lorenzo", email="l@example.com")
         db.session.add(user)
         db.session.commit()
 

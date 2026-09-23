@@ -43,6 +43,8 @@ class LoginToken(db.Model):
     def is_valid(self) -> bool:
         if self.used_at is not None:
             return False
+        print(datetime.now())
+        print(self.expires_at)
         return datetime.now() <= self.expires_at
 
     def __repr__(self):

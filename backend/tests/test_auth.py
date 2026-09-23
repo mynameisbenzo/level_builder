@@ -248,7 +248,7 @@ def test_login_with_expired_token_is_rejected():
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
         token = LoginToken.query.filter_by(user_id=user["id"]).first()
 
-        token.expires_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+        token.expires_at = datetime.now() - timedelta(minutes=1)
         db.session.commit()
 
         response = client.post("/api/auth/login", json={"token": token.token})

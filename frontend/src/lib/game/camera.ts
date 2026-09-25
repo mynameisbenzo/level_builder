@@ -10,12 +10,17 @@ export const VIEWPORT_WIDTH = 800;
 export const VIEWPORT_HEIGHT = 600;
 
 /**
- * A "screen" (the playable world) is twice the viewport in each
- * dimension - exactly a 2x2 grid of four quadrants, each the same size
- * as the viewport itself.
+ * The playable world is a grid of viewport-sized "screens" - originally
+ * a fixed 2x2 (hence the older name "quadrant" for this whole system,
+ * kept below since renaming it is a separate, cosmetic concern from
+ * resizing it). Widened considerably to 30x3 so a level can actually
+ * span a long, Mario-Maker-style horizontal stretch rather than being
+ * boxed into four screens total.
  */
-export const WORLD_WIDTH = VIEWPORT_WIDTH * 2;
-export const WORLD_HEIGHT = VIEWPORT_HEIGHT * 2;
+export const WORLD_COLUMNS = 30;
+export const WORLD_ROWS = 3;
+export const WORLD_WIDTH = VIEWPORT_WIDTH * WORLD_COLUMNS;
+export const WORLD_HEIGHT = VIEWPORT_HEIGHT * WORLD_ROWS;
 
 export const CAMERA_MODES = ['follow', 'quadrant'] as const;
 export type CameraMode = (typeof CAMERA_MODES)[number];
@@ -42,25 +47,39 @@ export function setCameraMode(scene: Phaser.Scene, mode: CameraMode) {
 }
 
 /**
- * Which quadrant (0 = top-left, 1 = top-right, 2 = bottom-left,
- * 3 = bottom-right) a world position falls into.
+ * Which screen (numbered left-to-right, top-to-bottom - 0 is top-left,
+ * 1 is the one to its right, WORLD_COLUMNS is the start of the second
+ * row, and so on) a world position falls into. Generalizes what used to
+ * be a hardcoded 2x2 "quadrant" split into any WORLD_COLUMNS x
+ * WORLD_ROWS grid, while preserving the original's exact boundary
+ * behavior: a position exactly on a screen's left/top edge belongs to
+ * that screen, not the previous one (Math.floor already gives this for
+ * free - at x === VIEWPORT_WIDTH, x / VIEWPORT_WIDTH is exactly 1.0,
+ * which floors to column 1, not 0).
+ *
+ * Clamped to the valid grid range - unlike the old hardcoded 0-or-1
+ * ternary (which couldn't produce an out-of-range result no matter what
+ * x/y were), a plain division can, if a position is ever transiently
+ * outside world bounds (e.g. a single physics frame before the world's
+ * own bounds clamp catches up).
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function getQuadrantIndex(x: number, y: number): number {
-	const col = x < VIEWPORT_WIDTH ? 0 : 1;
-	const row = y < VIEWPORT_HEIGHT ? 0 : 1;
-	return row * 2 + col;
+	const col = Math.min(Math.max(Math.floor(x / VIEWPORT_WIDTH), 0), WORLD_COLUMNS - 1);
+	const row = Math.min(Math.max(Math.floor(y / VIEWPORT_HEIGHT), 0), WORLD_ROWS - 1);
+	return row * WORLD_COLUMNS + col;
 }
 
 /**
- * The center point of the given quadrant, in world coordinates - what
- * the camera centers on when snapped to that quadrant (see
- * getQuadrantIndex for the numbering).
+ * The center point of the given screen, in world coordinates - what the
+ * camera centers on when snapped to that screen (see getQuadrantIndex
+ * for the numbering). Inverse of getQuadrantIndex, generalized the same
+ * way.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function getQuadrantCenter(quadrantIndex: number): { x: number; y: number } {
-	const col = quadrantIndex % 2;
-	const row = Math.floor(quadrantIndex / 2);
+	const col = quadrantIndex % WORLD_COLUMNS;
+	const row = Math.floor(quadrantIndex / WORLD_COLUMNS);
 	return {
 		x: col * VIEWPORT_WIDTH + VIEWPORT_WIDTH / 2,
 		y: row * VIEWPORT_HEIGHT + VIEWPORT_HEIGHT / 2

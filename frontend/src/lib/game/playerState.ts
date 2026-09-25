@@ -3,12 +3,15 @@ export interface PlayerPosition {
 	y: number;
 }
 
-// Bottom-left quadrant (matches the Editor's default camera framing -
-// see camera.ts), horizontally centered and positioned toward the
-// bottom of that quadrant (same relative spot the old top-left default
-// held within its own quadrant), so the player starts near ground level
-// rather than floating in open space.
-export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 1050 };
+// Bottom-left screen (matches the Editor's default camera framing - see
+// camera.ts), horizontally centered and positioned toward the bottom of
+// that screen, so the player starts near ground level rather than
+// floating in open space. The world grew from 2 rows to 3 (see
+// WORLD_ROWS in camera.ts) - this had to move down a full row's worth
+// (600px) to stay in the actual bottom row; leaving the old y value in
+// place would have spawned every new level in what's now the middle
+// row, floating with nothing underneath by default.
+export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 1650 };
 export const EDITOR_PLAYER_POSITION_KEY = 'editorPlayerPosition';
 
 /**

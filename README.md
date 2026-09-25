@@ -833,6 +833,16 @@ and descendant views.
       resetting *any* sprite (not just the player) that leaves the
       playable bounds, once there are other objects (enemies, etc.) that
       need the same handling.
+- [ ] **Service worker / offline support** — installable as a home-screen
+      app now (`manifest.json`, icons, standalone display mode - see
+      `IosInstallBanner.svelte`), but deliberately no service worker yet.
+      What exists is purely the app-like launch experience (icon,
+      chromeless window, straight to `/profile` if already logged in);
+      the editor/game still needs a live connection for auth and level
+      data regardless, so true offline play would mean caching game
+      assets and deciding a real strategy for what happens to
+      save/load while offline - a genuinely separate, bigger piece of
+      work, not a small addition to what's already there.
 
 ### Phase 4 — Moderation & community (not started)
 

@@ -1,12 +1,33 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { checkBackendHealth } from '$lib/api';
+	import { auth } from '$lib/auth.svelte';
 	import LevelPreviewHero from '$lib/LevelPreviewHero.svelte';
 	import Navbar from '$lib/Navbar.svelte';
 
 	let backendStatus: 'checking' | 'connected' | 'disconnected' = $state('checking');
 
 	onMount(async () => {
+		// The installed home-screen app's start_url is "/" (see
+		// manifest.json) - regular browser visits to "/" (the Navbar
+		// wordmark, a bookmark, a shared link) should always show the
+		// normal marketing homepage, but launching the actual installed
+		// app should skip straight to the account for anyone already
+		// logged in, matching "open it and start playing" rather than
+		// showing the pitch to someone who's already decided to use it.
+		// display-mode: standalone / navigator.standalone is what tells
+		// these two situations apart - true only when actually launched
+		// from the home-screen icon, not a normal Safari/Chrome tab.
+		const isStandalone =
+			window.matchMedia('(display-mode: standalone)').matches ||
+			(window.navigator as Navigator & { standalone?: boolean }).standalone === true;
+
+		if (isStandalone && auth.isLoggedIn) {
+			goto('/profile');
+			return;
+		}
+
 		const isHealthy = await checkBackendHealth();
 		backendStatus = isHealthy ? 'connected' : 'disconnected';
 	});

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { checkBackendHealth, verifyEmail } from './api';
+import { API_BASE_URL, checkBackendHealth, verifyEmail } from './api';
 
 describe('checkBackendHealth', () => {
 	it('returns true when the backend responds with status ok', async () => {
@@ -11,7 +11,7 @@ describe('checkBackendHealth', () => {
 		const result = await checkBackendHealth();
 
 		expect(result).toBe(true);
-		expect(fetch).toHaveBeenCalledWith('http://localhost:5000/health');
+		expect(fetch).toHaveBeenCalledWith(`${API_BASE_URL}/health`);
 	});
 
 	it('returns false when the backend request fails', async () => {
@@ -34,7 +34,7 @@ describe('verifyEmail', () => {
 
 		expect(result.success).toBe(true);
 		expect(fetch).toHaveBeenCalledWith(
-			'http://localhost:5000/api/users/verify-email',
+			`${API_BASE_URL}/api/users/verify-email`,
 			expect.objectContaining({
 				method: 'POST',
 				body: JSON.stringify({ token: 'a-real-token' })

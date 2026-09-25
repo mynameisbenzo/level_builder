@@ -30,8 +30,8 @@
 		status = 'verifying';
 		const result = await loginWithToken(token);
 
-		if (result.success && result.accessToken && result.user) {
-			auth.login(result.accessToken, result.user);
+		if (result.success && result.accessToken && result.refreshToken && result.user) {
+			auth.login(result.accessToken, result.refreshToken, result.user);
 			status = 'success';
 			// Brief pause so the success message is actually visible,
 			// rather than an instant, jarring redirect.

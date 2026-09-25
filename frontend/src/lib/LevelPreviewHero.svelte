@@ -33,6 +33,26 @@
 	let cursorCol = $state(6);
 	let reducedMotion = $state(false);
 
+	// The whole animation is choreographed in this fixed pixel "world" -
+	// matches .world's own width/height in the styles below. Rather
+	// than rewrite every hardcoded position/keyframe to be relative
+	// (a much bigger, riskier change), .world is scaled down as a
+	// whole via a CSS transform when the actual stage is narrower than
+	// this, so every position/timing value stays exactly as designed.
+	const REFERENCE_WIDTH = 576;
+	const REFERENCE_HEIGHT = 200;
+	let stageEl: HTMLDivElement;
+	let scale = $state(1);
+
+	function updateScale() {
+		if (!stageEl) return;
+		// Capped at 1 so this never scales UP past the design size on
+		// wide screens - redundant given .stage's own max-width already
+		// prevents clientWidth from exceeding REFERENCE_WIDTH, but
+		// cheap insurance against a transient measurement during resize.
+		scale = Math.min(stageEl.clientWidth / REFERENCE_WIDTH, 1);
+	}
+
 	const characterBackgroundPosition = $derived.by(() => {
 		if (phase === 'jump') {
 			return CHAR_FRAME.jump;
@@ -49,6 +69,7 @@
 
 	let walkInterval: ReturnType<typeof setInterval> | undefined;
 	let sequenceTimeouts: ReturnType<typeof setTimeout>[] = [];
+	let resizeObserver: ResizeObserver | undefined;
 
 	function schedule(fn: () => void, delayMs: number) {
 		sequenceTimeouts.push(setTimeout(fn, delayMs));
@@ -130,6 +151,10 @@
 	}
 
 	onMount(() => {
+		updateScale();
+		resizeObserver = new ResizeObserver(updateScale);
+		resizeObserver.observe(stageEl);
+
 		reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 		if (reducedMotion) {
 			// A single, still, representative frame instead of the
@@ -147,61 +172,66 @@
 	onDestroy(() => {
 		if (walkInterval) clearInterval(walkInterval);
 		for (const id of sequenceTimeouts) clearTimeout(id);
+		resizeObserver?.disconnect();
 	});
 </script>
 
 <div
 	class="stage"
 	class:editor-mode={editorModeActive}
+	bind:this={stageEl}
+	style:height="{REFERENCE_HEIGHT * scale}px"
 	role="img"
 	aria-label="An animated demonstration: a green platformer character walks onto a starting platform, walks across it, jumps a gap, the level editor builds a new platform mid-air for it to land on, the character continues off-screen, and the editor then erases what it built, looping."
 >
-	<div class="grid-overlay" class:visible={editorModeActive}></div>
+	<div class="world" style:transform="scale({scale})">
+		<div class="grid-overlay" class:visible={editorModeActive}></div>
 
-	<div class="strip">
-		{#each [0, 1, 2] as i (i)}
-			<div
-				class="tile"
-				class:left={i === 0}
-				class:right={i === 2}
-				style:background-image="url({TILES_SHEET})"
-			></div>
-		{/each}
-	</div>
-
-	<div class="strip landing" style:left="{6 * TILE_SIZE}px">
-		{#each [0, 1, 2] as i (i)}
-			{#if landingTiles[i]}
+		<div class="strip">
+			{#each [0, 1, 2] as i (i)}
 				<div
-					class="tile pop"
+					class="tile"
 					class:left={i === 0}
 					class:right={i === 2}
 					style:background-image="url({TILES_SHEET})"
 				></div>
-			{:else}
-				<div class="tile-spacer"></div>
-			{/if}
-		{/each}
-	</div>
+			{/each}
+		</div>
 
-	{#if cursorVisible}
+		<div class="strip landing" style:left="{6 * TILE_SIZE}px">
+			{#each [0, 1, 2] as i (i)}
+				{#if landingTiles[i]}
+					<div
+						class="tile pop"
+						class:left={i === 0}
+						class:right={i === 2}
+						style:background-image="url({TILES_SHEET})"
+					></div>
+				{:else}
+					<div class="tile-spacer"></div>
+				{/if}
+			{/each}
+		</div>
+
+		{#if cursorVisible}
+			<div
+				class="cursor"
+				style:left="{cursorCol * TILE_SIZE + TILE_SIZE / 2 - 16}px"
+				style:background-image="url({cursorTool === 'select' ? SELECT_CURSOR : ERASER_CURSOR})"
+			></div>
+		{/if}
+
 		<div
-			class="cursor"
-			style:left="{cursorCol * TILE_SIZE + TILE_SIZE / 2 - 16}px"
-			style:background-image="url({cursorTool === 'select' ? SELECT_CURSOR : ERASER_CURSOR})"
+			class="character"
+			class:reduced-motion={reducedMotion}
+			class:phase-walk-in={phase === 'walk-in'}
+			class:phase-walk-1={phase === 'walk-to-edge'}
+			class:phase-jump={phase === 'jump'}
+			class:phase-walk-2={phase === 'walk-to-exit'}
+			style:background-image="url({CHARACTERS_SHEET})"
+			style:background-position={characterBackgroundPosition}
 		></div>
-	{/if}
-
-	<div
-		class="character"
-		class:reduced-motion={reducedMotion}
-		class:phase-walk-in={phase === 'walk-in'}
-		class:phase-walk-1={phase === 'walk-to-edge'}
-		class:phase-jump={phase === 'jump'}
-		class:phase-walk-2={phase === 'walk-to-exit'}
-		style:background-image="url({CHARACTERS_SHEET})"
-		style:background-position={characterBackgroundPosition}
-	></div>
+	</div>
 </div>
 
 <style>
@@ -209,9 +239,27 @@
 		position: relative;
 		width: 100%;
 		max-width: 576px;
-		height: 200px;
 		margin-inline: auto;
 		overflow: hidden;
+	}
+
+	/* Fixed at the animation's actual design size - every existing
+	   position/keyframe value below is written against this exact
+	   576x200 coordinate space and stays completely untouched. .stage
+	   scales this down as a whole via `transform: scale()` (set inline,
+	   computed in the script from the stage's real rendered width) when
+	   the actual viewport is narrower, rather than rewriting any of the
+	   choreography to be relative. transform-origin: top left so the
+	   scaled content stays anchored to .stage's own top-left corner,
+	   matching how .stage's own height already shrinks in lockstep
+	   (see the inline height style above) - without that, .stage's
+	   box would still be full-height while the scaled content sits
+	   inside a shorter visual area, leaving empty space below it. */
+	.world {
+		position: relative;
+		width: 576px;
+		height: 200px;
+		transform-origin: top left;
 	}
 
 	.grid-overlay {

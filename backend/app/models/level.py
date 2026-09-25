@@ -1,31 +1,10 @@
 import enum
-import secrets
-import string
-from datetime import datetime, timezone
 
 from sqlalchemy.dialects.postgresql import JSONB
 
 from app.extensions import db
-
-SLUG_ALPHABET = string.ascii_lowercase + string.digits
-SLUG_LENGTH = 8
-
-
-def generate_level_slug() -> str:
-    """
-    Short, random, non-guessable slug for a level's share URL - e.g.
-    a3f9k2x1. Deliberately not derived from the title (title collisions
-    would need a random suffix anyway, defeating the point of staying
-    short) and deliberately lives on the level (family), not on a
-    specific version, so a share link keeps working across re-publishes
-    instead of breaking every time a creator fixes a typo.
-
-    Collisions are astronomically unlikely at this length but not
-    impossible - the unique constraint on Level.slug will reject one at
-    insert time; retrying with a freshly generated slug is a
-    service-layer concern, not handled here.
-    """
-    return "".join(secrets.choice(SLUG_ALPHABET) for _ in range(SLUG_LENGTH))
+from app.utils.slugs import generate_slug
+from app.utils.time import utc_now
 
 
 class LevelVisibilityState(enum.Enum):
@@ -50,7 +29,9 @@ class Level(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     owner_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     title = db.Column(db.String(120), nullable=False)
-    slug = db.Column(db.String(16), unique=True, nullable=False, default=generate_level_slug)
+    # Public share-URL identifier - see app/utils/slugs.py for the format
+    # and why the raw id above never gets exposed in its place.
+    slug = db.Column(db.String(19), unique=True, nullable=False, default=generate_slug)
 
     visibility_state = db.Column(
         db.Enum(LevelVisibilityState, name="level_visibility_state"),
@@ -101,7 +82,7 @@ class Level(db.Model):
     # the same table.
     remixed_from_level_id = db.Column(db.Integer, db.ForeignKey("levels.id"), nullable=True)
 
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utc_now)
 
     owner = db.relationship("User", foreign_keys=[owner_id])
     latest_published_version = db.relationship(
@@ -158,7 +139,7 @@ class LevelVersion(db.Model):
     clear_rate_cached = db.Column(db.Float, nullable=True)
     difficulty_label_cached = db.Column(db.String(20), nullable=True)
 
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utc_now)
 
     level = db.relationship("Level", back_populates="versions", foreign_keys=[level_id])
 

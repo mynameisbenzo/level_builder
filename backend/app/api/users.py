@@ -1,69 +1,45 @@
-from datetime import datetime, timezone
-
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models.email_verification import EmailVerificationToken, generate_verification_token
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.user import user_to_full_dict, user_to_public_dict
 from app.services.email import send_verification_email
+from app.services.users import clean_str, create_user_row, username_is_taken
+from app.utils.time import utc_now
 
 users_bp = Blueprint("users", __name__, url_prefix="/api/users")
-
-
-def _clean_str(value) -> str | None:
-    """Trims a string field from a JSON payload; treats blank as absent."""
-    if value is None:
-        return None
-    stripped = str(value).strip()
-    return stripped or None
 
 
 @users_bp.post("")
 def create_user():
     """
     Creates a user directly from the given fields. This is NOT the real
-    signup flow (magic-link email verification, Twitch OAuth) - those
-    still need actual external service integration (see README). This
-    endpoint exists so the User model has a real, testable way to get
-    rows into the database right now, and so the rest of the CRUD
-    surface below has something to exercise against.
+    email signup flow (magic-link verification) or Twitch OAuth (see
+    app/api/auth.py's twitch routes for that) - this endpoint exists so
+    the User model has a real, testable way to get rows into the
+    database, and so the rest of the CRUD surface below has something
+    to exercise against.
     """
     payload = request.get_json(silent=True) or {}
-    username = _clean_str(payload.get("username"))
-    email = _clean_str(payload.get("email"))
-    twitch_id = _clean_str(payload.get("twitch_id"))
-    twitch_display_name = _clean_str(payload.get("twitch_display_name"))
+    username = clean_str(payload.get("username"))
+    email = clean_str(payload.get("email"))
+    twitch_id = clean_str(payload.get("twitch_id"))
+    twitch_display_name = clean_str(payload.get("twitch_display_name"))
 
     if not username:
         return jsonify({"error": "username is required"}), 400
     if not email and not twitch_id:
         return jsonify({"error": "at least one of email or twitch_id is required"}), 400
 
-    if User.query.filter_by(username=username).first() is not None:
-        return jsonify({"error": "username is already taken"}), 409
-    if email and User.query.filter_by(email=email).first() is not None:
-        return jsonify({"error": "email is already registered"}), 409
-    if twitch_id and User.query.filter_by(twitch_id=twitch_id).first() is not None:
-        return jsonify({"error": "twitch account is already linked to another user"}), 409
-
-    # The very first account ever created becomes Owner automatically -
-    # checking "does an Owner already exist" rather than "is this row
-    # count zero" is a more direct match for the actual rule (there
-    # must be exactly one bootstrap admin), and stays correct even in
-    # edge cases like the original Owner account later being deleted.
-    role = UserRole.OWNER if User.query.filter_by(role=UserRole.OWNER).first() is None else UserRole.USER
-
-    user = User(
-        username=username,
-        email=email,
-        twitch_id=twitch_id,
-        twitch_display_name=twitch_display_name,
-        role=role,
+    user, error = create_user_row(
+        username, email=email, twitch_id=twitch_id, twitch_display_name=twitch_display_name
     )
-    db.session.add(user)
-    db.session.commit()
+    if error is not None:
+        message, status = error
+        return jsonify({"error": message}), status
 
     response_body = user_to_full_dict(user)
 
@@ -96,7 +72,7 @@ def verify_email():
     email as verified.
     """
     payload = request.get_json(silent=True) or {}
-    token_value = _clean_str(payload.get("token"))
+    token_value = clean_str(payload.get("token"))
 
     if not token_value:
         return jsonify({"error": "token is required"}), 400
@@ -108,18 +84,19 @@ def verify_email():
         return jsonify({"error": "token has expired or already been used"}), 410
 
     user = verification_token.user
-    user.email_verified_at = datetime.now(timezone.utc)
-    verification_token.used_at = datetime.now(timezone.utc)
+    user.email_verified_at = utc_now()
+    verification_token.used_at = utc_now()
     db.session.commit()
 
     return jsonify(user_to_full_dict(user)), 200
 
 
-@users_bp.get("/<int:user_id>")
-def get_user_by_id(user_id):
-    """Public profile lookup - intentionally not behind auth. Respects
-    hide_email/hide_twitch via user_to_public_dict either way."""
-    user = db.session.get(User, user_id)
+@users_bp.get("/<string:public_id>")
+def get_user_by_public_id(public_id):
+    """Public profile lookup, by the external public_id - intentionally
+    not behind auth. Respects hide_email/hide_twitch via
+    user_to_public_dict either way."""
+    user = User.query.filter_by(public_id=public_id).first()
     if user is None or user.is_deleted:
         return jsonify({"error": "user not found"}), 404
     return jsonify(user_to_public_dict(user)), 200
@@ -127,40 +104,40 @@ def get_user_by_id(user_id):
 
 @users_bp.get("/by-username/<string:username>")
 def get_user_by_username(username):
-    """Same as get_user_by_id, by username instead - also intentionally public."""
+    """Same as get_user_by_public_id, by username instead - also intentionally public."""
     user = User.query.filter_by(username=username).first()
     if user is None or user.is_deleted:
         return jsonify({"error": "user not found"}), 404
     return jsonify(user_to_public_dict(user)), 200
 
 
-@users_bp.patch("/<int:user_id>")
+@users_bp.patch("/<string:public_id>")
 @jwt_required()
-def update_user(user_id):
+def update_user(public_id):
     """
     Partial update of username/hide_email/hide_twitch. Self-only - the
-    JWT's identity must match the target user. Deliberately no
-    dev/moderator bypass here: editing someone else's profile fields
-    isn't a moderation action the design ever specified (suspending an
-    abusive account is the actual tool for that, via a separate,
-    not-yet-built endpoint) - conflating the two here would grant a
-    broader power than was ever actually designed.
+    JWT's identity (itself the user's public_id, not the raw internal
+    id - see User.public_id) must match the target public_id.
+    Deliberately no dev/moderator bypass here: editing someone else's
+    profile fields isn't a moderation action the design ever specified
+    (suspending an abusive account is the actual tool for that, via a
+    separate, not-yet-built endpoint) - conflating the two here would
+    grant a broader power than was ever actually designed.
     """
-    if get_jwt_identity() != str(user_id):
+    if get_jwt_identity() != public_id:
         return jsonify({"error": "you can only update your own account"}), 403
 
-    user = db.session.get(User, user_id)
+    user = User.query.filter_by(public_id=public_id).first()
     if user is None or user.is_deleted:
         return jsonify({"error": "user not found"}), 404
 
     payload = request.get_json(silent=True) or {}
 
     if "username" in payload:
-        new_username = _clean_str(payload["username"])
+        new_username = clean_str(payload["username"])
         if not new_username:
             return jsonify({"error": "username cannot be empty"}), 400
-        existing = User.query.filter_by(username=new_username).first()
-        if existing is not None and existing.id != user.id:
+        if username_is_taken(new_username, exclude_user_id=user.id):
             return jsonify({"error": "username is already taken"}), 409
         user.username = new_username
 
@@ -170,13 +147,21 @@ def update_user(user_id):
     if "hide_twitch" in payload:
         user.hide_twitch = bool(payload["hide_twitch"])
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Same race as create_user_row - a concurrent request claiming
+        # the same username between the check above and this commit.
+        # See that function's comment for the full reasoning.
+        db.session.rollback()
+        return jsonify({"error": "username is already taken"}), 409
+
     return jsonify(user_to_full_dict(user)), 200
 
 
-@users_bp.delete("/<int:user_id>")
+@users_bp.delete("/<string:public_id>")
 @jwt_required()
-def delete_user(user_id):
+def delete_user(public_id):
     """
     Soft-delete: the row stays (so FKs from levels/etc. never dangle),
     but becomes an anonymized "deleted user" placeholder - email/
@@ -188,10 +173,10 @@ def delete_user(user_id):
     someone else's account (a separate, not-yet-built endpoint) - the
     two have different meanings and shouldn't share one code path.
     """
-    if get_jwt_identity() != str(user_id):
+    if get_jwt_identity() != public_id:
         return jsonify({"error": "you can only delete your own account"}), 403
 
-    user = db.session.get(User, user_id)
+    user = User.query.filter_by(public_id=public_id).first()
     if user is None or user.is_deleted:
         return jsonify({"error": "user not found"}), 404
 

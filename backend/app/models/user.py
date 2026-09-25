@@ -1,7 +1,8 @@
 import enum
-from datetime import datetime, timezone
 
 from app.extensions import db
+from app.utils.slugs import generate_slug
+from app.utils.time import utc_now
 
 
 class UserRole(enum.Enum):
@@ -21,6 +22,17 @@ class User(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True)
+    # The externally-visible identifier - used in every URL, API
+    # response, and the JWT identity claim itself instead of the raw
+    # integer PK, which never leaves the database. A JWT's payload is
+    # base64-encoded, not encrypted - anyone holding a token can decode
+    # and read its claims even without the signing key, so using the
+    # real PK there would still leak it despite every API response
+    # already hiding it. `id` stays internal-only: FKs (LoginToken.user_id,
+    # Level.owner_id, etc.) and in-process comparisons keep using it,
+    # since nothing about hiding a sequential ID from the outside world
+    # requires the internal join key to change too.
+    public_id = db.Column(db.String(19), unique=True, nullable=False, default=generate_slug, index=True)
     # The public identity everywhere on the site - never email or Twitch.
     # Chosen as a hard gate right after signup, so this is non-nullable
     # from the start rather than filled in later.
@@ -37,7 +49,7 @@ class User(db.Model):
 
     # Per-identity visibility - the username itself is always public
     # regardless of these.
-    hide_email = db.Column(db.Boolean, nullable=False, default=False)
+    hide_email = db.Column(db.Boolean, nullable=False, default=True)
     hide_twitch = db.Column(db.Boolean, nullable=False, default=False)
 
     is_suspended = db.Column(db.Boolean, nullable=False, default=False)
@@ -49,7 +61,7 @@ class User(db.Model):
     # since it can't log in again anyway.
     is_deleted = db.Column(db.Boolean, nullable=False, default=False)
 
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = db.Column(db.DateTime, default=utc_now)
 
     def __repr__(self):
         return f"<User {self.username}>"

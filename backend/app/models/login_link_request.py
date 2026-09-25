@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app.extensions import db
+from app.utils.time import utc_now
 
 # After this many requests for the same identifier within the window
 # below, further requests are blocked and told so honestly - deliberately
@@ -28,4 +29,4 @@ class LoginLinkRequest(db.Model):
     # as a plain string rather than a FK, since this needs to track
     # attempts against identifiers that might not match any real user.
     identifier = db.Column(db.String(255), nullable=False, index=True)
-    requested_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    requested_at = db.Column(db.DateTime, default=utc_now, index=True)

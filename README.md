@@ -607,6 +607,36 @@ but can't touch Developer/Owner accounts or blog posts), and
       actual person - a real, hit-in-practice bug during this session,
       not a hypothetical. A scanner renders a page but doesn't click a
       button on it, which is the actual fix.
+- [x] **Fixed a real, confirmed data-corruption bug: every timestamp this
+      app wrote was silently off by the local machine's UTC offset.**
+      Root cause: Postgres.app defaults a database's own *session*
+      timezone to the host machine's timezone, not UTC. Every write used
+      `datetime.now(timezone.utc)` - correct in Python - but psycopg
+      converts a timezone-aware datetime into the *connection's session
+      timezone* before storing it in a column that has no timezone of
+      its own, not into UTC regardless of what timezone the value
+      started in. On a Pacific-timezone machine, this meant every
+      `created_at`/`expires_at`/`used_at` came out ~7 hours off while
+      still looking like a plausible value - a `LoginToken` meant to
+      expire in 15 minutes was actually valid for ~7 hours. Confirmed by
+      direct reproduction (broke it on demand with the DB session set to
+      `America/Los_Angeles`, then proved the fix closes it against that
+      exact session), not just inspection. Two independent fixes: (1)
+      `app/utils/time.py`'s `utc_now()` strips the timezone label in
+      Python *before* SQLAlchemy/psycopg ever see it, so there's nothing
+      timezone-aware left to "helpfully" convert - used everywhere a
+      timestamp gets written, across `User`, `Level`, `LevelVersion`,
+      `EmailVerificationToken`, `LoginToken`, `LoginLinkRequest`; (2)
+      `SQLALCHEMY_ENGINE_OPTIONS` in `config.py` forces every Postgres
+      session's timezone to UTC at the connection level itself, so even
+      a future stray `datetime.now(timezone.utc)` bypassing `utc_now()`
+      wouldn't silently corrupt storage again. `LoginToken`'s 15-minute
+      expiry is now a real, verified guarantee, not an accidental
+      side effect of which timezone happens to be running the server -
+      a previous fix attempt (comparing against naive local time instead)
+      "worked" locally only because PDT happens to sit behind UTC; it
+      would have failed completely in production, where Render runs UTC
+      and that accidental slack disappears entirely.
 - [ ] **The 1-hour JWT expiry may be a real problem once actual level-
       building sessions exist, not just a minor UX tradeoff.** Building
       a level could plausibly take well over an hour - maybe most of a

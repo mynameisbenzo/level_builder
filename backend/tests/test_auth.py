@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app.extensions import db
 from app.main import create_app
 from app.models.login_link_request import LoginLinkRequest
 from app.models.login_token import LoginToken
 from app.models.user import User
+from app.utils.time import utc_now
 
 
 def _client():
@@ -18,6 +19,17 @@ def _signup(client, username="lorenzo", email="l@example.com"):
     return client.post("/api/users", json={"username": username, "email": email}).get_json()
 
 
+def _internal_id(public_id: str) -> int:
+    """
+    Test-only helper: looks up a User's real internal id from their
+    public_id. Needed because response bodies only ever expose
+    public_id (by design - see User.public_id), but LoginToken.user_id
+    is the internal FK, so filtering LoginToken by "user_id=<public_id>"
+    would silently never match anything.
+    """
+    return User.query.filter_by(public_id=public_id).first().id
+
+
 # --- request-login-link ---
 
 
@@ -26,7 +38,7 @@ def test_request_login_link_by_username_issues_a_token():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
         assert token is not None
         assert token.is_valid() is True
 
@@ -36,7 +48,7 @@ def test_request_login_link_by_email_issues_a_token():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "l@example.com"})
-        assert LoginToken.query.filter_by(user_id=user["id"]).first() is not None
+        assert LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first() is not None
 
 
 def test_request_login_link_matching_is_case_insensitive():
@@ -44,7 +56,7 @@ def test_request_login_link_matching_is_case_insensitive():
     with app.app_context():
         user = _signup(client, username="Lorenzo", email="L@Example.com")
         client.post("/api/auth/request-login-link", json={"identifier": "L@EXAMPLE.COM"})
-        assert LoginToken.query.filter_by(user_id=user["id"]).first() is not None
+        assert LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first() is not None
 
 
 def test_request_login_link_response_identical_whether_account_exists_or_not():
@@ -75,13 +87,13 @@ def test_request_login_link_suspended_user_gets_no_token():
     app, client = _client()
     with app.app_context():
         user = _signup(client)
-        db.session.get(User, user["id"]).is_suspended = True
+        User.query.filter_by(public_id=user["id"]).first().is_suspended = True
         db.session.commit()
 
         response = client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
 
         assert response.status_code == 200
-        assert LoginToken.query.filter_by(user_id=user["id"]).first() is None
+        assert LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first() is None
 
 
 def test_dev_login_token_present_in_debug_when_account_found():
@@ -158,7 +170,7 @@ def test_rate_limit_old_requests_outside_window_do_not_count():
         # against the current window.
         for _ in range(3):
             old_request = LoginLinkRequest(identifier="lorenzo")
-            old_request.requested_at = datetime.now(timezone.utc) - timedelta(days=2)
+            old_request.requested_at = utc_now() - timedelta(days=2)
             db.session.add(old_request)
         db.session.commit()
 
@@ -174,7 +186,7 @@ def test_login_with_valid_token_returns_access_token_and_user():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
 
         response = client.post("/api/auth/login", json={"token": token.token})
 
@@ -189,7 +201,7 @@ def test_login_marks_the_token_used():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
 
         client.post("/api/auth/login", json={"token": token.token})
 
@@ -204,13 +216,16 @@ def test_login_issues_a_jwt_with_the_correct_user_identity():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
 
         response = client.post("/api/auth/login", json={"token": token.token})
         access_token = response.get_json()["access_token"]
 
         decoded = decode_token(access_token)
-        assert decoded["sub"] == str(user["id"])
+        # The JWT identity is the user's public_id directly (already a
+        # string) - not str(the internal integer id), which is what
+        # this compared against before public_id existed.
+        assert decoded["sub"] == user["id"]
 
 
 def test_login_with_unknown_token_returns_404():
@@ -232,7 +247,7 @@ def test_login_with_already_used_token_is_rejected():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
 
         first = client.post("/api/auth/login", json={"token": token.token})
         assert first.status_code == 200
@@ -246,9 +261,9 @@ def test_login_with_expired_token_is_rejected():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
 
-        token.expires_at = datetime.now() - timedelta(minutes=1)
+        token.expires_at = utc_now() - timedelta(minutes=1)
         db.session.commit()
 
         response = client.post("/api/auth/login", json={"token": token.token})
@@ -262,9 +277,9 @@ def test_login_rejects_a_since_suspended_users_token():
     with app.app_context():
         user = _signup(client)
         client.post("/api/auth/request-login-link", json={"identifier": "lorenzo"})
-        token = LoginToken.query.filter_by(user_id=user["id"]).first()
+        token = LoginToken.query.filter_by(user_id=_internal_id(user["id"])).first()
 
-        db.session.get(User, user["id"]).is_suspended = True
+        User.query.filter_by(public_id=user["id"]).first().is_suspended = True
         db.session.commit()
 
         response = client.post("/api/auth/login", json={"token": token.token})

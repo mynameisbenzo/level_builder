@@ -1,5 +1,14 @@
 <script lang="ts">
+	import { logoutServer } from './api';
 	import { auth } from './auth.svelte';
+
+	function handleLogout() {
+		const refreshToken = auth.refreshToken;
+		auth.logout();
+		if (refreshToken) {
+			logoutServer(refreshToken);
+		}
+	}
 </script>
 
 <nav>
@@ -7,7 +16,7 @@
 	<div class="auth-links">
 		{#if auth.isLoggedIn}
 			<a class="greeting" href="/profile">Hi, {auth.user?.username}</a>
-			<button class="nav-link nav-link-ghost" onclick={() => auth.logout()}>Log Out</button>
+			<button class="nav-link nav-link-ghost" onclick={handleLogout}>Log Out</button>
 		{:else}
 			<a class="nav-link nav-link-ghost" href="/login">Log In</a>
 			<a class="nav-link nav-link-solid" href="/signup">Sign Up</a>

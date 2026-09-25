@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { requestLoginLink } from '$lib/api';
+	import { redirectToTwitchAuthorize } from '$lib/twitch';
 	import Navbar from '$lib/Navbar.svelte';
 
 	let identifier = $state('');
@@ -69,6 +70,12 @@
 					{status === 'submitting' ? 'Sending…' : 'Send login link'}
 				</button>
 			</form>
+
+			<div class="divider"><span>or</span></div>
+
+			<button class="twitch-button" onclick={redirectToTwitchAuthorize}>
+				Continue with Twitch
+			</button>
 
 			<p class="note secondary">
 				Don't have an account yet? <a href="/signup">Sign up</a>.
@@ -203,5 +210,39 @@
 	button:focus-visible {
 		outline: 3px solid #ffd23f;
 		outline-offset: 3px;
+	}
+
+	.divider {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		margin: 20px 0;
+		color: #6b6f9e;
+		font-size: 0.8rem;
+	}
+
+	.divider::before,
+	.divider::after {
+		content: '';
+		flex: 1;
+		height: 1px;
+		background: #3a3d76;
+	}
+
+	/* Twitch's own brand purple - a recognizable, expected convention
+	   for a "continue with X" button, distinct from the site's own
+	   green used for primary actions. */
+	.twitch-button {
+		width: 100%;
+		color: #f4f6ff;
+		background: #9146ff;
+		border: 3px solid #5c1f99;
+		box-shadow: 0 4px 0 #5c1f99;
+		margin-bottom: 20px;
+	}
+
+	.twitch-button:hover {
+		transform: translateY(2px);
+		box-shadow: 0 2px 0 #5c1f99;
 	}
 </style>

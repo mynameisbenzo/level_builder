@@ -1,7 +1,8 @@
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from app.extensions import db
+from app.utils.time import utc_now
 
 TOKEN_LENGTH_BYTES = 32
 TOKEN_LIFETIME = timedelta(hours=24)
@@ -26,10 +27,8 @@ class EmailVerificationToken(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
     token = db.Column(db.String(64), unique=True, nullable=False, default=generate_verification_token)
 
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-    expires_at = db.Column(
-        db.DateTime, default=lambda: datetime.now(timezone.utc) + TOKEN_LIFETIME, nullable=False
-    )
+    created_at = db.Column(db.DateTime, default=utc_now)
+    expires_at = db.Column(db.DateTime, default=lambda: utc_now() + TOKEN_LIFETIME, nullable=False)
     # Null until consumed by the verify endpoint - checked instead of
     # just deleting the row on use, so there's a record that this
     # specific token was actually redeemed (not just expired unused).
@@ -42,7 +41,7 @@ class EmailVerificationToken(db.Model):
         already used, and not past its expiry."""
         if self.used_at is not None:
             return False
-        return datetime.now(timezone.utc) <= self.expires_at.replace(tzinfo=timezone.utc)
+        return utc_now() <= self.expires_at
 
     def __repr__(self):
         return f"<EmailVerificationToken user_id={self.user_id} used={self.used_at is not None}>"

@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { deleteAccount, updateProfile } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { redirectToTwitchLink } from '$lib/twitch';
 	import Navbar from '$lib/Navbar.svelte';
 
 	let username = $state(auth.user?.username ?? '');
@@ -22,11 +23,6 @@
 		}
 	});
 
-	function handleSessionExpired() {
-		auth.logout();
-		goto('/login');
-	}
-
 	async function handleSave(event: SubmitEvent) {
 		event.preventDefault();
 		if (!auth.user || !auth.accessToken) return;
@@ -34,17 +30,34 @@
 		saveStatus = 'saving';
 		saveError = '';
 
-		const result = await updateProfile(auth.user.id, auth.accessToken, {
+		let result = await updateProfile(auth.user.id, auth.accessToken, {
 			username: username.trim(),
 			hide_email: hideEmail,
 			hide_twitch: hideTwitch
 		});
 
+		// Reactive fallback: the proactive scheduled refresh in
+		// auth.svelte.ts should normally catch this before it ever
+		// happens (e.g. a laptop asleep through the scheduled time) -
+		// try once to silently renew and retry, rather than treating
+		// every expired-access-token moment as a full logout.
+		if (result.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			if (refreshed && auth.user && auth.accessToken) {
+				result = await updateProfile(auth.user.id, auth.accessToken, {
+					username: username.trim(),
+					hide_email: hideEmail,
+					hide_twitch: hideTwitch
+				});
+			}
+		}
+
 		if (result.success && result.user) {
 			auth.updateUser(result.user);
 			saveStatus = 'saved';
 		} else if (result.sessionExpired) {
-			handleSessionExpired();
+			// auth.tryRefresh() already logged out on failure.
+			goto('/login');
 		} else {
 			saveStatus = 'error';
 			saveError = result.error ?? 'Something went wrong. Please try again.';
@@ -57,13 +70,20 @@
 		deleteStatus = 'deleting';
 		deleteError = '';
 
-		const result = await deleteAccount(auth.user.id, auth.accessToken);
+		let result = await deleteAccount(auth.user.id, auth.accessToken);
+
+		if (result.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			if (refreshed && auth.user && auth.accessToken) {
+				result = await deleteAccount(auth.user.id, auth.accessToken);
+			}
+		}
 
 		if (result.success) {
 			auth.logout();
 			goto('/');
 		} else if (result.sessionExpired) {
-			handleSessionExpired();
+			goto('/login');
 		} else {
 			deleteStatus = 'error';
 			deleteError = result.error ?? 'Something went wrong. Please try again.';
@@ -123,6 +143,21 @@
 					{saveStatus === 'saving' ? 'Saving…' : 'Save changes'}
 				</button>
 			</form>
+		</div>
+
+		<div class="card">
+			<h2 class="twitch-heading">Twitch account</h2>
+
+			{#if auth.user.twitch_id}
+				<p class="note">
+					Linked as <strong>{auth.user.twitch_display_name}</strong>.
+				</p>
+			{:else}
+				<p class="note">Link your Twitch account to log in with it too.</p>
+				<button class="twitch-button" onclick={redirectToTwitchLink}>
+					Link Twitch account
+				</button>
+			{/if}
 		</div>
 
 		<div class="card danger-zone">
@@ -193,6 +228,24 @@
 		font-size: 1.15rem;
 		margin: 0 0 12px;
 		color: #ff8a7a;
+	}
+
+	/* Overrides the red danger-zone color above - this heading isn't a
+	   warning, just this card's own title. */
+	.twitch-heading {
+		color: #c7cbef;
+	}
+
+	.twitch-button {
+		color: #f4f6ff;
+		background: #9146ff;
+		border: 3px solid #5c1f99;
+		box-shadow: 0 4px 0 #5c1f99;
+	}
+
+	.twitch-button:hover {
+		transform: translateY(2px);
+		box-shadow: 0 2px 0 #5c1f99;
 	}
 
 	form {

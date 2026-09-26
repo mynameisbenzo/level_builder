@@ -53,11 +53,13 @@ def create_app(config_name: str = "development") -> Flask:
     from app.models.user import User  # noqa: F401
 
     from app.api.auth import auth_bp
+    from app.api.levels import levels_bp
     from app.api.users import users_bp
 
     app.register_blueprint(users_bp)
     app.register_blueprint(auth_bp)
-
+    app.register_blueprint(levels_bp)
+    
     @app.get("/")
     def landing_page():
         return render_template(

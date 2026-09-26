@@ -82,6 +82,26 @@ class Level(db.Model):
     # the same table.
     remixed_from_level_id = db.Column(db.Integer, db.ForeignKey("levels.id"), nullable=True)
 
+    # The mutable, freely-overwritten in-progress editing state - what
+    # every PATCH /api/levels/<slug> save writes to. Deliberately
+    # separate from the immutable LevelVersion rows below: saving is
+    # meant to be cheap and constant (every keystroke-adjacent action
+    # while building, potentially many times a session), while a
+    # LevelVersion is a permanent, published snapshot that should only
+    # ever be created once something real has actually happened to this
+    # content (see draft_beaten_at and POST /api/levels/<slug>/publish).
+    draft_content = db.Column(db.JSON().with_variant(JSONB, "postgresql"), nullable=True)
+
+    # Set only by POST /api/levels/<slug>/beat, the moment a real
+    # test-playthrough of the CURRENT draft_content reaches the win
+    # condition - this is what actually gates publishing. Every save
+    # (PATCH) clears this back to null unconditionally, even if the
+    # save didn't change anything meaningful - so there is no path by
+    # which a beat recorded against one version of the draft can ever
+    # be used to publish a since-edited one. A level has to be beaten
+    # again, against whatever the draft currently is, every single time.
+    draft_beaten_at = db.Column(db.DateTime, nullable=True)
+
     created_at = db.Column(db.DateTime, default=utc_now)
 
     owner = db.relationship("User", foreign_keys=[owner_id])

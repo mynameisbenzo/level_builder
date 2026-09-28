@@ -11,6 +11,11 @@
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
 	import type { PageProps } from './$types';
 
+	// Mirrors the backend's MAX_TITLE_LENGTH (app/api/levels.py), which
+	// itself mirrors the Level.title column - kept in sync by hand, same
+	// as the other cross-language constants in this project.
+	const MAX_TITLE_LENGTH = 120;
+
 	let { params }: PageProps = $props();
 	const slug = $derived(params.slug);
 
@@ -20,12 +25,19 @@
 	let loadStatus: 'loading' | 'ready' | 'error' = $state('loading');
 	let loadError = $state('');
 
+	// The level's current name, shown read-only in the toolbar. It's only
+	// ever changed by the publish dialog below - naming a level happens
+	// at publish time, not as a free-floating field while editing.
 	let title = $state('');
 	let visibilityState: 'draft' | 'testing' | 'published' = $state('draft');
 	let hasBeenBeaten = $state(false);
 
 	let saveStatus: 'idle' | 'saving' | 'saved' | 'error' = $state('idle');
 	let saveError = $state('');
+
+	let publishDialog: HTMLDialogElement = $state()!;
+	let publishTitleInput: HTMLInputElement = $state()!;
+	let publishTitle = $state('');
 	let publishStatus: 'idle' | 'publishing' | 'error' = $state('idle');
 	let publishError = $state('');
 
@@ -111,14 +123,16 @@
 		saveStatus = 'saving';
 		saveError = '';
 
+		// Content only - the title isn't part of a save anymore, it's
+		// set by the publish dialog.
 		const content = serializeLevelContent(game.registry);
-		let result = await saveLevel(slug, content, token, title.trim());
+		let result = await saveLevel(slug, content, token);
 
 		if (result.sessionExpired) {
 			const refreshed = await auth.tryRefresh();
 			const refreshedToken = auth.accessToken;
 			if (refreshed && refreshedToken) {
-				result = await saveLevel(slug, content, refreshedToken, title.trim());
+				result = await saveLevel(slug, content, refreshedToken);
 			}
 		}
 
@@ -134,30 +148,61 @@
 		}
 	}
 
-	async function handlePublish() {
+	function openPublishDialog() {
+		publishTitle = title;
+		publishStatus = 'idle';
+		publishError = '';
+
+		publishDialog.showModal();
+		publishTitleInput.focus();
+		publishTitleInput.select();
+	}
+
+	function handlePublishDialogCancel(event: Event) {
+		// Escape - but not mid-request, where closing the dialog would
+		// leave the person with no feedback on whether it went through.
+		if (publishStatus === 'publishing') {
+			event.preventDefault();
+		}
+	}
+
+	async function handlePublishSubmit(event: SubmitEvent) {
+		event.preventDefault();
 		const token = auth.accessToken;
 		if (!token) return;
+
+		const newTitle = publishTitle.trim();
+		if (!newTitle) {
+			publishError = 'Give your level a name first.';
+			publishTitleInput.focus();
+			return;
+		}
 
 		publishStatus = 'publishing';
 		publishError = '';
 
-		let result = await publishLevel(slug, token);
+		let result = await publishLevel(slug, token, newTitle);
 		if (result.sessionExpired) {
 			const refreshed = await auth.tryRefresh();
 			const refreshedToken = auth.accessToken;
 			if (refreshed && refreshedToken) {
-				result = await publishLevel(slug, refreshedToken);
+				result = await publishLevel(slug, refreshedToken, newTitle);
 			}
 		}
 
 		if (result.success && result.level) {
 			visibilityState = result.level.visibility_state;
+			title = result.level.title;
 			publishStatus = 'idle';
+			publishDialog.close();
 		} else if (result.sessionExpired) {
+			publishStatus = 'idle';
+			publishDialog.close();
 			goto('/login');
 		} else {
 			publishStatus = 'error';
 			publishError = result.error ?? 'Could not publish. Please try again.';
+			publishTitleInput.focus();
 		}
 	}
 </script>
@@ -178,13 +223,7 @@
 	</div>
 {:else}
 	<div class="toolbar">
-		<input
-			class="title-input"
-			type="text"
-			bind:value={title}
-			aria-label="Level title"
-			maxlength="80"
-		/>
+		<span class="level-title" title={title}>{title}</span>
 
 		<span class="visibility-badge" class:published={visibilityState === 'published'}>
 			{visibilityState}
@@ -197,16 +236,13 @@
 			{saveStatus === 'saving' ? 'Saving…' : 'Save'}
 		</button>
 
-		{#if publishStatus === 'error'}
-			<span class="inline-error">{publishError}</span>
-		{/if}
 		<button
 			class="publish-button"
-			onclick={handlePublish}
-			disabled={!hasBeenBeaten || publishStatus === 'publishing'}
+			onclick={openPublishDialog}
+			disabled={!hasBeenBeaten}
 			title={hasBeenBeaten ? '' : 'Test and beat your level first'}
 		>
-			{publishStatus === 'publishing' ? 'Publishing…' : 'Publish'}
+			Publish
 		</button>
 	</div>
 
@@ -215,6 +251,54 @@
 		<LandscapeGuard />
 		<div class="game-container" bind:this={gameContainer}></div>
 	</div>
+
+	<!--
+		Deliberately a sibling of .game-page, not inside it: that
+		container sets user-select: none (and friends) for the sake of
+		touch play, which inherits down into anything nested in it - and
+		iOS Safari refuses to let you type into an input with
+		-webkit-user-select: none.
+	-->
+	<dialog
+		class="publish-dialog"
+		bind:this={publishDialog}
+		oncancel={handlePublishDialogCancel}
+		aria-labelledby="publish-dialog-heading"
+	>
+		<form onsubmit={handlePublishSubmit}>
+			<h2 id="publish-dialog-heading">Name your level</h2>
+			<p class="dialog-note">This is the name people will see once it's published.</p>
+
+			<input
+				class="dialog-input"
+				type="text"
+				bind:this={publishTitleInput}
+				bind:value={publishTitle}
+				required
+				maxlength={MAX_TITLE_LENGTH}
+				readonly={publishStatus === 'publishing'}
+				aria-label="Level name"
+			/>
+
+			{#if publishError}
+				<p class="dialog-error">{publishError}</p>
+			{/if}
+
+			<div class="dialog-actions">
+				<button
+					type="button"
+					class="cancel-button"
+					onclick={() => publishDialog.close()}
+					disabled={publishStatus === 'publishing'}
+				>
+					Cancel
+				</button>
+				<button type="submit" class="publish-button" disabled={publishStatus === 'publishing'}>
+					{publishStatus === 'publishing' ? 'Publishing…' : 'Publish'}
+				</button>
+			</div>
+		</form>
+	</dialog>
 {/if}
 {/key}
 
@@ -252,22 +336,15 @@
 		z-index: 10;
 	}
 
-	.title-input {
+	.level-title {
 		flex: 1;
 		min-width: 0;
 		font-family: 'Baloo 2', sans-serif;
 		font-weight: 700;
 		font-size: 0.95rem;
-		color: #f4f6ff;
-		background: #1a1b3a;
-		border: 2px solid #3a3d76;
-		border-radius: 6px;
-		padding: 6px 10px;
-	}
-
-	.title-input:focus-visible {
-		outline: none;
-		border-color: #4ecb71;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.visibility-badge {
@@ -313,6 +390,70 @@
 	.publish-button {
 		color: #f4f6ff;
 		background: #9146ff;
+	}
+
+	.cancel-button {
+		color: #c7cbef;
+		background: transparent;
+		border: 1px solid #3a3d76;
+	}
+
+	.publish-dialog {
+		width: min(420px, calc(100vw - 32px));
+		padding: 24px;
+		background: #252650;
+		color: #f4f6ff;
+		border: 2px solid #3a3d76;
+		border-radius: 10px;
+		font-family: 'Manrope', sans-serif;
+	}
+
+	.publish-dialog::backdrop {
+		background: rgba(10, 10, 30, 0.75);
+	}
+
+	.publish-dialog h2 {
+		margin: 0 0 6px;
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 1.2rem;
+	}
+
+	.dialog-note {
+		margin: 0 0 16px;
+		font-size: 0.85rem;
+		line-height: 1.5;
+		color: #b6baec;
+	}
+
+	.dialog-input {
+		width: 100%;
+		box-sizing: border-box;
+		font-family: 'Manrope', sans-serif;
+		font-size: 1rem;
+		color: #f4f6ff;
+		background: #1a1b3a;
+		border: 2px solid #3a3d76;
+		border-radius: 6px;
+		padding: 10px 12px;
+	}
+
+	.dialog-input:focus-visible {
+		outline: none;
+		border-color: #4ecb71;
+	}
+
+	.dialog-error {
+		margin: 10px 0 0;
+		font-size: 0.85rem;
+		color: #ff8a7a;
+	}
+
+	.dialog-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 10px;
+		margin-top: 18px;
 	}
 
 	.game-page {

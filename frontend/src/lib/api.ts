@@ -443,6 +443,10 @@ export interface LevelSummary {
 	id: string;
 	title: string;
 	visibility_state: 'draft' | 'testing' | 'published';
+	/** False until a level's first publish - which is also the one moment
+	 * it gets named (see publishLevel). True from then on, even if a
+	 * later edit demotes visibility_state back to 'testing'. */
+	has_been_published: boolean;
 	draft_content: LevelContent | null;
 	draft_beaten_at: string | null;
 	created_at: string | null;
@@ -573,10 +577,13 @@ export async function beatLevel(slug: string, accessToken: string): Promise<Leve
 
 /** Calls POST /api/levels/<slug>/publish - requires the level to have
  * been beaten since its last save; turns the draft into a real,
- * permanent LevelVersion. Takes the level's name too - this is where
- * the editor asks for one (the publish dialog), applied by the backend
- * in the same transaction as the publish itself so a rejected publish
- * never renames anything. */
+ * permanent LevelVersion.
+ *
+ * title is required for a level's FIRST publish (this is the one place
+ * it gets named) and must be omitted for every later one - a published
+ * level's name can't be changed. The backend applies it in the same
+ * transaction as the publish itself, so a rejected publish never names
+ * anything. */
 export async function publishLevel(
 	slug: string,
 	accessToken: string,
@@ -644,6 +651,7 @@ export interface LevelListItem {
 	id: string;
 	title: string;
 	visibility_state: 'draft' | 'testing' | 'published';
+	has_been_published: boolean;
 	draft_beaten_at: string | null;
 	created_at: string | null;
 }

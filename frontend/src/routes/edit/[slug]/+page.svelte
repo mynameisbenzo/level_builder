@@ -29,6 +29,10 @@
 	// ever changed by the publish dialog below - naming a level happens
 	// at publish time, not as a free-floating field while editing.
 	let title = $state('');
+	// A level is named exactly once, at its first publish, and locked
+	// from then on - so this decides whether Publish asks for a name
+	// (first time) or just publishes (every time after).
+	let hasBeenPublished = $state(false);
 	let visibilityState: 'draft' | 'testing' | 'published' = $state('draft');
 	let hasBeenBeaten = $state(false);
 
@@ -38,6 +42,7 @@
 	let publishDialog: HTMLDialogElement = $state()!;
 	let publishTitleInput: HTMLInputElement = $state()!;
 	let publishTitle = $state('');
+	let publishDialogOpen = $state(false);
 	let publishStatus: 'idle' | 'publishing' | 'error' = $state('idle');
 	let publishError = $state('');
 
@@ -92,6 +97,7 @@
 		}
 
 		title = result.level.title;
+		hasBeenPublished = result.level.has_been_published;
 		visibilityState = result.level.visibility_state;
 		hasBeenBeaten = result.level.draft_beaten_at !== null;
 		loadStatus = 'ready';
@@ -148,14 +154,57 @@
 		}
 	}
 
+	/**
+	 * Phaser listens for key presses on the whole window, not on
+	 * whatever element happens to have DOM focus - so without this,
+	 * typing a level name would also drive the editor/game underneath
+	 * (W/A/S/D and the arrow keys moving things, Space jumping), and
+	 * Phaser calls preventDefault on the keys it "captures", which can
+	 * swallow the space bar right out of the text field.
+	 *
+	 * keyboard.enabled = false makes Phaser's own key handlers return
+	 * before queueing the event or calling preventDefault (checked
+	 * against Phaser's KeyboardManager source), so this one flag both
+	 * silences the game and lets typing behave normally.
+	 *
+	 * Held keys are reset in both directions: Phaser never sees the
+	 * keyup for a key released while it isn't listening, so without
+	 * this a key held down as the dialog opens (say, walking right in
+	 * Play mode) would leave the character stuck walking.
+	 */
+	function setGameKeyboardEnabled(enabled: boolean) {
+		if (!game) return;
+		const keyboard = game.input.keyboard;
+		if (!keyboard) return;
+
+		keyboard.enabled = enabled;
+
+		for (const scene of game.scene.getScenes(true)) {
+			scene.input.keyboard?.resetKeys();
+		}
+	}
+
+	function handlePublishClick() {
+		if (hasBeenPublished) {
+			// Already named, and the name is locked - nothing to ask.
+			void runPublish();
+		} else {
+			openPublishDialog();
+		}
+	}
+
 	function openPublishDialog() {
-		publishTitle = title;
+		// Deliberately empty rather than prefilled with the placeholder
+		// title: this name is permanent, so it should be a deliberate
+		// choice, not something Enter accepts by default.
+		publishTitle = '';
 		publishStatus = 'idle';
 		publishError = '';
+		publishDialogOpen = true;
 
+		setGameKeyboardEnabled(false);
 		publishDialog.showModal();
 		publishTitleInput.focus();
-		publishTitleInput.select();
 	}
 
 	function handlePublishDialogCancel(event: Event) {
@@ -166,16 +215,24 @@
 		}
 	}
 
-	async function handlePublishSubmit(event: SubmitEvent) {
-		event.preventDefault();
-		const token = auth.accessToken;
-		if (!token) return;
+	// Fires however the dialog closes (Escape, Cancel, a successful
+	// publish), so the game's keyboard can't be left switched off.
+	function handlePublishDialogClosed() {
+		publishDialogOpen = false;
+		setGameKeyboardEnabled(true);
+	}
 
-		const newTitle = publishTitle.trim();
-		if (!newTitle) {
-			publishError = 'Give your level a name first.';
-			publishTitleInput.focus();
-			return;
+	/**
+	 * Does the actual publish call and applies its result to the page.
+	 * newTitle is only passed for a level's first publish - a published
+	 * level's name is locked, so the server rejects one on any later
+	 * publish. Returns whether it succeeded.
+	 */
+	async function runPublish(newTitle?: string): Promise<boolean> {
+		const token = auth.accessToken;
+		if (!token) {
+			goto('/login');
+			return false;
 		}
 
 		publishStatus = 'publishing';
@@ -193,15 +250,36 @@
 		if (result.success && result.level) {
 			visibilityState = result.level.visibility_state;
 			title = result.level.title;
+			hasBeenPublished = result.level.has_been_published;
 			publishStatus = 'idle';
-			publishDialog.close();
-		} else if (result.sessionExpired) {
+			return true;
+		}
+
+		if (result.sessionExpired) {
 			publishStatus = 'idle';
-			publishDialog.close();
 			goto('/login');
+			return false;
+		}
+
+		publishStatus = 'error';
+		publishError = result.error ?? 'Could not publish. Please try again.';
+		return false;
+	}
+
+	async function handlePublishSubmit(event: SubmitEvent) {
+		event.preventDefault();
+
+		const newTitle = publishTitle.trim();
+		if (!newTitle) {
+			publishError = 'Give your level a name first.';
+			publishTitleInput.focus();
+			return;
+		}
+
+		const published = await runPublish(newTitle);
+		if (published || publishStatus !== 'error') {
+			publishDialog.close();
 		} else {
-			publishStatus = 'error';
-			publishError = result.error ?? 'Could not publish. Please try again.';
 			publishTitleInput.focus();
 		}
 	}
@@ -232,17 +310,20 @@
 		{#if saveStatus === 'error'}
 			<span class="inline-error">{saveError}</span>
 		{/if}
+		{#if publishError && !publishDialogOpen}
+			<span class="inline-error">{publishError}</span>
+		{/if}
 		<button onclick={handleSave} disabled={saveStatus === 'saving'}>
 			{saveStatus === 'saving' ? 'Saving…' : 'Save'}
 		</button>
 
 		<button
 			class="publish-button"
-			onclick={openPublishDialog}
-			disabled={!hasBeenBeaten}
+			onclick={handlePublishClick}
+			disabled={!hasBeenBeaten || publishStatus === 'publishing'}
 			title={hasBeenBeaten ? '' : 'Test and beat your level first'}
 		>
-			Publish
+			{publishStatus === 'publishing' && !publishDialogOpen ? 'Publishing…' : 'Publish'}
 		</button>
 	</div>
 
@@ -262,12 +343,15 @@
 	<dialog
 		class="publish-dialog"
 		bind:this={publishDialog}
+		onclose={handlePublishDialogClosed}
 		oncancel={handlePublishDialogCancel}
 		aria-labelledby="publish-dialog-heading"
 	>
 		<form onsubmit={handlePublishSubmit}>
 			<h2 id="publish-dialog-heading">Name your level</h2>
-			<p class="dialog-note">This is the name people will see once it's published.</p>
+			<p class="dialog-note">
+				Choose carefully - once a level is published, its name can't be changed.
+			</p>
 
 			<input
 				class="dialog-input"
@@ -277,6 +361,7 @@
 				required
 				maxlength={MAX_TITLE_LENGTH}
 				readonly={publishStatus === 'publishing'}
+				placeholder="Level name"
 				aria-label="Level name"
 			/>
 

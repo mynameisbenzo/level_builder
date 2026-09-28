@@ -131,14 +131,13 @@ def save_level(slug):
 
     payload = request.get_json(silent=True) or {}
 
+    # A level's name is set exactly once, at first publish (see
+    # publish_level), and locked from then on - so saving isn't a way to
+    # rename anything, not even a never-published draft. Rejected
+    # outright, before anything else in the request takes effect, rather
+    # than silently ignored, so a client still sending one finds out.
     if "title" in payload:
-        new_title = (payload.get("title") or "").strip()
-        if not new_title:
-            return jsonify({"error": "title cannot be empty"}), 400
-        length_error = _title_length_error(new_title)
-        if length_error:
-            return jsonify({"error": length_error}), 400
-        level.title = new_title
+        return jsonify({"error": "a level's name is set when it's first published"}), 400
 
     if "content" in payload:
         content = payload["content"]
@@ -194,11 +193,19 @@ def publish_level(slug):
     row actually gets created in level_versions rather than just
     overwriting Level's own mutable fields.
 
-    Optionally takes a "title" - this is where the editor now asks for
-    a level's name (see /edit/[slug]'s publish dialog). Applied in the
-    same transaction as the publish itself, and only once every other
-    check has passed, so a publish that fails (not beaten yet, invalid
-    content) never quietly renames the level as a side effect.
+    This is also the one place a level gets its name. The first publish
+    requires a "title" (there's no unnamed published level - and since
+    names are locked afterward, an unnamed one would stay that way), and
+    every later publish must NOT send one: a published level's name
+    can't be changed. Reported names being changed by a moderator,
+    developer, or the creator on request is a deliberate future
+    exception, meant to be its own explicit action rather than a side
+    door through here (see README, Phase 4 - Moderation).
+
+    The title is applied in the same transaction as the publish itself,
+    and only once every other check has passed, so a publish that fails
+    (not beaten yet, invalid content) never sets the name as a side
+    effect.
     """
     level, error = _get_owned_level(slug)
     if error is not None:
@@ -206,14 +213,20 @@ def publish_level(slug):
         return jsonify({"error": message}), status
 
     payload = request.get_json(silent=True) or {}
+    is_first_publish = level.latest_published_version_id is None
+
     new_title = None
     if "title" in payload:
+        if not is_first_publish:
+            return jsonify({"error": "a published level's name can't be changed"}), 409
         new_title = (payload.get("title") or "").strip()
         if not new_title:
             return jsonify({"error": "title cannot be empty"}), 400
         length_error = _title_length_error(new_title)
         if length_error:
             return jsonify({"error": length_error}), 400
+    elif is_first_publish:
+        return jsonify({"error": "a name is required to publish a level for the first time"}), 400
 
     if level.draft_beaten_at is None:
         return jsonify({"error": "level must be beaten before it can be published"}), 409

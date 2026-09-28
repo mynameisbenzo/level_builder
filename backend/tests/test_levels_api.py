@@ -1,7 +1,8 @@
-from app.api.levels import MAX_TITLE_LENGTH
+from app.api.levels import MAX_DRAFT_LEVELS, MAX_PUBLISHED_TOTAL, MAX_TITLE_LENGTH
 from app.extensions import db
 from app.main import create_app
 from app.models.level import Level, LevelVersion
+from app.utils.time import utc_now
 
 
 def _client():
@@ -820,3 +821,162 @@ def test_save_with_genuinely_different_content_still_clears_the_beat():
 
         assert response.status_code == 200
         assert response.get_json()["draft_beaten_at"] is None
+        
+
+
+# --- draft cap ---
+
+
+def test_create_level_is_refused_at_the_draft_cap():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        for i in range(MAX_DRAFT_LEVELS):
+            response = client.post("/api/levels", json={"title": f"Draft {i}"}, headers=_auth_headers(token))
+            assert response.status_code == 201
+
+        over_cap = client.post("/api/levels", json={"title": "One too many"}, headers=_auth_headers(token))
+        assert over_cap.status_code == 409
+
+
+def test_publishing_a_draft_frees_a_slot_for_a_new_one():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        levels = []
+        for i in range(MAX_DRAFT_LEVELS):
+            created = client.post(
+                "/api/levels", json={"title": f"Draft {i}"}, headers=_auth_headers(token)
+            ).get_json()
+            levels.append(created)
+
+        over_cap = client.post("/api/levels", json={"title": "Blocked"}, headers=_auth_headers(token))
+        assert over_cap.status_code == 409
+
+        client.post(f"/api/levels/{levels[0]['id']}/beat", headers=_auth_headers(token))
+        publish_response = _publish(client, token, levels[0]["id"], title="Now published")
+        assert publish_response.status_code == 200
+
+        now_allowed = client.post(
+            "/api/levels", json={"title": "Room again"}, headers=_auth_headers(token)
+        )
+        assert now_allowed.status_code == 201
+
+
+# --- publishing identical content is always rejected ---
+
+
+def test_republishing_identical_content_is_rejected_as_a_no_op():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Sky Castle")
+
+        # No edit in between - beat again, same content, try to publish.
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        response = client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
+
+        assert response.status_code == 409
+        db_level = Level.query.filter_by(slug=level["id"]).first()
+        assert LevelVersion.query.filter_by(level_id=db_level.id).count() == 1
+
+
+def test_republishing_genuinely_different_content_is_still_allowed():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Sky Castle")
+
+        client.patch(
+            f"/api/levels/{level['id']}",
+            json={"content": _valid_content(spawnPosition={"x": 208, "y": 208})},
+            headers=_auth_headers(token),
+        )
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        response = client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
+
+        assert response.status_code == 200
+        db_level = Level.query.filter_by(slug=level["id"]).first()
+        assert LevelVersion.query.filter_by(level_id=db_level.id).count() == 2
+
+
+# --- published-total cap (levels + all their versions) ---
+
+
+def _pad_version_count_to(app, level_slug, target_count):
+    """Directly inserts LevelVersion rows (bypassing the API) so a cap
+    boundary test doesn't need hundreds of slow, real HTTP publishes
+    just to set up its starting state."""
+    with app.app_context():
+        level = Level.query.filter_by(slug=level_slug).first()
+        existing = LevelVersion.query.filter_by(level_id=level.id).count()
+        for i in range(existing, target_count):
+            db.session.add(
+                LevelVersion(
+                    level_id=level.id,
+                    version_number=i + 1,
+                    content=_valid_content(spawnPosition={"x": 48 + (i % 400) * 32, "y": 48}),
+                    beaten_at=utc_now(),
+                )
+            )
+        db.session.commit()
+
+
+def test_publish_is_refused_when_it_would_exceed_the_published_total_cap():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+
+        padding_level = _create_level(client, token, title="Padding")
+        client.post(f"/api/levels/{padding_level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, padding_level["id"], title="Padding")
+        # 1 (padding level itself) + V versions + 1 (new level, first
+        # publish) + 1 (its new version) must come out to 101.
+        _pad_version_count_to(app, padding_level["id"], MAX_PUBLISHED_TOTAL - 2)
+
+        new_level = _create_level(client, token, title="One too many")
+        client.post(f"/api/levels/{new_level['id']}/beat", headers=_auth_headers(token))
+        response = _publish(client, token, new_level["id"], title="One too many")
+
+        assert response.status_code == 409
+        db_level = Level.query.filter_by(slug=new_level["id"]).first()
+        assert db_level.latest_published_version_id is None
+
+
+def test_publish_succeeds_at_exactly_the_published_total_cap_boundary():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+
+        padding_level = _create_level(client, token, title="Padding")
+        client.post(f"/api/levels/{padding_level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, padding_level["id"], title="Padding")
+        # Same arithmetic as above, one less - lands exactly at 100.
+        _pad_version_count_to(app, padding_level["id"], MAX_PUBLISHED_TOTAL - 3)
+
+        new_level = _create_level(client, token, title="Exactly at the limit")
+        client.post(f"/api/levels/{new_level['id']}/beat", headers=_auth_headers(token))
+        response = _publish(client, token, new_level["id"], title="Exactly at the limit")
+
+        assert response.status_code == 200
+
+
+def test_published_total_cap_does_not_count_another_users_levels():
+    app, client = _client()
+    with app.app_context():
+        token_a = _signup_and_login(app, client, "capuser_a", "capuser_a@example.com")
+        padding_level = _create_level(client, token_a, title="A's padding")
+        client.post(f"/api/levels/{padding_level['id']}/beat", headers=_auth_headers(token_a))
+        _publish(client, token_a, padding_level["id"], title="A's padding")
+        _pad_version_count_to(app, padding_level["id"], MAX_PUBLISHED_TOTAL)
+
+        token_b = _signup_and_login(app, client, "capuser_b", "capuser_b@example.com")
+        level_b = _create_level(client, token_b, title="B's first level")
+        client.post(f"/api/levels/{level_b['id']}/beat", headers=_auth_headers(token_b))
+        response = _publish(client, token_b, level_b["id"], title="B's first level")
+
+        assert response.status_code == 200

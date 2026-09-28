@@ -23,6 +23,30 @@ def _title_length_error(title: str) -> str | None:
     return None
 
 
+# Modeled on Mario Maker's course limit, split into two separate
+# budgets rather than one pool (see README, "Level limits per user"):
+#
+# - MAX_DRAFT_LEVELS caps never-published, in-progress work. Cheap to
+#   create and abandon, so it's kept tight - this is "how many
+#   works-in-progress can you juggle at once," not a lifetime count.
+#   Publishing a draft moves it out of this bucket entirely (see
+#   MAX_PUBLISHED_TOTAL below), freeing the slot for a new one.
+#
+# - MAX_PUBLISHED_TOTAL caps what's actually been shipped: every level
+#   that's ever been published, PLUS every LevelVersion row across
+#   those levels, counted additively (a level published once
+#   contributes 1 for itself + 1 for its one version = 2; republished
+#   three times total, 1 + 3 = 4). Counting versions is what actually
+#   makes this a cap - editing a published level and republishing it
+#   creates a new version rather than overwriting the old one (by
+#   design - see the versioning/difficulty-label work in the README),
+#   so without counting versions too, "publish, tweak, republish"
+#   would be an unlimited supply of effectively new levels through one
+#   never-refilled slot.
+MAX_DRAFT_LEVELS = 5
+MAX_PUBLISHED_TOTAL = 100
+
+
 def _get_owned_level(slug: str) -> tuple[Level | None, tuple[str, int] | None]:
     """
     Shared by every owner-only level action below - looks the level up
@@ -67,6 +91,22 @@ def create_level():
     user = User.query.filter_by(public_id=get_jwt_identity()).first()
     if user is None or user.is_deleted:
         return jsonify({"error": "account not found"}), 404
+
+    draft_count = (
+        Level.query.filter_by(owner_id=user.id).filter(Level.latest_published_version_id.is_(None)).count()
+    )
+    if draft_count >= MAX_DRAFT_LEVELS:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        f"you already have {MAX_DRAFT_LEVELS} unpublished drafts - "
+                        "publish one or delete one before starting another"
+                    )
+                }
+            ),
+            409,
+        )
 
     level = Level(owner_id=user.id, title=title, draft_content=default_level_content())
     db.session.add(level)
@@ -248,6 +288,49 @@ def publish_level(slug):
     is_valid, content_error = validate_level_content(level.draft_content)
     if not is_valid:
         return jsonify({"error": f"draft content is no longer valid: {content_error}"}), 409
+
+    # A publish whose content is identical to what's already live plays
+    # out no differently from the version already published - rejected
+    # unconditionally, not just near the cap, since a redundant
+    # identical version is never worth keeping as permanent history.
+    # Only meaningful on a republish; a first publish has nothing yet
+    # to compare against.
+    if not is_first_publish and level.latest_published_version is not None:
+        if level.draft_content == level.latest_published_version.content:
+            return (
+                jsonify({"error": "this content is identical to what's already published - nothing to publish"}),
+                409,
+            )
+
+    # The cap: this level's own contribution (1, whether it's newly
+    # published by this call or already was) plus every LevelVersion
+    # row the user owns across all their levels, plus the one this
+    # publish is about to create.
+    already_published_levels = (
+        Level.query.filter_by(owner_id=level.owner_id)
+        .filter(Level.latest_published_version_id.isnot(None))
+        .count()
+    )
+    levels_after_this_publish = already_published_levels if not is_first_publish else already_published_levels + 1
+    existing_version_count = (
+        db.session.query(LevelVersion)
+        .join(Level, LevelVersion.level_id == Level.id)
+        .filter(Level.owner_id == level.owner_id)
+        .count()
+    )
+    projected_total = levels_after_this_publish + existing_version_count + 1
+    if projected_total > MAX_PUBLISHED_TOTAL:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        f"you've reached the {MAX_PUBLISHED_TOTAL}-level publish limit "
+                        "(published levels plus all their versions)"
+                    )
+                }
+            ),
+            409,
+        )
 
     latest_version = (
         LevelVersion.query.filter_by(level_id=level.id)

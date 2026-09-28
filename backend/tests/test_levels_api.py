@@ -1,3 +1,4 @@
+from app.api.levels import MAX_TITLE_LENGTH
 from app.extensions import db
 from app.main import create_app
 from app.models.level import Level, LevelVersion
@@ -549,3 +550,117 @@ def test_list_levels_by_user_omits_draft_content():
 
         response = client.get("/api/levels/by-user/leanpublic")
         assert "draft_content" not in response.get_json()[0]
+        
+
+
+# --- naming a level at publish time ---
+
+
+def test_publish_with_a_title_renames_the_level():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Untitled Level")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+
+        response = client.post(
+            f"/api/levels/{level['id']}/publish",
+            json={"title": "  Sky Castle  "},
+            headers=_auth_headers(token),
+        )
+
+        assert response.status_code == 200
+        body = response.get_json()
+        assert body["title"] == "Sky Castle"  # trimmed
+        assert body["visibility_state"] == "published"
+
+        # And what the public sees carries the new name too.
+        play = client.get(f"/api/levels/{level['id']}/play")
+        assert play.get_json()["title"] == "Sky Castle"
+
+
+def test_publish_with_an_empty_title_is_rejected_and_publishes_nothing():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+
+        response = client.post(
+            f"/api/levels/{level['id']}/publish", json={"title": "   "}, headers=_auth_headers(token)
+        )
+        assert response.status_code == 400
+
+        db_level = Level.query.filter_by(slug=level["id"]).first()
+        assert db_level.visibility_state.value == "draft"
+        assert db_level.latest_published_version_id is None
+
+
+def test_publish_title_length_limit_is_enforced_at_exactly_the_boundary():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+
+        too_long = client.post(
+            f"/api/levels/{level['id']}/publish",
+            json={"title": "x" * (MAX_TITLE_LENGTH + 1)},
+            headers=_auth_headers(token),
+        )
+        assert too_long.status_code == 400
+
+        at_the_limit = client.post(
+            f"/api/levels/{level['id']}/publish",
+            json={"title": "x" * MAX_TITLE_LENGTH},
+            headers=_auth_headers(token),
+        )
+        assert at_the_limit.status_code == 200
+
+
+def test_a_failed_publish_does_not_rename_the_level():
+    """The title is applied in the same transaction as the publish and
+    only after every other check passes - a publish that's rejected
+    (here: never beaten) must never quietly rename the level as a side
+    effect."""
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Original name")
+
+        response = client.post(
+            f"/api/levels/{level['id']}/publish",
+            json={"title": "Sneaky rename"},
+            headers=_auth_headers(token),
+        )
+        assert response.status_code == 409
+
+        db_level = Level.query.filter_by(slug=level["id"]).first()
+        assert db_level.title == "Original name"
+
+
+def test_create_level_with_a_too_long_title_is_rejected():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        response = client.post(
+            "/api/levels", json={"title": "x" * (MAX_TITLE_LENGTH + 1)}, headers=_auth_headers(token)
+        )
+        assert response.status_code == 400
+
+
+def test_save_with_a_too_long_title_is_rejected_and_leaves_the_title_alone():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Short and fine")
+
+        response = client.patch(
+            f"/api/levels/{level['id']}",
+            json={"title": "x" * (MAX_TITLE_LENGTH + 1)},
+            headers=_auth_headers(token),
+        )
+        assert response.status_code == 400
+
+        db_level = Level.query.filter_by(slug=level["id"]).first()
+        assert db_level.title == "Short and fine"

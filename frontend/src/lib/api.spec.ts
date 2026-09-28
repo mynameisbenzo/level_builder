@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { API_BASE_URL, checkBackendHealth, verifyEmail } from './api';
+import { API_BASE_URL, checkBackendHealth, publishLevel, verifyEmail } from './api';
 
 describe('checkBackendHealth', () => {
 	it('returns true when the backend responds with status ok', async () => {
@@ -68,5 +68,41 @@ describe('verifyEmail', () => {
 
 		expect(result.success).toBe(false);
 		expect(result.error).toBe('Could not reach the server. Please try again.');
+	});
+});
+
+
+describe('publishLevel', () => {
+	it('sends the chosen title in the request body, alongside the auth header', async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: true,
+			json: async () => ({ id: 'AAAA-BBBB-CCCC-DDDD', title: 'Sky Castle', visibility_state: 'published' })
+		}) as unknown as typeof fetch;
+
+		const result = await publishLevel('AAAA-BBBB-CCCC-DDDD', 'an-access-token', 'Sky Castle');
+
+		expect(result.success).toBe(true);
+		expect(result.level?.title).toBe('Sky Castle');
+		expect(fetch).toHaveBeenCalledWith(
+			`${API_BASE_URL}/api/levels/AAAA-BBBB-CCCC-DDDD/publish`,
+			expect.objectContaining({
+				method: 'POST',
+				body: JSON.stringify({ title: 'Sky Castle' }),
+				headers: expect.objectContaining({ Authorization: 'Bearer an-access-token' })
+			})
+		);
+	});
+
+	it('surfaces the backend error message when publishing is rejected', async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			ok: false,
+			status: 409,
+			json: async () => ({ error: 'level must be beaten before it can be published' })
+		}) as unknown as typeof fetch;
+
+		const result = await publishLevel('AAAA-BBBB-CCCC-DDDD', 'an-access-token', 'Sky Castle');
+
+		expect(result.success).toBe(false);
+		expect(result.error).toBe('level must be beaten before it can be published');
 	});
 });

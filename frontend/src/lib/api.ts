@@ -573,12 +573,23 @@ export async function beatLevel(slug: string, accessToken: string): Promise<Leve
 
 /** Calls POST /api/levels/<slug>/publish - requires the level to have
  * been beaten since its last save; turns the draft into a real,
- * permanent LevelVersion. */
-export async function publishLevel(slug: string, accessToken: string): Promise<LevelResult> {
+ * permanent LevelVersion. Takes the level's name too - this is where
+ * the editor asks for one (the publish dialog), applied by the backend
+ * in the same transaction as the publish itself so a rejected publish
+ * never renames anything. */
+export async function publishLevel(
+	slug: string,
+	accessToken: string,
+	title?: string
+): Promise<LevelResult> {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/publish`, {
 			method: 'POST',
-			headers: { Authorization: `Bearer ${accessToken}` }
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${accessToken}`
+			},
+			body: JSON.stringify(title === undefined ? {} : { title })
 		});
 
 		const data = await response.json().catch(() => ({}));

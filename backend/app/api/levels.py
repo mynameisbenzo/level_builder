@@ -10,6 +10,18 @@ from app.utils.time import utc_now
 
 levels_bp = Blueprint("levels", __name__, url_prefix="/api/levels")
 
+# Mirrors the Level.title column (db.String(120)) - SQLite (used in
+# tests) doesn't enforce string lengths, but Postgres does, and would
+# turn an over-long title into an unhandled 500 rather than a clean
+# 400 unless it's checked here first.
+MAX_TITLE_LENGTH = 120
+
+
+def _title_length_error(title: str) -> str | None:
+    if len(title) > MAX_TITLE_LENGTH:
+        return f"title cannot be longer than {MAX_TITLE_LENGTH} characters"
+    return None
+
 
 def _get_owned_level(slug: str) -> tuple[Level | None, tuple[str, int] | None]:
     """
@@ -48,6 +60,9 @@ def create_level():
 
     if not title:
         return jsonify({"error": "title is required"}), 400
+    length_error = _title_length_error(title)
+    if length_error:
+        return jsonify({"error": length_error}), 400
 
     user = User.query.filter_by(public_id=get_jwt_identity()).first()
     if user is None or user.is_deleted:
@@ -120,6 +135,9 @@ def save_level(slug):
         new_title = (payload.get("title") or "").strip()
         if not new_title:
             return jsonify({"error": "title cannot be empty"}), 400
+        length_error = _title_length_error(new_title)
+        if length_error:
+            return jsonify({"error": length_error}), 400
         level.title = new_title
 
     if "content" in payload:
@@ -175,11 +193,27 @@ def publish_level(slug):
     immutable LevelVersion - the one point in this whole flow where a
     row actually gets created in level_versions rather than just
     overwriting Level's own mutable fields.
+
+    Optionally takes a "title" - this is where the editor now asks for
+    a level's name (see /edit/[slug]'s publish dialog). Applied in the
+    same transaction as the publish itself, and only once every other
+    check has passed, so a publish that fails (not beaten yet, invalid
+    content) never quietly renames the level as a side effect.
     """
     level, error = _get_owned_level(slug)
     if error is not None:
         message, status = error
         return jsonify({"error": message}), status
+
+    payload = request.get_json(silent=True) or {}
+    new_title = None
+    if "title" in payload:
+        new_title = (payload.get("title") or "").strip()
+        if not new_title:
+            return jsonify({"error": "title cannot be empty"}), 400
+        length_error = _title_length_error(new_title)
+        if length_error:
+            return jsonify({"error": length_error}), 400
 
     if level.draft_beaten_at is None:
         return jsonify({"error": "level must be beaten before it can be published"}), 409
@@ -213,6 +247,8 @@ def publish_level(slug):
 
     level.latest_published_version_id = version.id
     level.visibility_state = LevelVisibilityState.PUBLISHED
+    if new_title is not None:
+        level.title = new_title
 
     db.session.commit()
 

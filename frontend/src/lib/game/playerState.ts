@@ -11,7 +11,17 @@ export interface PlayerPosition {
 // (600px) to stay in the actual bottom row; leaving the old y value in
 // place would have spawned every new level in what's now the middle
 // row, floating with nothing underneath by default.
-export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 1650 };
+//
+// Grid-aligned per this editor's actual convention: snapToGrid() in
+// gridSnap.ts snaps to a cell's CENTER, not its corner - a valid value
+// is GRID_SIZE/2 plus a multiple of GRID_SIZE (16, 48, 80, ...), never
+// a bare multiple of GRID_SIZE itself. An earlier pass here mistakenly
+// "corrected" this to (384, 1650->1664) assuming corner-alignment
+// (bare multiples of 32) - that was actually a regression: x:400 was
+// already correctly center-aligned the whole time (400 = 12*32+16).
+// Only y needed fixing, and the correctly-aligned nearby value is 1648
+// (51*32+16), not 1664.
+export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 1648 };
 export const EDITOR_PLAYER_POSITION_KEY = 'editorPlayerPosition';
 
 /**

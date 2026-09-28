@@ -4,6 +4,7 @@
 	import { page } from '$app/state';
 	import { loginWithToken } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { returnToOpenerIfPresent } from '$lib/popupWindow';
 	import Navbar from '$lib/Navbar.svelte';
 
 	// Same fix as /verify-email, same reason - starts at 'ready', not
@@ -33,6 +34,7 @@
 		if (result.success && result.accessToken && result.refreshToken && result.user) {
 			auth.login(result.accessToken, result.refreshToken, result.user);
 			status = 'success';
+			if (returnToOpenerIfPresent()) return;
 			// Brief pause so the success message is actually visible,
 			// rather than an instant, jarring redirect.
 			setTimeout(() => goto('/'), 1200);

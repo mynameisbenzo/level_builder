@@ -27,55 +27,52 @@ level.
 > **Windows note:** this project uses `psycopg[binary]` (not `psycopg2-binary`) specifically to avoid native-compile issues on Windows. Keep the pinned version in `requirements.txt`.
 
 ## Project structure
-
-```
 level-builder/
-├── backend/                    # Flask API
-│   ├── app/
-│   │   ├── main.py              # create_app() factory, landing page route
-│   │   ├── config.py            # Testing/Development/Production config
-│   │   ├── extensions.py        # shared Flask-SQLAlchemy instance
-│   │   ├── templates/           # Jinja - portfolio landing page
-│   │   └── models/               # SQLAlchemy models
-│   ├── tests/
-│   ├── requirements.txt
-│   └── requirements-dev.txt
-├── frontend/                   # SvelteKit app
-│   ├── static/assets/
-│   │   ├── kenney/               # Kenney platformer pack (sprites, tiles, sfx)
-│   │   └── icons/                 # Eraser + select-tool cursor icons
-│   └── src/
-│       ├── lib/
-│       │   ├── api.ts                    # backend API client
-│       │   └── game/                     # Phaser scenes + supporting logic:
-│       │       ├── PlatformerScene.ts      # Play mode
-│       │       ├── LevelEditorScene.ts     # Edit mode (default scene)
-│       │       ├── movement.ts             # pure input/physics/pose logic (tested)
-│       │       ├── gridSnap.ts             # grid snapping + drag fill (tested)
-│       │       ├── groundTiling.ts         # auto-tiling + platform run logic (tested)
-│       │       ├── placedObjects.ts        # placed-tile data, selection, group merge (tested)
-│       │       ├── characterSwapObjects.ts # floating swap-object logic (tested)
-│       │       ├── winConditions.ts        # door win-condition logic (tested)
-│       │       ├── keys.ts                 # key entity logic (tested)
-│       │       ├── camera.ts               # world/viewport sizing, quadrant + edge-scroll math (tested)
-│       │       ├── geometry.ts             # shared distance-check utility (tested)
-│       │       ├── sounds.ts               # SFX loading, mute/volume settings (tested)
-│       │       ├── tools.ts                # editor tool constants
-│       │       ├── atlases.ts              # raw texture/atlas/icon loading
-│       │       ├── playerColor.ts          # player color selection + frame mappings (tested)
-│       │       ├── playerPose.ts           # pose config, hitbox bounds, walk animation
-│       │       ├── playerState.ts          # position carryover (tested)
-│       │       ├── mode.ts                 # Play/Edit mode logic (tested)
-│       │       ├── touchInput.ts           # mobile touch input state (tested)
-│       │       ├── currentMode.ts          # Svelte store for active mode
-│       │       ├── TouchControls.svelte    # on-screen mobile buttons
-│       │       └── LandscapeGuard.svelte   # portrait-mode block screen
-│       └── routes/
-│           └── play/             # the game itself
-├── .github/workflows/          # CI: backend-ci.yml, frontend-ci.yml
-├── render.yaml                 # Render Blueprint (backend + frontend)
-└── .python-version              # pins Python 3.10.13 via pyenv
-```
+├── backend/ # Flask API
+│ ├── app/
+│ │ ├── main.py # create_app() factory, landing page route
+│ │ ├── config.py # Testing/Development/Production config
+│ │ ├── extensions.py # shared Flask-SQLAlchemy instance
+│ │ ├── templates/ # Jinja - portfolio landing page
+│ │ └── models/ # SQLAlchemy models
+│ ├── tests/
+│ ├── requirements.txt
+│ └── requirements-dev.txt
+├── frontend/ # SvelteKit app
+│ ├── static/assets/
+│ │ ├── kenney/ # Kenney platformer pack (sprites, tiles, sfx)
+│ │ └── icons/ # Eraser + select-tool cursor icons
+│ └── src/
+│ ├── lib/
+│ │ ├── api.ts # backend API client
+│ │ └── game/ # Phaser scenes + supporting logic:
+│ │ ├── PlatformerScene.ts # Play mode
+│ │ ├── LevelEditorScene.ts # Edit mode (default scene)
+│ │ ├── movement.ts # pure input/physics/pose logic (tested)
+│ │ ├── gridSnap.ts # grid snapping + drag fill (tested)
+│ │ ├── groundTiling.ts # auto-tiling + platform run logic (tested)
+│ │ ├── placedObjects.ts # placed-tile data, selection, group merge (tested)
+│ │ ├── characterSwapObjects.ts # floating swap-object logic (tested)
+│ │ ├── winConditions.ts # door win-condition logic (tested)
+│ │ ├── keys.ts # key entity logic (tested)
+│ │ ├── camera.ts # world/viewport sizing, quadrant + edge-scroll math (tested)
+│ │ ├── geometry.ts # shared distance-check utility (tested)
+│ │ ├── sounds.ts # SFX loading, mute/volume settings (tested)
+│ │ ├── tools.ts # editor tool constants
+│ │ ├── atlases.ts # raw texture/atlas/icon loading
+│ │ ├── playerColor.ts # player color selection + frame mappings (tested)
+│ │ ├── playerPose.ts # pose config, hitbox bounds, walk animation
+│ │ ├── playerState.ts # position carryover (tested)
+│ │ ├── mode.ts # Play/Edit mode logic (tested)
+│ │ ├── touchInput.ts # mobile touch input state (tested)
+│ │ ├── currentMode.ts # Svelte store for active mode
+│ │ ├── TouchControls.svelte # on-screen mobile buttons
+│ │ └── LandscapeGuard.svelte # portrait-mode block screen
+│ └── routes/
+│ └── play/ # the game itself
+├── .github/workflows/ # CI: backend-ci.yml, frontend-ci.yml
+├── render.yaml # Render Blueprint (backend + frontend)
+└── .python-version # pins Python 3.10.13 via pyenv
 
 ## Backend setup
 
@@ -697,10 +694,19 @@ and descendant views.
       user actions), `LevelModerationAction`, `LevelReviewFlag` (the
       "review children" queue for direct remixes of a
       deleted/suspended level), `UserModerationAction`
-- [ ] **Portals (API endpoints/CRUD) for `User`, `Level`, and
-      `LevelVersion` — next up.** Actual create/read/update endpoints
-      for these three models, plus tests exercising them, before
-      continuing on to the remaining models above.
+- [x] **Portals (API endpoints) for `Level`/`LevelVersion`.** Built:
+      `POST /api/levels` (create), `GET /api/levels` (caller's own
+      list, drafts included), `GET /api/levels/<slug>` (owner-only,
+      full content), `PATCH /api/levels/<slug>` (save the draft),
+      `POST /api/levels/<slug>/beat`, `POST /api/levels/<slug>/publish`
+      (creates the `LevelVersion`), `GET /api/levels/<slug>/play`
+      (public, no auth - serves the last published version),
+      `GET /api/levels/by-user/<username>` (public - a creator's
+      published levels only). No delete/unpublish endpoint yet. `User`
+      already had its own portals from the Accounts work above
+      (`PATCH`/`DELETE` on `/api/users/<id>`, plus the public
+      `by-username` lookup) - this item was specifically the
+      `Level`/`LevelVersion` side, which was the actual gap.
 - [ ] Alembic migration via `flask db migrate` (schema has so far only
       been exercised via `db.create_all()` in tests, not a real
       migration)
@@ -865,6 +871,67 @@ Still genuinely unbuilt and not yet designed in detail:
 - [x] ~~`tool_assisted` classification~~ — superseded by the per-version
       difficulty label system in Phase 3 (auto-computed "TAS!?!?" tier
       for near-zero clear rates)
+
+## Level limits per user
+
+Modeled on Mario Maker's 100-course limit, split into two separate
+budgets rather than one shared pool:
+
+- **Drafts (never-published levels): capped at 5**
+  (`MAX_DRAFT_LEVELS` in `app/api/levels.py`). Enforced on
+  `POST /api/levels` - refused once the caller already owns 5 levels
+  with no published version. Cheap to create and abandon, so this is
+  kept tight: "how many works-in-progress can you juggle at once," not
+  a lifetime count. Publishing a draft moves it out of this bucket
+  entirely, freeing the slot for a new one.
+
+- **Published levels + all their versions: capped at 100**
+  (`MAX_PUBLISHED_TOTAL`). Enforced on `POST /api/levels/<slug>/publish`
+  - a level and every one of its `LevelVersion` rows each count as 1,
+  additively (a level published once contributes 1 + 1 = 2; republished
+  three times total, 1 + 3 = 4). Counting versions, not just levels, is
+  what actually makes this a cap: editing a published level and
+  republishing it creates a new `LevelVersion` rather than overwriting
+  the old one (by design - see the per-version difficulty-label system
+  above), so without counting those too, "publish, tweak, republish"
+  would be an unlimited supply of effectively new levels through one
+  never-refilled slot.
+
+- **A publish whose content is identical to what's already live is
+  rejected unconditionally**, cap or not - a redundant identical
+  version is never worth keeping as permanent history. This matters
+  more than it might seem: publishing now always saves the draft first
+  (see the Publish flow above), and an unchanged save is itself a
+  no-op that leaves an existing beat confirmation intact - so an
+  unedited, already-published level's Publish button stays a live,
+  one-click action with no dialog. Without this check, that single
+  click could be pressed repeatedly (by habit, or by accident) to burn
+  through the 100-item budget for zero actual difference.
+
+Still open, deliberately not decided: whether a soft-deleted or
+moderated level (and its versions) should keep counting toward either
+cap once moderation exists - nothing like that is built yet, so
+there's nothing to decide about it today.
+
+## Discover / browsing levels
+
+Not started - `/play/[slug]` (see the routing decision above) goes
+straight to one specific, already-known level. Nothing yet lets someone
+find a level they don't already have a link to:
+
+- [ ] **A discover/search area** - browsing and searching published
+      levels by title, and searching for creators by username. No
+      design work done yet on ranking/sorting (newest? most played?
+      highest clear rate?) or what filters make sense.
+- [x] **"Levels by this creator" - basic version built, pagination
+      still missing.** `GET /api/levels/by-user/<username>` (public,
+      no auth, published levels only) and the `/u/[username]` page
+      that uses it both exist. What's NOT built is the excerpt/
+      pagination shape originally planned here - 5 levels with a "Load
+      more" that fetches 5 more, and a separate "See all" going to a
+      dedicated full list page. Today's version just returns every
+      published level unpaginated, fine at today's scale but not
+      designed for a creator with hundreds of levels.
 
 ## Future Considerations (way down the line)
 

@@ -1,10 +1,52 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { deleteAccount, updateProfile } from '$lib/api';
+	import { deleteAccount, listMyLevels, updateProfile, type LevelListItem } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { redirectToTwitchLink } from '$lib/twitch';
+	import { startNewLevel } from '$lib/startNewLevel';
 	import Navbar from '$lib/Navbar.svelte';
+
+	let newLevelStatus: 'idle' | 'creating' | 'error' = $state('idle');
+	let newLevelError = $state('');
+
+	async function handleNewLevel() {
+		newLevelStatus = 'creating';
+		const result = await startNewLevel();
+		if (!result.success) {
+			newLevelStatus = 'error';
+			newLevelError = result.error ?? 'Could not create a new level. Please try again.';
+		}
+		// On success, startNewLevel already navigated away.
+	}
+
+	let levelsStatus: 'loading' | 'ready' | 'error' = $state('loading');
+	let levelsError = $state('');
+	let levels: LevelListItem[] = $state([]);
+
+	async function loadMyLevels() {
+		const token = auth.accessToken;
+		if (!token) return;
+
+		let result = await listMyLevels(token);
+		if (result.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			const refreshedToken = auth.accessToken;
+			if (refreshed && refreshedToken) {
+				result = await listMyLevels(refreshedToken);
+			}
+		}
+
+		if (result.success && result.levels) {
+			levels = result.levels;
+			levelsStatus = 'ready';
+		} else if (result.sessionExpired) {
+			goto('/login');
+		} else {
+			levelsStatus = 'error';
+			levelsError = result.error ?? 'Could not load your levels. Please try again.';
+		}
+	}
 
 	let username = $state(auth.user?.username ?? '');
 	let hideEmail = $state(auth.user?.hide_email ?? false);
@@ -20,7 +62,9 @@
 	onMount(() => {
 		if (!auth.isLoggedIn) {
 			goto('/login');
+			return;
 		}
+		void loadMyLevels();
 	});
 
 	async function handleSave(event: SubmitEvent) {
@@ -100,7 +144,46 @@
 {#if auth.user}
 	<main>
 		<div class="card">
+			<h2 class="new-level-heading">Levels</h2>
+			<p class="note">Start building a new level.</p>
+			{#if newLevelStatus === 'error'}
+				<p class="error">{newLevelError}</p>
+			{/if}
+			<button
+				class="new-level-button"
+				onclick={handleNewLevel}
+				disabled={newLevelStatus === 'creating'}
+			>
+				{newLevelStatus === 'creating' ? 'Creating…' : 'New Level'}
+			</button>
+
+			{#if levelsStatus === 'loading'}
+				<p class="note levels-status">Loading your levels…</p>
+			{:else if levelsStatus === 'error'}
+				<p class="error levels-status">{levelsError}</p>
+			{:else if levels.length === 0}
+				<p class="note levels-status">You haven't created any levels yet.</p>
+			{:else}
+				<ul class="levels-list">
+					{#each levels as level (level.id)}
+						<li>
+							<a href="/edit/{level.id}">{level.title}</a>
+							<span class="visibility-badge" class:published={level.visibility_state === 'published'}>
+								{level.visibility_state}
+							</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</div>
+
+		<div class="card">
 			<h1>Your account</h1>
+			{#if auth.user}
+				<p class="note public-profile-link">
+					<a href="/u/{auth.user.username}">View your public profile</a>
+				</p>
+			{/if}
 
 			<form onsubmit={handleSave}>
 				<label>
@@ -232,6 +315,88 @@
 
 	/* Overrides the red danger-zone color above - this heading isn't a
 	   warning, just this card's own title. */
+	.new-level-heading {
+		color: #c7cbef;
+	}
+
+	.new-level-button {
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 1rem;
+		color: #142013;
+		background: #4ecb71;
+		border: 3px solid #142013;
+		border-radius: 10px;
+		padding: 12px;
+		box-shadow: 0 4px 0 #142013;
+		cursor: pointer;
+		transition:
+			transform 0.15s ease,
+			box-shadow 0.15s ease;
+	}
+
+	.new-level-button:hover:not(:disabled) {
+		transform: translateY(2px);
+		box-shadow: 0 2px 0 #142013;
+	}
+
+	.new-level-button:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
+	.levels-status {
+		margin: 16px 0 0;
+	}
+
+	.levels-list {
+		list-style: none;
+		margin: 16px 0 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+	}
+
+	.levels-list li {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 10px 12px;
+		background: #1a1b3a;
+		border: 2px solid #3a3d76;
+		border-radius: 6px;
+	}
+
+	.levels-list a {
+		color: #f4f6ff;
+		text-decoration: none;
+		font-weight: 700;
+	}
+
+	.levels-list a:hover {
+		color: #4ecb71;
+	}
+
+	.visibility-badge {
+		flex-shrink: 0;
+		font-size: 0.75rem;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		color: #c7cbef;
+		border: 1px solid #3a3d76;
+		border-radius: 999px;
+		padding: 3px 10px;
+	}
+
+	.visibility-badge.published {
+		color: #4ecb71;
+		border-color: #4ecb71;
+	}
+
+	/* Overrides the red danger-zone color above - this heading isn't a
+	   warning, just this card's own title. */
 	.twitch-heading {
 		color: #c7cbef;
 	}
@@ -333,6 +498,10 @@
 		line-height: 1.6;
 		color: #b6baec;
 		margin: 0 0 16px;
+	}
+
+	.public-profile-link a {
+		color: #4ecb71;
 	}
 
 	button {

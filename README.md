@@ -694,10 +694,19 @@ and descendant views.
       user actions), `LevelModerationAction`, `LevelReviewFlag` (the
       "review children" queue for direct remixes of a
       deleted/suspended level), `UserModerationAction`
-- [ ] **Portals (API endpoints/CRUD) for `User`, `Level`, and
-      `LevelVersion` — next up.** Actual create/read/update endpoints
-      for these three models, plus tests exercising them, before
-      continuing on to the remaining models above.
+- [x] **Portals (API endpoints) for `Level`/`LevelVersion`.** Built:
+      `POST /api/levels` (create), `GET /api/levels` (caller's own
+      list, drafts included), `GET /api/levels/<slug>` (owner-only,
+      full content), `PATCH /api/levels/<slug>` (save the draft),
+      `POST /api/levels/<slug>/beat`, `POST /api/levels/<slug>/publish`
+      (creates the `LevelVersion`), `GET /api/levels/<slug>/play`
+      (public, no auth - serves the last published version),
+      `GET /api/levels/by-user/<username>` (public - a creator's
+      published levels only). No delete/unpublish endpoint yet. `User`
+      already had its own portals from the Accounts work above
+      (`PATCH`/`DELETE` on `/api/users/<id>`, plus the public
+      `by-username` lookup) - this item was specifically the
+      `Level`/`LevelVersion` side, which was the actual gap.
 - [ ] Alembic migration via `flask db migrate` (schema has so far only
       been exercised via `db.create_all()` in tests, not a real
       migration)
@@ -914,14 +923,15 @@ find a level they don't already have a link to:
       levels by title, and searching for creators by username. No
       design work done yet on ranking/sorting (newest? most played?
       highest clear rate?) or what filters make sense.
-- [ ] **A "levels by this creator" excerpt on a user's profile** -
-      shows 5 levels, with a "Load more" control that fetches 5 more
-      the same way, and a separate "See all" that goes to a dedicated,
-      full list page for that creator (not just an expanded version of
-      the same excerpt). Needs a paginated "list levels by owner"
-      backend endpoint that doesn't exist yet - the closest thing today
-      is `Level.owner`, usable for a query, but nothing exposes it over
-      the API.
+- [x] **"Levels by this creator" - basic version built, pagination
+      still missing.** `GET /api/levels/by-user/<username>` (public,
+      no auth, published levels only) and the `/u/[username]` page
+      that uses it both exist. What's NOT built is the excerpt/
+      pagination shape originally planned here - 5 levels with a "Load
+      more" that fetches 5 more, and a separate "See all" going to a
+      dedicated full list page. Today's version just returns every
+      published level unpaginated, fine at today's scale but not
+      designed for a creator with hundreds of levels.
 
 ## Future Considerations (way down the line)
 

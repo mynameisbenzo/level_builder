@@ -15,3 +15,23 @@ def level_to_dict(level) -> dict:
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
         "created_at": level.created_at.isoformat() if level.created_at else None,
     }
+
+
+def level_to_summary_dict(level) -> dict:
+    """
+    A lighter-weight serialization for list views - deliberately omits
+    draft_content entirely, since a list of many levels (an owner's own
+    full list, or a creator's public list of published levels) doesn't
+    need each one's full content blob just to show a title and status.
+    Safe to use for both an owner's own private list (drafts/testing
+    included) and a public "levels by this creator" list (published
+    only) - it carries nothing that needs hiding from a stranger in
+    either case, since it's just id/title/visibility_state/timestamps.
+    """
+    return {
+        "id": level.slug,
+        "title": level.title,
+        "visibility_state": level.visibility_state.value,
+        "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
+        "created_at": level.created_at.isoformat() if level.created_at else None,
+    }

@@ -1,3 +1,5 @@
+import type { LevelContent } from './game/levelContent';
+
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:5000';
 
 export async function checkBackendHealth(): Promise<boolean> {
@@ -186,13 +188,18 @@ export async function logoutServer(refreshToken: string): Promise<void> {
 
 export interface VerifyEmailResult {
 	success: boolean;
+	accessToken?: string;
+	refreshToken?: string;
+	user?: CreatedUser;
 	error?: string;
 }
 
 /**
  * Calls POST /api/users/verify-email - consumes a verification token
- * (from the link a real verification email now actually contains) and
- * marks the owning account's email as verified.
+ * (from the link a real verification email now actually contains),
+ * marks the owning account's email as verified, and - since clicking a
+ * genuine verification link proves the same thing a login-link click
+ * does - logs them in too, same shape as login()/exchangeTwitchCode().
  */
 export async function verifyEmail(token: string): Promise<VerifyEmailResult> {
 	try {
@@ -202,12 +209,18 @@ export async function verifyEmail(token: string): Promise<VerifyEmailResult> {
 			body: JSON.stringify({ token })
 		});
 
+		const data = await response.json().catch(() => ({}));
+
 		if (!response.ok) {
-			const data = await response.json().catch(() => ({}));
 			return { success: false, error: data.error ?? 'Verification failed. Please try again.' };
 		}
 
-		return { success: true };
+		return {
+			success: true,
+			accessToken: data.access_token,
+			refreshToken: data.refresh_token,
+			user: data.user
+		};
 	} catch {
 		return { success: false, error: 'Could not reach the server. Please try again.' };
 	}
@@ -418,6 +431,291 @@ export async function linkTwitchAccount(
 				sessionExpired: response.status === 401,
 				error: data.error ?? 'Could not link your Twitch account. Please try again.'
 			};
+		}
+
+		return { success: true, user: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface LevelSummary {
+	id: string;
+	title: string;
+	visibility_state: 'draft' | 'testing' | 'published';
+	draft_content: LevelContent | null;
+	draft_beaten_at: string | null;
+	created_at: string | null;
+}
+
+export interface LevelResult {
+	success: boolean;
+	level?: LevelSummary;
+	error?: string;
+	sessionExpired?: boolean;
+}
+
+/** Calls POST /api/levels - creates a new level, owned by the caller. */
+export async function createLevel(title: string, accessToken: string): Promise<LevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${accessToken}`
+			},
+			body: JSON.stringify({ title })
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not create the level. Please try again.'
+			};
+		}
+
+		return { success: true, level: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+/** Calls GET /api/levels/<slug> - how /edit/[slug] resumes an
+ * existing level, draft content included. Owner-only. */
+export async function getLevel(slug: string, accessToken: string): Promise<LevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}`, {
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not load the level. Please try again.'
+			};
+		}
+
+		return { success: true, level: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+/** Calls PATCH /api/levels/<slug> - saves the editor's current
+ * in-progress content. title is optional; content is always sent. */
+export async function saveLevel(
+	slug: string,
+	content: LevelContent,
+	accessToken: string,
+	title?: string
+): Promise<LevelResult> {
+	try {
+		const body: Record<string, unknown> = { content };
+		if (title !== undefined) {
+			body.title = title;
+		}
+
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}`, {
+			method: 'PATCH',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${accessToken}`
+			},
+			body: JSON.stringify(body)
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not save the level. Please try again.'
+			};
+		}
+
+		return { success: true, level: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+/** Calls POST /api/levels/<slug>/beat - records that a real
+ * test-playthrough of the current draft just reached the win condition. */
+export async function beatLevel(slug: string, accessToken: string): Promise<LevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/beat`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not record the win. Please try again.'
+			};
+		}
+
+		return { success: true, level: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+/** Calls POST /api/levels/<slug>/publish - requires the level to have
+ * been beaten since its last save; turns the draft into a real,
+ * permanent LevelVersion. */
+export async function publishLevel(slug: string, accessToken: string): Promise<LevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/publish`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not publish the level. Please try again.'
+			};
+		}
+
+		return { success: true, level: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface PlayLevelResult {
+	success: boolean;
+	title?: string;
+	content?: LevelContent;
+	error?: string;
+}
+
+/** Calls GET /api/levels/<slug>/play - public, no auth. What
+ * /play/[slug] loads: a published level's frozen, live content. */
+export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/play`);
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return { success: false, error: data.error ?? 'This level could not be found.' };
+		}
+
+		return { success: true, title: data.title, content: data.content };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+
+/**
+ * The lean shape GET /api/levels and GET /api/levels/by-user/<username>
+ * both return - deliberately missing draft_content, unlike LevelSummary
+ * above (which is what GET /api/levels/<slug> returns for a single
+ * level) - a list of many levels doesn't need each one's full content
+ * blob just to show a title and status.
+ */
+export interface LevelListItem {
+	id: string;
+	title: string;
+	visibility_state: 'draft' | 'testing' | 'published';
+	draft_beaten_at: string | null;
+	created_at: string | null;
+}
+
+export interface ListLevelsResult {
+	success: boolean;
+	levels?: LevelListItem[];
+	error?: string;
+	sessionExpired?: boolean;
+}
+
+/** Calls GET /api/levels - every level the caller owns, drafts and
+ * testing included. Owner-only. */
+export async function listMyLevels(accessToken: string): Promise<ListLevelsResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels`, {
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not load your levels. Please try again.'
+			};
+		}
+
+		return { success: true, levels: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface ListLevelsByUserResult {
+	success: boolean;
+	levels?: LevelListItem[];
+	error?: string;
+}
+
+/** Calls GET /api/levels/by-user/<username> - public, no auth. Only
+ * that creator's genuinely published levels, never drafts/testing. */
+export async function listLevelsByUser(username: string): Promise<ListLevelsByUserResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/by-user/${username}`);
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return { success: false, error: data.error ?? 'Could not load these levels.' };
+		}
+
+		return { success: true, levels: data };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface PublicUser {
+	id: string;
+	username: string;
+	role: string;
+	created_at: string | null;
+	email?: string;
+	twitch_display_name?: string;
+}
+
+export interface GetPublicUserResult {
+	success: boolean;
+	user?: PublicUser;
+	error?: string;
+}
+
+/** Calls GET /api/users/by-username/<username> - public, no auth. What
+ * /u/[username] loads for the "who is this" half of a public profile.
+ * Respects hide_email/hide_twitch - see user_to_public_dict. */
+export async function getUserByUsername(username: string): Promise<GetPublicUserResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/users/by-username/${username}`);
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return { success: false, error: data.error ?? 'This user could not be found.' };
 		}
 
 		return { success: true, user: data };

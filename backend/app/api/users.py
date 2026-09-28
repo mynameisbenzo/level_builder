@@ -7,6 +7,7 @@ from app.models.email_verification import EmailVerificationToken, generate_verif
 from app.models.user import User
 from app.schemas.user import user_to_full_dict, user_to_public_dict
 from app.services.email import send_verification_email
+from app.services.tokens import issue_token_pair
 from app.services.users import clean_str, create_user_row, username_is_taken
 from app.utils.time import utc_now
 
@@ -68,8 +69,12 @@ def create_user():
 def verify_email():
     """
     Consumes a verification token (from the link a real email would
-    contain, once a real provider exists) and marks the owning user's
-    email as verified.
+    contain, once a real provider exists), marks the owning user's
+    email as verified, and logs them in - clicking a genuine
+    verification link proves the same thing a login-link click does
+    (control of the account's email), so this is now a valid way to
+    establish a session too, not just a separate step someone has to
+    additionally go through via /login afterward.
     """
     payload = request.get_json(silent=True) or {}
     token_value = clean_str(payload.get("token"))
@@ -84,11 +89,20 @@ def verify_email():
         return jsonify({"error": "token has expired or already been used"}), 410
 
     user = verification_token.user
+    # Defense in depth, same as every other real login moment
+    # (/login, /refresh, /auth/twitch/callback): the account could have
+    # been suspended/deleted in the time between signing up and
+    # clicking the link.
+    if user.is_deleted or user.is_suspended:
+        return jsonify({"error": "this account is no longer accessible"}), 403
+
     user.email_verified_at = utc_now()
     verification_token.used_at = utc_now()
     db.session.commit()
 
-    return jsonify(user_to_full_dict(user)), 200
+    token_pair = issue_token_pair(user)
+
+    return jsonify({**token_pair, "user": user_to_full_dict(user)}), 200
 
 
 @users_bp.get("/<string:public_id>")

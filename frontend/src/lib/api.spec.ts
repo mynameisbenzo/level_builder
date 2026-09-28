@@ -24,15 +24,22 @@ describe('checkBackendHealth', () => {
 });
 
 describe('verifyEmail', () => {
-	it('returns success when the backend confirms the token', async () => {
+	it('returns success, tokens, and the user when the backend confirms the token', async () => {
 		globalThis.fetch = vi.fn().mockResolvedValue({
 			ok: true,
-			json: async () => ({ email_verified_at: '2026-01-01T00:00:00Z' })
+			json: async () => ({
+				access_token: 'a-real-access-token',
+				refresh_token: 'a-real-refresh-token',
+				user: { id: 'user-slug', username: 'verifieduser', email_verified_at: '2026-01-01T00:00:00Z' }
+			})
 		}) as unknown as typeof fetch;
 
 		const result = await verifyEmail('a-real-token');
 
 		expect(result.success).toBe(true);
+		expect(result.accessToken).toBe('a-real-access-token');
+		expect(result.refreshToken).toBe('a-real-refresh-token');
+		expect(result.user?.username).toBe('verifieduser');
 		expect(fetch).toHaveBeenCalledWith(
 			`${API_BASE_URL}/api/users/verify-email`,
 			expect.objectContaining({

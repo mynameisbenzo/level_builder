@@ -83,13 +83,66 @@ def test_verify_email_with_valid_token_marks_user_verified():
 
         response = client.post("/api/users/verify-email", json={"token": token.token})
         assert response.status_code == 200
-        assert response.get_json()["email_verified_at"] is not None
+        assert response.get_json()["user"]["email_verified_at"] is not None
 
         refetched_user = User.query.filter_by(public_id=user_id).first()
         assert refetched_user.email_verified_at is not None
 
         refetched_token = db.session.get(EmailVerificationToken, token.id)
         assert refetched_token.used_at is not None
+
+
+def test_verify_email_also_issues_a_working_session():
+    """
+    A genuine verification-link click proves the same thing a
+    login-link click does (control of the account's email), so it's
+    now a valid way to establish a session too - not just a separate
+    step someone has to additionally go through via /login afterward.
+    """
+    app, client = _client()
+    with app.app_context():
+        create = client.post("/api/users", json={"username": "sessioned", "email": "se@example.com"})
+        user_id = create.get_json()["id"]
+        token = EmailVerificationToken.query.filter_by(user_id=_internal_id(user_id)).first()
+
+        response = client.post("/api/users/verify-email", json={"token": token.token})
+        body = response.get_json()
+
+        assert "access_token" in body
+        assert "refresh_token" in body
+        assert body["user"]["id"] == user_id
+
+        # And the access token genuinely works for an authenticated
+        # request, not just present in the response.
+        profile_response = client.patch(
+            f"/api/users/{user_id}",
+            json={"username": "sessioned"},
+            headers={"Authorization": f"Bearer {body['access_token']}"},
+        )
+        assert profile_response.status_code == 200
+
+
+def test_verify_email_rejects_a_suspended_users_token():
+    """Defense in depth, same as every other real login moment - the
+    account could have been suspended/deleted in the time between
+    signing up and clicking the link."""
+    app, client = _client()
+    with app.app_context():
+        create = client.post(
+            "/api/users", json={"username": "suspendedverify", "email": "sv@example.com"}
+        )
+        user_id = create.get_json()["id"]
+        User.query.filter_by(public_id=user_id).first().is_suspended = True
+        db.session.commit()
+
+        token = EmailVerificationToken.query.filter_by(user_id=_internal_id(user_id)).first()
+        response = client.post("/api/users/verify-email", json={"token": token.token})
+        assert response.status_code == 403
+
+        # And the token wasn't burned by the rejected attempt - the
+        # account could still verify later if it's ever reinstated.
+        refetched_token = db.session.get(EmailVerificationToken, token.id)
+        assert refetched_token.used_at is None
 
 
 def test_verify_email_with_unknown_token_returns_404():

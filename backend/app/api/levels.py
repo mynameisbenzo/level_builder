@@ -4,7 +4,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app.extensions import db
 from app.models.level import Level, LevelVersion, LevelVisibilityState
 from app.models.user import User
-from app.schemas.level import level_to_dict
+from app.schemas.level import level_to_dict, level_to_summary_dict
 from app.services.level_content import default_level_content, validate_level_content
 from app.utils.time import utc_now
 
@@ -58,6 +58,29 @@ def create_level():
     db.session.commit()
 
     return jsonify(level_to_dict(level)), 201
+
+
+@levels_bp.get("")
+@jwt_required()
+def list_my_levels():
+    """
+    Every level the caller owns - drafts and testing included, since
+    this is the owner-only view (contrast with the public
+    by-user/<username> endpoint below, which only ever shows published
+    levels). Newest first. No pagination yet - genuinely unnecessary at
+    today's scale (one person's own levels), though the eventual public
+    "levels by this creator" listing (see README's Discover/browsing
+    section) will need real pagination once it exists. Using the same
+    lean level_to_summary_dict there too when it's built keeps this
+    endpoint's shape ready for that without needing a breaking change.
+    """
+    user = User.query.filter_by(public_id=get_jwt_identity()).first()
+    if user is None or user.is_deleted:
+        return jsonify({"error": "account not found"}), 404
+
+    levels = Level.query.filter_by(owner_id=user.id).order_by(Level.created_at.desc()).all()
+
+    return jsonify([level_to_summary_dict(level) for level in levels]), 200
 
 
 @levels_bp.get("/<string:slug>")
@@ -227,3 +250,36 @@ def get_level_for_play(slug):
         ),
         200,
     )
+
+
+@levels_bp.get("/by-user/<string:username>")
+def list_levels_by_user(username):
+    """
+    Public, unauthenticated - what a user's public profile page shows:
+    only that creator's genuinely PUBLISHED levels, never their drafts
+    or in-progress testing work, regardless of who's asking (including
+    the creator themselves looking at their own public page - that's a
+    deliberately different view from their own /api/levels, which shows
+    everything). Keyed off latest_published_version_id being set, same
+    reasoning as GET /<slug>/play: a level demoted back to testing by a
+    post-publish edit still counts as published here too, since its
+    last published version is still live for everyone.
+
+    An unknown username returns an empty list rather than a 404 - a
+    username that doesn't exist and a real user with zero published
+    levels look identical from here, which is the right behavior for a
+    public listing (nothing here needs to distinguish those two cases
+    the way an owner-only endpoint would).
+    """
+    user = User.query.filter_by(username=username).first()
+    if user is None or user.is_deleted:
+        return jsonify([]), 200
+
+    levels = (
+        Level.query.filter_by(owner_id=user.id)
+        .filter(Level.latest_published_version_id.isnot(None))
+        .order_by(Level.created_at.desc())
+        .all()
+    )
+
+    return jsonify([level_to_summary_dict(level) for level in levels]), 200

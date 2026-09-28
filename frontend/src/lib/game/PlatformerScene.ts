@@ -18,6 +18,18 @@ import {
 	shouldStopFloating,
 	type PlayerPose
 } from './movement';
+
+/**
+ * Emitted game-wide (via this.game.events, not this.events - the
+ * Svelte page hosting the game holds the `game` instance and needs to
+ * hear this from outside any one scene) the moment a real test
+ * playthrough reaches the win condition. /edit/[slug]'s page listens
+ * for this and calls the beat API with a fresh access token - kept out
+ * of this scene entirely, since Phaser has no business knowing about
+ * auth, and an access token seeded once at game-boot could go stale
+ * during a long editing session (see gameConfig.ts).
+ */
+export const LEVEL_BEATEN_EVENT = 'level-beaten';
 import { canFloat, canPhase, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
@@ -813,6 +825,18 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 		playSfx(this, 'win');
 
+		// Only in an owner's own edit/test session - /play/[slug] (a
+		// stranger playing someone else's published level) never
+		// registers LevelEditorScene at all (see gameConfig.ts), so this
+		// naturally never fires there. Reaching the win condition on a
+		// public play-through isn't a "beat" in the sense that matters
+		// for publishing - it's just someone playing an already-live
+		// level.
+		const editorScene = this.scene.get('LevelEditorScene');
+		if (editorScene) {
+			this.game.events.emit(LEVEL_BEATEN_EVENT);
+		}
+
 		this.add
 			.text(this.scale.width / 2, this.scale.height / 2, 'Level Cleared!', {
 				font: '32px monospace',
@@ -822,10 +846,17 @@ export class PlatformerScene extends Phaser.Scene {
 			.setDepth(HUD_DEPTH)
 			.setScrollFactor(0);
 
-		this.time.delayedCall(WIN_DISPLAY_DURATION_MS, () => {
-			const nextMode = toggleMode(CURRENT_MODE);
-			this.scene.start(getSceneKeyForMode(nextMode));
-		});
+		// Same reasoning as the emit above: toggling "back to the
+		// editor" only makes sense when there's an editor to go back to.
+		// A public /play/[slug] session has nowhere else to transition
+		// to yet, so it just stays on this cleared screen rather than
+		// trying to start a scene that was never registered.
+		if (editorScene) {
+			this.time.delayedCall(WIN_DISPLAY_DURATION_MS, () => {
+				const nextMode = toggleMode(CURRENT_MODE);
+				this.scene.start(getSceneKeyForMode(nextMode));
+			});
+		}
 	}
 
 	/**

@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { verifyEmail } from '$lib/api';
+	import { auth } from '$lib/auth.svelte';
+	import { returnToOpenerIfPresent } from '$lib/popupWindow';
 	import Navbar from '$lib/Navbar.svelte';
 
 	// Starts at 'ready', not an auto-firing 'verifying' - the token is
@@ -31,8 +34,15 @@
 	async function handleVerify() {
 		status = 'verifying';
 		const result = await verifyEmail(token);
-		if (result.success) {
+		if (result.success && result.accessToken && result.refreshToken && result.user) {
+			// A genuine verification-link click proves the same thing a
+			// login-link click does - control of the account's email -
+			// so this logs the person in too, same as any other real
+			// login moment.
+			auth.login(result.accessToken, result.refreshToken, result.user);
 			status = 'success';
+			if (returnToOpenerIfPresent()) return;
+			setTimeout(() => goto('/'), 1200);
 		} else {
 			status = 'error';
 			errorMessage = result.error ?? 'Verification failed. Please try again.';
@@ -56,7 +66,7 @@
 		{:else if status === 'verifying'}
 			<p class="note">Verifying…</p>
 		{:else if status === 'success'}
-			<p class="success">Your email is verified.</p>
+			<p class="success">Your email is verified — you're logged in, redirecting…</p>
 		{:else}
 			<p class="error">{errorMessage}</p>
 		{/if}

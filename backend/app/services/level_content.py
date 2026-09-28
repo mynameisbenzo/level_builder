@@ -53,7 +53,7 @@ def default_level_content() -> dict:
     would let one level's edits leak into another's default.
     """
     return {
-        "spawnPosition": {"x": 384, "y": 1664},
+        "spawnPosition": {"x": 400, "y": 1648},
         "cameraMode": "follow",
         "playerStartingColor": "green",
         "placedObjects": [],
@@ -65,7 +65,18 @@ def default_level_content() -> dict:
 
 def _validate_xy(value, label: str) -> str | None:
     """Shared by spawnPosition and every placed object - must be a
-    {x, y} pair of grid-aligned numbers within the fixed world bounds."""
+    {x, y} pair of grid-aligned numbers within the fixed world bounds.
+
+    "Grid-aligned" here means the editor's own convention specifically
+    - frontend/src/lib/game/gridSnap.ts's snapToGrid() snaps to the
+    CENTER of a grid cell, not its corner (deliberately: "a
+    gridSize-sized object dropped anywhere within a cell ends up
+    centered in that cell, rather than straddling a corner between
+    four cells"). So a valid value is never a bare multiple of
+    GRID_SIZE - it's GRID_SIZE/2 plus a multiple of GRID_SIZE (16, 48,
+    80, ... for GRID_SIZE=32), and this check has to match that or it
+    rejects every genuinely valid position the editor could ever
+    produce."""
     if not isinstance(value, dict):
         return f"{label} must be an object with x and y"
 
@@ -75,8 +86,9 @@ def _validate_xy(value, label: str) -> str | None:
     if not isinstance(y, (int, float)) or isinstance(y, bool):
         return f"{label}.y must be a number"
 
-    if x % GRID_SIZE != 0 or y % GRID_SIZE != 0:
-        return f"{label} must be aligned to the {GRID_SIZE}px grid"
+    half_cell = GRID_SIZE / 2
+    if (x - half_cell) % GRID_SIZE != 0 or (y - half_cell) % GRID_SIZE != 0:
+        return f"{label} must be aligned to the center of the {GRID_SIZE}px grid"
 
     if not (0 <= x < WORLD_WIDTH):
         return f"{label}.x is outside the level's world bounds"

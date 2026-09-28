@@ -1,7 +1,7 @@
 import { browser } from '$app/environment';
 import { refreshAccessToken, type CreatedUser } from './api';
 
-const STORAGE_KEY = 'pixelmaker_auth';
+export const STORAGE_KEY = 'pixelmaker_auth';
 // Refresh this long before the access token's real expiry - a buffer
 // for network latency/clock skew, not cutting it right at the deadline.
 const REFRESH_MARGIN_MS = 2 * 60 * 1000;
@@ -170,6 +170,36 @@ export const auth = {
 		} catch {
 			// Nothing meaningful to do if this fails - in-memory state
 			// is already cleared either way.
+		}
+	},
+
+	/**
+	 * Re-reads auth state from localStorage and adopts it into THIS
+	 * tab's own reactive state. Writing to localStorage in one tab
+	 * never updates another tab's in-memory state on its own - the
+	 * browser's `storage` event tells a listening tab that a write
+	 * happened elsewhere, but doing anything with that fact (updating
+	 * what auth.isLoggedIn/auth.user actually report here) is this
+	 * method's job, not the event's. Used by /play's "Save while signed
+	 * out" flow, where signup happens in a separate tab and this one
+	 * needs to notice. Returns true if a real, complete session was
+	 * found and adopted.
+	 */
+	syncFromStorage(): boolean {
+		if (!browser) return false;
+		try {
+			const raw = localStorage.getItem(STORAGE_KEY);
+			if (!raw) return false;
+			const parsed = JSON.parse(raw);
+			if (!parsed.accessToken || !parsed.refreshToken || !parsed.user) return false;
+
+			state.accessToken = parsed.accessToken;
+			state.refreshToken = parsed.refreshToken;
+			state.user = parsed.user;
+			scheduleRefresh(parsed.accessToken);
+			return true;
+		} catch {
+			return false;
 		}
 	}
 };

@@ -1,5 +1,5 @@
 from flask import Blueprint, current_app, jsonify, request
-from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
+from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
@@ -15,6 +15,7 @@ from app.models.twitch_signup_token import TwitchSignupToken
 from app.models.user import User
 from app.schemas.user import user_to_full_dict
 from app.services.email import send_login_link_email
+from app.services.tokens import issue_token_pair
 from app.services.twitch import TwitchAuthError, exchange_code_for_token, get_twitch_identity
 from app.services.users import clean_str, create_user_row
 from app.utils.time import utc_now
@@ -91,26 +92,6 @@ def request_login_link():
 
     return jsonify(response_body), 200
 
-
-def _issue_token_pair(user: User) -> dict:
-    """
-    Shared by /login and /refresh - both end with the same thing: a
-    fresh access token plus a fresh refresh token for this user.
-    """
-    refresh_token = RefreshToken(user_id=user.id)
-    db.session.add(refresh_token)
-    db.session.commit()
-
-    # public_id, not the raw internal id - a JWT's payload is
-    # base64-encoded, not encrypted, so anyone holding the token can
-    # decode and read its claims even without the signing key. Using
-    # the real PK here would leak it regardless of what API responses
-    # do or don't expose. See User.public_id's docstring.
-    access_token = create_access_token(identity=user.public_id)
-
-    return {"access_token": access_token, "refresh_token": refresh_token.token}
-
-
 @auth_bp.post("/login")
 def login():
     """Consumes a login token and issues an access token + refresh token pair."""
@@ -135,7 +116,7 @@ def login():
     login_token.used_at = utc_now()
     db.session.commit()
 
-    token_pair = _issue_token_pair(user)
+    token_pair = issue_token_pair(user)
 
     return jsonify({**token_pair, "user": user_to_full_dict(user)}), 200
 
@@ -184,7 +165,7 @@ def refresh():
     refresh_token.revoked_at = utc_now()
     db.session.commit()
 
-    token_pair = _issue_token_pair(user)
+    token_pair = issue_token_pair(user)
 
     return jsonify(token_pair), 200
 
@@ -260,7 +241,7 @@ def twitch_callback():
         if user.is_deleted or user.is_suspended:
             return jsonify({"error": "this account is no longer accessible"}), 403
 
-        token_pair = _issue_token_pair(user)
+        token_pair = issue_token_pair(user)
         return jsonify({**token_pair, "user": user_to_full_dict(user)}), 200
 
     # New Twitch identity - bridge to the username-selection step
@@ -319,7 +300,7 @@ def twitch_finish_signup():
     signup_token.used_at = utc_now()
     db.session.commit()
 
-    token_pair = _issue_token_pair(user)
+    token_pair = issue_token_pair(user)
 
     return jsonify({**token_pair, "user": user_to_full_dict(user)}), 200
 

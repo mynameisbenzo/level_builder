@@ -12,17 +12,16 @@ export interface PlayerPosition {
 // place would have spawned every new level in what's now the middle
 // row, floating with nothing underneath by default.
 //
-// Nudged slightly off dead-center (400, 1650) to the nearest
-// grid-aligned position - the original values were never actually
-// multiples of GRID_SIZE (32px), just visually centered in the
-// viewport, which is a different goal that happens not to coincide
-// with grid alignment here. That went unnoticed until the backend's
-// save validation started checking every position against the grid,
-// same as the editor's own drag-handler already does when a creator
-// actually drags the player - alignment is the real invariant this was
-// always supposed to hold, the original constant just never got
-// checked against it.
-export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 384, y: 1664 };
+// Grid-aligned per this editor's actual convention: snapToGrid() in
+// gridSnap.ts snaps to a cell's CENTER, not its corner - a valid value
+// is GRID_SIZE/2 plus a multiple of GRID_SIZE (16, 48, 80, ...), never
+// a bare multiple of GRID_SIZE itself. An earlier pass here mistakenly
+// "corrected" this to (384, 1650->1664) assuming corner-alignment
+// (bare multiples of 32) - that was actually a regression: x:400 was
+// already correctly center-aligned the whole time (400 = 12*32+16).
+// Only y needed fixing, and the correctly-aligned nearby value is 1648
+// (51*32+16), not 1664.
+export const DEFAULT_PLAYER_POSITION: PlayerPosition = { x: 400, y: 1648 };
 export const EDITOR_PLAYER_POSITION_KEY = 'editorPlayerPosition';
 
 /**

@@ -32,7 +32,7 @@ def _create_level(client, token, title="My Level") -> dict:
 
 def _valid_content(**overrides) -> dict:
     content = {
-        "spawnPosition": {"x": 64, "y": 64},
+        "spawnPosition": {"x": 48, "y": 48},
         "cameraMode": "follow",
         "playerStartingColor": "green",
         "placedObjects": [],
@@ -122,13 +122,13 @@ def test_save_updates_content():
         token = _signup_and_login(app, client)
         level = _create_level(client, token)
 
-        new_content = _valid_content(spawnPosition={"x": 96, "y": 96})
+        new_content = _valid_content(spawnPosition={"x": 112, "y": 112})
         response = client.patch(
             f"/api/levels/{level['id']}", json={"content": new_content}, headers=_auth_headers(token)
         )
 
         assert response.status_code == 200
-        assert response.get_json()["draft_content"]["spawnPosition"] == {"x": 96, "y": 96}
+        assert response.get_json()["draft_content"]["spawnPosition"] == {"x": 112, "y": 112}
 
 
 def test_save_rejects_invalid_content():
@@ -259,7 +259,7 @@ def test_publish_increments_version_number_on_a_later_republish():
 
         client.patch(
             f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 64, "y": 64})},
+            json={"content": _valid_content(spawnPosition={"x": 48, "y": 48})},
             headers=_auth_headers(token),
         )
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
@@ -268,7 +268,7 @@ def test_publish_increments_version_number_on_a_later_republish():
         # Edit, re-beat, publish again.
         client.patch(
             f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 128, "y": 128})},
+            json={"content": _valid_content(spawnPosition={"x": 144, "y": 144})},
             headers=_auth_headers(token),
         )
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
@@ -279,13 +279,13 @@ def test_publish_increments_version_number_on_a_later_republish():
         db_level = Level.query.filter_by(slug=level["id"]).first()
         latest_version = db.session.get(LevelVersion, db_level.latest_published_version_id)
         assert latest_version.version_number == 2
-        assert latest_version.content["spawnPosition"] == {"x": 128, "y": 128}
+        assert latest_version.content["spawnPosition"] == {"x": 144, "y": 144}
 
         # And the first version is still there, untouched - immutable,
         # not overwritten by the second publish.
         first_version = LevelVersion.query.filter_by(level_id=db_level.id, version_number=1).first()
         assert first_version is not None
-        assert first_version.content["spawnPosition"] == {"x": 64, "y": 64}
+        assert first_version.content["spawnPosition"] == {"x": 48, "y": 48}
 
 
 def test_publish_requires_ownership():
@@ -336,7 +336,7 @@ def test_play_endpoint_serves_the_published_content_with_no_auth():
         level = _create_level(client, token)
         client.patch(
             f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 96, "y": 96})},
+            json={"content": _valid_content(spawnPosition={"x": 112, "y": 112})},
             headers=_auth_headers(token),
         )
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
@@ -348,7 +348,7 @@ def test_play_endpoint_serves_the_published_content_with_no_auth():
         assert response.status_code == 200
         body = response.get_json()
         assert body["title"] == "My Level"
-        assert body["content"]["spawnPosition"] == {"x": 96, "y": 96}
+        assert body["content"]["spawnPosition"] == {"x": 112, "y": 112}
 
 
 def test_play_endpoint_returns_404_for_a_never_published_level():
@@ -386,11 +386,166 @@ def test_play_endpoint_still_serves_the_last_published_version_after_a_demoting_
         # shouldn't affect what /play serves.
         client.patch(
             f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 200, "y": 200})},
+            json={"content": _valid_content(spawnPosition={"x": 208, "y": 208})},
             headers=_auth_headers(token),
         )
 
         response = client.get(f"/api/levels/{level['id']}/play")
         assert response.status_code == 200
         # Still the originally-published content, not the in-progress edit.
-        assert response.get_json()["content"]["spawnPosition"] != {"x": 200, "y": 200}
+        assert response.get_json()["content"]["spawnPosition"] != {"x": 208, "y": 208}
+        
+
+# --- list my levels (owner-only) ---
+
+
+def test_list_my_levels_returns_all_own_levels_including_drafts():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        _create_level(client, token, title="Still a draft")
+        published_level = _create_level(client, token, title="Published one")
+        client.post(f"/api/levels/{published_level['id']}/beat", headers=_auth_headers(token))
+        client.post(f"/api/levels/{published_level['id']}/publish", headers=_auth_headers(token))
+
+        response = client.get("/api/levels", headers=_auth_headers(token))
+        assert response.status_code == 200
+        titles = {item["title"] for item in response.get_json()}
+        assert titles == {"Still a draft", "Published one"}
+
+
+def test_list_my_levels_is_ordered_newest_first():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        _create_level(client, token, title="First")
+        _create_level(client, token, title="Second")
+        _create_level(client, token, title="Third")
+
+        response = client.get("/api/levels", headers=_auth_headers(token))
+        titles = [item["title"] for item in response.get_json()]
+        assert titles == ["Third", "Second", "First"]
+
+
+def test_list_my_levels_excludes_another_users_levels():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "listowner", "listowner@example.com")
+        _create_level(client, owner_token, title="Owner's level")
+
+        other_token = _signup_and_login(app, client, "listother", "listother@example.com")
+        _create_level(client, other_token, title="Other's level")
+
+        response = client.get("/api/levels", headers=_auth_headers(owner_token))
+        titles = [item["title"] for item in response.get_json()]
+        assert titles == ["Owner's level"]
+
+
+def test_list_my_levels_requires_auth():
+    app, client = _client()
+    with app.app_context():
+        response = client.get("/api/levels")
+        assert response.status_code == 401
+
+
+def test_list_my_levels_omits_draft_content():
+    """The list view is deliberately lean - a list of many levels
+    shouldn't carry each one's full content blob."""
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        _create_level(client, token)
+
+        response = client.get("/api/levels", headers=_auth_headers(token))
+        assert "draft_content" not in response.get_json()[0]
+
+
+def test_list_my_levels_with_none_yet_returns_empty_list():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        response = client.get("/api/levels", headers=_auth_headers(token))
+        assert response.status_code == 200
+        assert response.get_json() == []
+
+
+# --- list levels by username (public) ---
+
+
+def test_list_levels_by_user_only_shows_published_levels():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client, "publiclister", "publiclister@example.com")
+        _create_level(client, token, title="Draft one")
+        published = _create_level(client, token, title="Published one")
+        client.post(f"/api/levels/{published['id']}/beat", headers=_auth_headers(token))
+        client.post(f"/api/levels/{published['id']}/publish", headers=_auth_headers(token))
+
+        # Deliberately no Authorization header - this is public.
+        response = client.get("/api/levels/by-user/publiclister")
+        assert response.status_code == 200
+        titles = [item["title"] for item in response.get_json()]
+        assert titles == ["Published one"]
+
+
+def test_list_levels_by_user_returns_empty_list_for_unknown_username():
+    """An unknown username and a real user with zero published levels
+    look identical here - both a 200 with an empty list, never a 404,
+    since nothing here needs to tell those two cases apart."""
+    app, client = _client()
+    with app.app_context():
+        response = client.get("/api/levels/by-user/nobody-with-this-name")
+        assert response.status_code == 200
+        assert response.get_json() == []
+
+
+def test_list_levels_by_user_still_shows_a_level_demoted_to_testing_after_publishing():
+    """Same reasoning as /play - a level demoted back to testing by a
+    post-publish edit should still appear here, since its last
+    published version is still live for everyone."""
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client, "demotelister", "demotelister@example.com")
+        level = _create_level(client, token, title="Demoted but still live")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
+
+        client.patch(
+            f"/api/levels/{level['id']}",
+            json={"content": _valid_content()},
+            headers=_auth_headers(token),
+        )
+
+        response = client.get("/api/levels/by-user/demotelister")
+        titles = [item["title"] for item in response.get_json()]
+        assert titles == ["Demoted but still live"]
+
+
+def test_list_levels_by_user_excludes_another_users_levels():
+    app, client = _client()
+    with app.app_context():
+        token_a = _signup_and_login(app, client, "publica", "publica@example.com")
+        level_a = _create_level(client, token_a, title="A's level")
+        client.post(f"/api/levels/{level_a['id']}/beat", headers=_auth_headers(token_a))
+        client.post(f"/api/levels/{level_a['id']}/publish", headers=_auth_headers(token_a))
+
+        token_b = _signup_and_login(app, client, "publicb", "publicb@example.com")
+        level_b = _create_level(client, token_b, title="B's level")
+        client.post(f"/api/levels/{level_b['id']}/beat", headers=_auth_headers(token_b))
+        client.post(f"/api/levels/{level_b['id']}/publish", headers=_auth_headers(token_b))
+
+        response = client.get("/api/levels/by-user/publica")
+        titles = [item["title"] for item in response.get_json()]
+        assert titles == ["A's level"]
+
+
+def test_list_levels_by_user_omits_draft_content():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client, "leanpublic", "leanpublic@example.com")
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
+
+        response = client.get("/api/levels/by-user/leanpublic")
+        assert "draft_content" not in response.get_json()[0]

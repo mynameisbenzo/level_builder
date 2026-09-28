@@ -5,6 +5,7 @@
 	import { exchangeTwitchCode, finishTwitchSignup } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { getTwitchRedirectUri, verifyTwitchState } from '$lib/twitch';
+	import { returnToOpenerIfPresent } from '$lib/popupWindow';
 	import Navbar from '$lib/Navbar.svelte';
 
 	// Unlike /auth/callback and /verify-email, this auto-fires on mount
@@ -59,6 +60,7 @@
 		if (result.accessToken && result.refreshToken && result.user) {
 			auth.login(result.accessToken, result.refreshToken, result.user);
 			status = 'success';
+			if (returnToOpenerIfPresent()) return;
 			setTimeout(() => goto('/'), 1200);
 			return;
 		}
@@ -77,6 +79,7 @@
 		if (result.success && result.accessToken && result.refreshToken && result.user) {
 			auth.login(result.accessToken, result.refreshToken, result.user);
 			status = 'success';
+			if (returnToOpenerIfPresent()) return;
 			setTimeout(() => goto('/'), 1200);
 		} else {
 			status = 'needs_username';

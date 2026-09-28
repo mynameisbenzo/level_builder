@@ -3,11 +3,29 @@
 	import { goto } from '$app/navigation';
 	import { checkBackendHealth } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { startNewLevel } from '$lib/startNewLevel';
 	import LevelPreviewHero from '$lib/LevelPreviewHero.svelte';
 	import Navbar from '$lib/Navbar.svelte';
 
 	let backendStatus: 'checking' | 'connected' | 'disconnected' = $state('checking');
+	let buildNowStatus: 'idle' | 'creating' | 'error' = $state('idle');
+	let buildNowError = $state('');
 
+	async function handleBuildNow() {
+		if (!auth.isLoggedIn) {
+			goto('/play');
+			return;
+		}
+
+		buildNowStatus = 'creating';
+		const result = await startNewLevel();
+		if (!result.success) {
+			buildNowStatus = 'error';
+			buildNowError = result.error ?? 'Could not create a new level. Please try again.';
+		}
+		// On success, startNewLevel already navigated away - nothing
+		// left to do here.
+	}
 	onMount(async () => {
 		// The installed home-screen app's start_url is "/" (see
 		// manifest.json) - regular browser visits to "/" (the Navbar
@@ -60,7 +78,12 @@
 			Place platforms, swap who you're playing as mid-level, and set a goal to reach. No
 			install, no account - just open the editor and start building.
 		</p>
-		<a class="cta" href="/play">Build Now</a>
+		<button class="cta" onclick={handleBuildNow} disabled={buildNowStatus === 'creating'}>
+			{buildNowStatus === 'creating' ? 'Creating…' : 'Build Now'}
+		</button>
+		{#if buildNowStatus === 'error'}
+			<p class="build-now-error">{buildNowError}</p>
+		{/if}
 		<LevelPreviewHero />
 	</section>
 
@@ -147,9 +170,22 @@
 		box-shadow: 0 4px 0 #142013;
 		text-decoration: none;
 		margin-bottom: 56px;
+		cursor: pointer;
 		transition:
 			transform 0.15s ease,
 			box-shadow 0.15s ease;
+	}
+
+	.cta:disabled {
+		opacity: 0.7;
+		cursor: not-allowed;
+	}
+
+	.build-now-error {
+		margin-top: -40px;
+		margin-bottom: 40px;
+		font-size: 0.85rem;
+		color: #ff8a7a;
 	}
 
 	.cta:hover {

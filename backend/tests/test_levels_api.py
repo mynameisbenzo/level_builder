@@ -758,3 +758,65 @@ def test_level_reports_whether_it_has_been_published():
         # The list view carries it too.
         listed = client.get("/api/levels", headers=_auth_headers(token)).get_json()
         assert listed[0]["has_been_published"] is True
+        
+
+
+# --- saving identical content is a no-op ---
+
+
+def test_save_with_identical_content_keeps_the_beat_confirmation():
+    """The real point of this: identical-content saves must not clear a
+    beat, which is what makes "publish always saves first" safe."""
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+
+        current = client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token)).get_json()
+        response = client.patch(
+            f"/api/levels/{level['id']}",
+            json={"content": current["draft_content"]},
+            headers=_auth_headers(token),
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["draft_beaten_at"] is not None
+
+
+def test_save_with_identical_content_does_not_demote_a_published_level():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Sky Castle")
+
+        current = client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token)).get_json()
+        response = client.patch(
+            f"/api/levels/{level['id']}",
+            json={"content": current["draft_content"]},
+            headers=_auth_headers(token),
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["visibility_state"] == "published"
+
+
+def test_save_with_genuinely_different_content_still_clears_the_beat():
+    """The exception above is narrow - real edits still behave exactly
+    as before."""
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+
+        response = client.patch(
+            f"/api/levels/{level['id']}",
+            json={"content": _valid_content(spawnPosition={"x": 208, "y": 208})},
+            headers=_auth_headers(token),
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["draft_beaten_at"] is None

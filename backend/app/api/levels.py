@@ -117,12 +117,21 @@ def save_level(slug):
     """
     Saves the editor's current in-progress content. Cheap and
     unconditional compared to publishing - no beat requirement, no new
-    LevelVersion row, just overwrites draft_content in place. Every
-    save clears draft_beaten_at, even if the content given is identical
-    to what was already there - a previous beat confirmation should
-    never be trusted to still apply to content that's just been
-    resaved, since there's no cheap way to know whether "identical" is
-    actually true rather than just claimed.
+    LevelVersion row, just overwrites draft_content in place.
+
+    A save whose content is exactly equal to what's already stored is
+    treated as a no-op: draft_beaten_at and visibility_state are left
+    untouched. This is what makes "save the draft, then publish" safe
+    (see /edit/[slug]'s Publish flow, which now always saves first to
+    pick up any live edits made since the last explicit Save) - without
+    this exception, that save-before-publish step would itself clear
+    the very beat confirmation the publish is about to check, even when
+    nothing had actually changed. Genuinely different content still
+    clears the beat exactly as before - a previous beat confirmation
+    must never be trusted to still apply to content that's actually
+    changed, and the comparison below is a direct equality check against
+    what the server itself has stored, not something trusted from the
+    client's own claim.
     """
     level, error = _get_owned_level(slug)
     if error is not None:
@@ -145,15 +154,17 @@ def save_level(slug):
         if not is_valid:
             return jsonify({"error": content_error}), 400
 
-        level.draft_content = content
-        level.draft_beaten_at = None
+        if content != level.draft_content:
+            level.draft_content = content
+            level.draft_beaten_at = None
 
-        if level.visibility_state == LevelVisibilityState.PUBLISHED:
-            # The already-published version stays live for everyone
-            # else exactly as it was - only this level's own lifecycle
-            # state demotes, not the LevelVersion row or the pointer to
-            # it (see Level.latest_published_version_id's docstring).
-            level.visibility_state = LevelVisibilityState.TESTING
+            if level.visibility_state == LevelVisibilityState.PUBLISHED:
+                # The already-published version stays live for everyone
+                # else exactly as it was - only this level's own
+                # lifecycle state demotes, not the LevelVersion row or
+                # the pointer to it (see
+                # Level.latest_published_version_id's docstring).
+                level.visibility_state = LevelVisibilityState.TESTING
 
     db.session.commit()
     return jsonify(level_to_dict(level)), 200

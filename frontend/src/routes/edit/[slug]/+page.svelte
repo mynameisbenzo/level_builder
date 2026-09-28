@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
-	import { goto } from '$app/navigation';
+	import { afterNavigate, goto } from '$app/navigation';
 	import Phaser from 'phaser';
 	import { beatLevel, getLevel, publishLevel, saveLevel } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { createGameConfig } from '$lib/game/gameConfig';
-	import { serializeLevelContent } from '$lib/game/levelContent';
+	import { serializeLevelContent, type LevelContent } from '$lib/game/levelContent';
 	import { LEVEL_BEATEN_EVENT } from '$lib/game/PlatformerScene';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
@@ -45,6 +45,80 @@
 	let publishDialogOpen = $state(false);
 	let publishStatus: 'idle' | 'publishing' | 'error' = $state('idle');
 	let publishError = $state('');
+
+	// What the server actually has stored, as of the last successful
+	// save (or the initial load). Compared against the live editor
+	// content to decide whether Back needs to ask about unsaved work,
+	// and updated after every successful save/publish.
+	let lastSavedContent: LevelContent | null = $state(null);
+	let unsavedDialog: HTMLDialogElement = $state()!;
+	let unsavedDialogOpen = $state(false);
+
+	// Back goes to whatever page they were just on - EXCEPT the anonymous
+	// /play sandbox, where "back" would just be a fresh, empty sandbox
+	// with nothing in it (that page's own content is never the level
+	// being edited here). history.back() is only trusted when SvelteKit
+	// reports a real earlier in-app page that isn't the sandbox; opened
+	// directly in a new tab, it would go nowhere (or off the site
+	// entirely).
+	let cameFromInApp = false;
+	let cameFromSandbox = false;
+	afterNavigate(({ from }) => {
+		cameFromInApp = from !== null;
+		cameFromSandbox = from?.url.pathname === '/play';
+	});
+
+	function performBack() {
+		if (cameFromSandbox || !cameFromInApp) {
+			goto('/profile');
+		} else {
+			history.back();
+		}
+	}
+
+	function hasUnsavedChanges(): boolean {
+		if (!game || lastSavedContent === null) return false;
+		return JSON.stringify(serializeLevelContent(game.registry)) !== JSON.stringify(lastSavedContent);
+	}
+
+	function handleBackClick() {
+		if (hasUnsavedChanges()) {
+			setGameKeyboardEnabled(false);
+			unsavedDialogOpen = true;
+			unsavedDialog.showModal();
+		} else {
+			performBack();
+		}
+	}
+
+	function handleUnsavedDialogCancel(event: Event) {
+		// Same reasoning as the publish dialog's own cancel handler -
+		// don't let Escape dismiss this mid-save, where the person would
+		// lose track of whether it went through.
+		if (saveStatus === 'saving') {
+			event.preventDefault();
+		}
+	}
+
+	function handleUnsavedDialogClosed() {
+		unsavedDialogOpen = false;
+		setGameKeyboardEnabled(true);
+	}
+
+	function leaveWithoutSaving() {
+		unsavedDialog.close();
+		performBack();
+	}
+
+	async function saveThenLeave() {
+		await handleSave();
+		if (saveStatus !== 'error') {
+			unsavedDialog.close();
+			performBack();
+		}
+		// On error, the dialog stays open and shows saveError - see the
+		// markup below - rather than silently discarding the attempt.
+	}
 
 	async function handleLevelBeaten() {
 		const token = auth.accessToken;
@@ -100,6 +174,7 @@
 		hasBeenPublished = result.level.has_been_published;
 		visibilityState = result.level.visibility_state;
 		hasBeenBeaten = result.level.draft_beaten_at !== null;
+		lastSavedContent = result.level.draft_content;
 		loadStatus = 'ready';
 
 		const content = result.level.draft_content ?? undefined;
@@ -145,6 +220,7 @@
 		if (result.success && result.level) {
 			visibilityState = result.level.visibility_state;
 			hasBeenBeaten = result.level.draft_beaten_at !== null;
+			lastSavedContent = content;
 			saveStatus = 'saved';
 		} else if (result.sessionExpired) {
 			goto('/login');
@@ -230,13 +306,54 @@
 	 */
 	async function runPublish(newTitle?: string): Promise<boolean> {
 		const token = auth.accessToken;
-		if (!token) {
+		if (!token || !game) {
 			goto('/login');
 			return false;
 		}
 
 		publishStatus = 'publishing';
 		publishError = '';
+
+		// Publish always saves first, to pick up any live edits made
+		// since the last explicit Save click - a win recorded against an
+		// older saved draft would otherwise silently count toward
+		// content that was never actually played. Safe to do
+		// unconditionally: if nothing actually changed, the save is a
+		// no-op on the server and the existing beat confirmation
+		// survives (see save_level); if something DID change, the save
+		// clears the beat and the check just below correctly stops the
+		// publish rather than letting it through.
+		const content = serializeLevelContent(game.registry);
+		let saveResult = await saveLevel(slug, content, token);
+		if (saveResult.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			const refreshedToken = auth.accessToken;
+			if (refreshed && refreshedToken) {
+				saveResult = await saveLevel(slug, content, refreshedToken);
+			}
+		}
+
+		if (!saveResult.success || !saveResult.level) {
+			if (saveResult.sessionExpired) {
+				publishStatus = 'idle';
+				goto('/login');
+				return false;
+			}
+			publishStatus = 'error';
+			publishError = saveResult.error ?? 'Could not save your changes before publishing.';
+			return false;
+		}
+
+		visibilityState = saveResult.level.visibility_state;
+		hasBeenBeaten = saveResult.level.draft_beaten_at !== null;
+		lastSavedContent = content;
+
+		if (!hasBeenBeaten) {
+			publishStatus = 'error';
+			publishError =
+				"You've changed the level since you beat it - play it through again before publishing.";
+			return false;
+		}
 
 		let result = await publishLevel(slug, token, newTitle);
 		if (result.sessionExpired) {
@@ -286,7 +403,7 @@
 </script>
 
 <svelte:head>
-	<title>{title ? `Editing ${title}` : 'Editing…'} — Pixel Maker</title>
+	<title>{hasBeenPublished ? `Editing ${title}` : 'Editing a new level'} — Pixel Maker</title>
 </svelte:head>
 
 {#key params.slug}
@@ -301,30 +418,40 @@
 	</div>
 {:else}
 	<div class="toolbar">
-		<span class="level-title" title={title}>{title}</span>
+		<div class="toolbar-left">
+			<button class="back-button" onclick={handleBackClick}>
+				<span aria-hidden="true">←</span> Back
+			</button>
+		</div>
 
-		<span class="visibility-badge" class:published={visibilityState === 'published'}>
-			{visibilityState}
+		<span class="level-title" class:unnamed={!hasBeenPublished} title={hasBeenPublished ? title : ''}>
+            {hasBeenPublished ? title : 'Unnamed level'}
 		</span>
 
-		{#if saveStatus === 'error'}
-			<span class="inline-error">{saveError}</span>
-		{/if}
-		{#if publishError && !publishDialogOpen}
-			<span class="inline-error">{publishError}</span>
-		{/if}
-		<button onclick={handleSave} disabled={saveStatus === 'saving'}>
-			{saveStatus === 'saving' ? 'Saving…' : 'Save'}
-		</button>
+		<div class="toolbar-right">
+			<span class="visibility-badge" class:published={visibilityState === 'published'}>
+				{visibilityState}
+			</span>
 
-		<button
-			class="publish-button"
-			onclick={handlePublishClick}
-			disabled={!hasBeenBeaten || publishStatus === 'publishing'}
-			title={hasBeenBeaten ? '' : 'Test and beat your level first'}
-		>
-			{publishStatus === 'publishing' && !publishDialogOpen ? 'Publishing…' : 'Publish'}
-		</button>
+			{#if saveStatus === 'error'}
+				<span class="inline-error">{saveError}</span>
+			{/if}
+			{#if publishError && !publishDialogOpen}
+				<span class="inline-error">{publishError}</span>
+			{/if}
+
+			<button onclick={handleSave} disabled={saveStatus === 'saving'}>
+				{saveStatus === 'saving' ? 'Saving…' : 'Save'}
+			</button>
+			<button
+				class="publish-button"
+				onclick={handlePublishClick}
+				disabled={!hasBeenBeaten || publishStatus === 'publishing'}
+				title={hasBeenBeaten ? '' : 'Test and beat your level first'}
+			>
+				{publishStatus === 'publishing' && !publishDialogOpen ? 'Publishing…' : 'Publish'}
+			</button>
+		</div>
 	</div>
 
 	<div class="game-page">
@@ -384,6 +511,40 @@
 			</div>
 		</form>
 	</dialog>
+
+	<dialog
+		class="publish-dialog"
+		bind:this={unsavedDialog}
+		onclose={handleUnsavedDialogClosed}
+		oncancel={handleUnsavedDialogCancel}
+		aria-labelledby="unsaved-dialog-heading"
+	>
+		<h2 id="unsaved-dialog-heading">You have unsaved changes</h2>
+		<p class="dialog-note">Leave without saving, or save your progress first?</p>
+
+		{#if unsavedDialogOpen && saveStatus === 'error'}
+			<p class="dialog-error">{saveError}</p>
+		{/if}
+
+		<div class="dialog-actions">
+			<button
+				type="button"
+				class="leave-button"
+				onclick={leaveWithoutSaving}
+				disabled={saveStatus === 'saving'}
+			>
+				Leave without saving
+			</button>
+			<button
+				type="button"
+				class="publish-button"
+				onclick={saveThenLeave}
+				disabled={saveStatus === 'saving'}
+			>
+				{saveStatus === 'saving' ? 'Saving…' : 'Save and leave'}
+			</button>
+		</div>
+	</dialog>
 {/if}
 {/key}
 
@@ -407,8 +568,11 @@
 		color: #ff8a7a;
 	}
 
+	/* Three columns so the name sits in the true center regardless of
+	   how wide the back button and the action buttons happen to be. */
 	.toolbar {
-		display: flex;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 		align-items: center;
 		gap: 12px;
 		padding: 10px 16px;
@@ -421,15 +585,32 @@
 		z-index: 10;
 	}
 
+	.toolbar-left {
+		justify-self: start;
+	}
+
+	.toolbar-right {
+		justify-self: end;
+		display: flex;
+		align-items: center;
+		gap: 12px;
+	}
+
 	.level-title {
-		flex: 1;
-		min-width: 0;
+		max-width: 40vw;
 		font-family: 'Baloo 2', sans-serif;
 		font-weight: 700;
 		font-size: 0.95rem;
+		text-align: center;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+	}
+
+	.level-title.unnamed {
+		font-weight: 500;
+		font-style: italic;
+		color: #8f94c9;
 	}
 
 	.visibility-badge {
@@ -477,10 +658,21 @@
 		background: #9146ff;
 	}
 
-	.cancel-button {
+	.cancel-button,
+	.back-button {
 		color: #c7cbef;
 		background: transparent;
 		border: 1px solid #3a3d76;
+	}
+
+	.leave-button {
+		color: #f4f6ff;
+		background: #a83c3c;
+	}
+
+	.back-button:hover {
+		color: #f4f6ff;
+		border-color: #6b6f9e;
 	}
 
 	.publish-dialog {

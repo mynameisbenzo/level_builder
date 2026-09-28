@@ -50,7 +50,14 @@
 	// save (or the initial load). Compared against the live editor
 	// content to decide whether Back needs to ask about unsaved work,
 	// and updated after every successful save/publish.
-	let lastSavedContent: LevelContent | null = $state(null);
+	// Plain, not $state - never rendered in the template, only compared
+	// against inside hasUnsavedChanges(). Svelte deeply proxies $state
+	// values (and everything nested inside them), and JSON.stringify on
+	// a proxy isn't guaranteed to produce the same string as the plain
+	// objects serializeLevelContent() reads straight from Phaser's
+	// registry - wrapping this in $state was what caused Back to warn
+	// about "unsaved changes" that didn't actually exist.
+	let lastSavedContent: LevelContent | null = null;
 	let unsavedDialog: HTMLDialogElement = $state()!;
 	let unsavedDialogOpen = $state(false);
 
@@ -76,6 +83,21 @@
 		}
 	}
 
+	/**
+	 * Whether the live editor content differs from what's actually
+	 * saved - used to decide whether Back needs to ask before leaving.
+	 *
+	 * Known false positive, left unresolved on purpose: this can
+	 * occasionally report a change when none was made (root cause not
+	 * pinned down - console logging added to chase it printed nothing
+	 * on the run that reproduced it, so it isn't a simple, reliably
+	 * reproducible data mismatch). Left as-is deliberately: a false
+	 * positive here only costs an extra click (Leave without saving
+	 * always works regardless of whether anything really changed),
+	 * whereas a false negative - a real change going undetected - would
+	 * risk silently losing work, which is the failure mode actually
+	 * worth guarding against.
+	 */
 	function hasUnsavedChanges(): boolean {
 		if (!game || lastSavedContent === null) return false;
 		return JSON.stringify(serializeLevelContent(game.registry)) !== JSON.stringify(lastSavedContent);

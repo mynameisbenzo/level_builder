@@ -48,6 +48,14 @@
 		}
 	}
 
+	// Level actions (create/edit/publish) require a verified email or a
+	// linked Twitch account - see _verification_gate in the backend's
+	// app/api/levels.py. Twitch-linked users are exempt regardless of
+	// email_verified_at, matching that same rule exactly.
+	let needsVerification = $derived(
+		!!auth.user && !auth.user.email_verified_at && !auth.user.twitch_id
+	);
+
 	let username = $state(auth.user?.username ?? '');
 	let hideEmail = $state(auth.user?.hide_email ?? false);
 	let hideTwitch = $state(auth.user?.hide_twitch ?? false);
@@ -64,6 +72,11 @@
 			goto('/login');
 			return;
 		}
+		// An unverified, non-Twitch user gets a 403 from GET /api/levels
+		// too (see _verification_gate) - skip the call and let the
+		// verify-your-email banner explain it, rather than surfacing
+		// that 403 as a generic "could not load your levels" error.
+		if (needsVerification) return;
 		void loadMyLevels();
 	});
 
@@ -143,6 +156,16 @@
 
 {#if auth.user}
 	<main>
+		{#if needsVerification}
+			<div class="card verify-banner">
+				<p class="note verify-note">
+					Verify your email to create, edit, or publish levels. Check your inbox for the
+					verification link from signup — or link a Twitch account below for the same access
+					without verifying your email.
+				</p>
+			</div>
+		{/if}
+
 		<div class="card">
 			<h2 class="new-level-heading">Levels</h2>
 			<p class="note">Start building a new level.</p>
@@ -152,12 +175,15 @@
 			<button
 				class="new-level-button"
 				onclick={handleNewLevel}
-				disabled={newLevelStatus === 'creating'}
+				disabled={newLevelStatus === 'creating' || needsVerification}
+				title={needsVerification ? 'Verify your email or link Twitch first' : undefined}
 			>
 				{newLevelStatus === 'creating' ? 'Creating…' : 'New Level'}
 			</button>
 
-			{#if levelsStatus === 'loading'}
+			{#if needsVerification}
+				<!-- Nothing to load - see the verify-your-email banner above. -->
+			{:else if levelsStatus === 'loading'}
 				<p class="note levels-status">Loading your levels…</p>
 			{:else if levelsStatus === 'error'}
 				<p class="error levels-status">{levelsError}</p>
@@ -296,6 +322,17 @@
 		border: 2px solid #3a3d76;
 		border-radius: 6px;
 		padding: 32px;
+	}
+
+	.verify-banner {
+		background: #3a301a;
+		border-color: #ffd23f;
+		padding: 20px 24px;
+	}
+
+	.verify-note {
+		margin: 0;
+		color: #ffe9a8;
 	}
 
 	h1 {

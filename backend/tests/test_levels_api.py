@@ -13,10 +13,21 @@ def _client():
 
 
 def _signup_and_login(app, client, username="creator", email="c@example.com") -> str:
-    """Goes through the real signup + login flow to get a genuine access
-    token for a fresh user, who'll own whatever level a test creates."""
+    """
+    Goes through the real signup + login flow to get a genuine access
+    token for a fresh user, who'll own whatever level a test creates.
+
+    Also verifies the user's email before logging in - level actions
+    require a verified email or linked Twitch (see
+    _verification_gate in app/api/levels.py), and this file's tests are
+    about level behavior, not verification, so they need a user who can
+    actually get past that gate by default. test_verification_gate.py
+    covers the gate itself with a deliberately-unverified user.
+    """
     app.config["DEBUG"] = True
-    client.post("/api/users", json={"username": username, "email": email})
+    create_response = client.post("/api/users", json={"username": username, "email": email})
+    verification_token = create_response.get_json()["dev_verification_token"]
+    client.post("/api/users/verify-email", json={"token": verification_token})
     request_response = client.post("/api/auth/request-login-link", json={"identifier": username})
     login_token = request_response.get_json()["dev_login_token"]
     login_response = client.post("/api/auth/login", json={"token": login_token})

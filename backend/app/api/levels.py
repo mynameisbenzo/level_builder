@@ -47,6 +47,36 @@ MAX_DRAFT_LEVELS = 5
 MAX_PUBLISHED_TOTAL = 100
 
 
+def _verification_gate(user: User) -> tuple[str, int] | None:
+    """
+    Level actions (create/list/get/save/beat/publish - everything below
+    that calls this) require the caller to be either email-verified or
+    Twitch-linked; a user with neither is treated as if they had no
+    account at all for these specifically. Twitch-linked users get full
+    access regardless of email_verified_at, even if they also have an
+    unverified email on the account.
+
+    Deliberately NOT applied to:
+    - Account actions (PATCH/DELETE /api/users/<id>) - an unverified
+      user can still edit or delete their own account.
+    - The public endpoints below (get_level_for_play,
+      list_levels_by_user) - a level that's already published stays
+      visible to everyone regardless of the creator's current
+      verification status, since that status isn't permanent (e.g. an
+      email change clears email_verified_at until reconfirmed) and
+      shouldn't retroactively hide content that's already live.
+
+    Returns None if the caller may proceed, or (message, status) to
+    return as-is if not.
+    """
+    if user.email_verified_at is not None or user.twitch_id is not None:
+        return None
+    return (
+        "verify your email (or link a Twitch account) before you can create, edit, or publish levels",
+        403,
+    )
+
+
 def _get_owned_level(slug: str) -> tuple[Level | None, tuple[str, int] | None]:
     """
     Shared by every owner-only level action below - looks the level up
@@ -92,6 +122,11 @@ def create_level():
     if user is None or user.is_deleted:
         return jsonify({"error": "account not found"}), 404
 
+    gate_error = _verification_gate(user)
+    if gate_error is not None:
+        message, status = gate_error
+        return jsonify({"error": message}), status
+
     draft_count = (
         Level.query.filter_by(owner_id=user.id).filter(Level.latest_published_version_id.is_(None)).count()
     )
@@ -133,6 +168,11 @@ def list_my_levels():
     if user is None or user.is_deleted:
         return jsonify({"error": "account not found"}), 404
 
+    gate_error = _verification_gate(user)
+    if gate_error is not None:
+        message, status = gate_error
+        return jsonify({"error": message}), status
+
     levels = Level.query.filter_by(owner_id=user.id).order_by(Level.created_at.desc()).all()
 
     return jsonify([level_to_summary_dict(level) for level in levels]), 200
@@ -146,6 +186,11 @@ def get_level(slug):
     level, error = _get_owned_level(slug)
     if error is not None:
         message, status = error
+        return jsonify({"error": message}), status
+
+    gate_error = _verification_gate(level.owner)
+    if gate_error is not None:
+        message, status = gate_error
         return jsonify({"error": message}), status
 
     return jsonify(level_to_dict(level)), 200
@@ -176,6 +221,11 @@ def save_level(slug):
     level, error = _get_owned_level(slug)
     if error is not None:
         message, status = error
+        return jsonify({"error": message}), status
+
+    gate_error = _verification_gate(level.owner)
+    if gate_error is not None:
+        message, status = gate_error
         return jsonify({"error": message}), status
 
     payload = request.get_json(silent=True) or {}
@@ -226,6 +276,11 @@ def beat_level(slug):
         message, status = error
         return jsonify({"error": message}), status
 
+    gate_error = _verification_gate(level.owner)
+    if gate_error is not None:
+        message, status = gate_error
+        return jsonify({"error": message}), status
+
     if level.draft_content is None:
         return jsonify({"error": "level has no content to beat yet"}), 400
 
@@ -261,6 +316,11 @@ def publish_level(slug):
     level, error = _get_owned_level(slug)
     if error is not None:
         message, status = error
+        return jsonify({"error": message}), status
+
+    gate_error = _verification_gate(level.owner)
+    if gate_error is not None:
+        message, status = gate_error
         return jsonify({"error": message}), status
 
     payload = request.get_json(silent=True) or {}

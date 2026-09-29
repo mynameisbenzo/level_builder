@@ -110,6 +110,54 @@ flask --app "app.main:create_app('development')" run --port 5000
 Visit `http://localhost:5000/` for the portfolio landing page, or
 `curl http://localhost:5000/health` → `{"status":"ok"}`.
 
+### Database schema changes
+
+The schema is managed via [Flask-Migrate](https://flask-migrate.readthedocs.io)
+(Alembic) - `db.create_all()` is no longer how a real Postgres database
+gets its tables. The one exception is `pytest`, unaffected by any of
+this: `TestingConfig`'s throwaway in-memory SQLite database is rebuilt
+from scratch on every test run regardless, so migrating it would add
+nothing.
+
+For an actual Postgres database, which of these you need depends on
+whether it already has these tables:
+
+- **A brand-new, empty database** (a fresh clone, or setting this
+  project up for the first time):
+```bash
+  flask --app "app.main:create_app('development')" db upgrade
+```
+  builds the full schema from the migration history in `migrations/`.
+
+- **A database that already has these tables** (any local dev database
+  set up before migrations existed) needs exactly one, one-time
+  command instead:
+```bash
+  flask --app "app.main:create_app('development')" db stamp head
+```
+  This tells Alembic "the schema is already at this point, just start
+  tracking from here" - it records that fact without touching any
+  actual tables. Running `db upgrade` against a database that already
+  has these tables instead would fail outright the moment it hit the
+  first `CREATE TABLE` that already exists as a table - not
+  destructive, just an error, but the wrong command for this case.
+
+Going forward, a schema change means: edit the model, then
+```bash
+flask --app "app.main:create_app('development')" db migrate -m "what changed"
+```
+to generate a new migration, **review the generated file before
+trusting it** - autogenerate is good but not infallible; this
+project's very first generated migration needed one hand-fix, a
+missing `Text` import its own JSONB-column renderer left out - then
+```bash
+flask --app "app.main:create_app('development')" db upgrade
+```
+to apply it. This replaces any ad hoc `db.create_all()`-based
+workflow, including a personal shell alias built around one, if you
+had one - that now bypasses migration tracking anymore, and shouldn't
+be used for schema changes anymore.
+
 **Local Postgres, without Homebrew (e.g. on an older macOS Homebrew
 won't run on):** [Postgres.app](https://postgresapp.com) is a
 standalone Mac app, no package manager needed - check their [legacy
@@ -634,18 +682,26 @@ but can't touch Developer/Owner accounts or blog posts), and
       "worked" locally only because PDT happens to sit behind UTC; it
       would have failed completely in production, where Render runs UTC
       and that accidental slack disappears entirely.
-- [ ] **The 1-hour JWT expiry may be a real problem once actual level-
-      building sessions exist, not just a minor UX tradeoff.** Building
-      a level could plausibly take well over an hour - maybe most of a
-      day for something involved. With no refresh-token mechanism, a
-      long, uninterrupted building session risks the JWT silently
-      expiring mid-session, only surfacing when the person finally
-      tries to save. Worth solving before real users hit it, but not
-      before actual level-saving exists to hit it against - noted here
-      to revisit once that's built, not acted on now.
-- [ ] Twitch OAuth integration - a separate, later flow entirely (a
-      real OAuth redirect dance, not a magic-link), doesn't reuse any
-      of the above
+- [x] **JWT refresh tokens.** `RefreshToken` model, `POST /api/auth/refresh`
+      (issues a new access + refresh pair, revoking the old one) and
+      `POST /api/auth/logout` (revokes it). The access token is
+      actually 15 minutes (`JWT_ACCESS_TOKEN_EXPIRES` in `config.py` -
+      this item previously said 1 hour, which was wrong), but that's
+      no longer the exposure it sounds like: `auth.svelte.ts` schedules
+      a silent refresh 2 minutes before the token's own expiry (read
+      from its `exp` claim, not a hardcoded guess), plus a reactive
+      `tryRefresh()` fallback every authenticated call already uses if
+      a request ever comes back expired anyway (e.g. the machine was
+      asleep through the scheduled time). A long level-building session
+      should never actually hit a dead access token.
+- [x] **Twitch OAuth.** Backend: `/auth/twitch/callback` (login or
+      first-time signup, prompting for a username since Twitch's own
+      isn't guaranteed unique here), `/auth/twitch/finish-signup`, and
+      `/auth/twitch/link` (attaching Twitch to an already-logged-in
+      email account). Frontend: "Continue with Twitch" on both
+      `/login` and `/signup`, the callback page handling both the
+      direct-login and needs-a-username branches, and a link/unlink
+      control on `/profile`.
 - [ ] Whether/how unverified email accounts are restricted (e.g. can
       they save levels before verifying?) hasn't been decided - the
       mechanism exists now, but nothing currently checks
@@ -707,9 +763,19 @@ and descendant views.
       (`PATCH`/`DELETE` on `/api/users/<id>`, plus the public
       `by-username` lookup) - this item was specifically the
       `Level`/`LevelVersion` side, which was the actual gap.
-- [ ] Alembic migration via `flask db migrate` (schema has so far only
-      been exercised via `db.create_all()` in tests, not a real
-      migration)
+- [x] **Alembic migrations, via Flask-Migrate.** `flask db init` +
+      `flask db migrate` generated an initial migration covering the
+      full schema; verified by actually applying it against a fresh
+      database and structurally comparing the result to what
+      `db.create_all()` produces (exact match: same tables, columns,
+      types, unique constraints, foreign keys). One thing worth
+      knowing: Alembic's autogenerate isn't infallible - the generated
+      migration for the JSONB columns (`Level.draft_content`,
+      `LevelVersion.content`) referenced `Text()` without importing it,
+      a known quirk with that particular column pattern. Always review
+      what autogenerate produces rather than trusting it blindly. See
+      "Database schema changes" above for the actual workflow,
+      including the one-time step existing databases need.
 
 **Marketing site & blog:**
 - [x] Revamped landing page — hero section with a looping animation

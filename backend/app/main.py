@@ -5,7 +5,7 @@ from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 
 from app.config import config_by_name
-from app.extensions import db
+from app.extensions import db, migrate
 
 TECH_STACK = [
     "SvelteKit",
@@ -29,6 +29,7 @@ def create_app(config_name: str = "development") -> Flask:
     app.config.from_object(config_by_name[config_name])
 
     db.init_app(app)
+    migrate.init_app(app, db)
     CORS(app, origins=[app.config["FRONTEND_ORIGIN"]])
     jwt = JWTManager(app)
 

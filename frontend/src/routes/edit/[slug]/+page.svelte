@@ -33,7 +33,7 @@
 	// from then on - so this decides whether Publish asks for a name
 	// (first time) or just publishes (every time after).
 	let hasBeenPublished = $state(false);
-	let visibilityState: 'draft' | 'testing' | 'published' = $state('draft');
+	let visibilityState: 'draft' | 'testing' | 'published' | 'unpublished' = $state('draft');
 	let hasBeenBeaten = $state(false);
 
 	let saveStatus: 'idle' | 'saving' | 'saved' | 'error' = $state('idle');
@@ -189,6 +189,19 @@
 			}
 			loadStatus = 'error';
 			loadError = result.error ?? 'Could not load this level.';
+			return;
+		}
+
+		// A deleted level's own GET still succeeds (the owner can see it
+		// happened), but the editor has nothing useful to do with it -
+		// every save/beat/publish call would just come back with the
+		// same 409 the backend already enforces. Reusing the load-error
+		// path here, rather than opening the editor and letting every
+		// action fail one at a time, since there's no action here that
+		// would actually work.
+		if (result.level.is_deleted) {
+			loadStatus = 'error';
+			loadError = 'This level has been deleted and can no longer be edited.';
 			return;
 		}
 

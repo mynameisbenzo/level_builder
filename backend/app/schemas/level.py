@@ -19,6 +19,7 @@ def level_to_dict(level) -> dict:
         "title": level.title,
         "visibility_state": level.visibility_state.value,
         "has_been_published": level.latest_published_version_id is not None,
+        "is_deleted": level.is_deleted,
         "draft_content": level.draft_content,
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
         "created_at": level.created_at.isoformat() if level.created_at else None,
@@ -41,6 +42,7 @@ def level_to_summary_dict(level) -> dict:
         "title": level.title,
         "visibility_state": level.visibility_state.value,
         "has_been_published": level.latest_published_version_id is not None,
+        "is_deleted": level.is_deleted,
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
         "created_at": level.created_at.isoformat() if level.created_at else None,
     }

@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +14,19 @@ from app.services.users import clean_str, create_user_row, username_is_taken
 from app.utils.time import utc_now
 
 users_bp = Blueprint("users", __name__, url_prefix="/api/users")
+
+# Unlike LoginLinkRequest's rate limit (app/models/login_link_request.py),
+# this doesn't need its own tracking table - EmailVerificationToken rows
+# already carry a created_at, and this endpoint is authenticated (the
+# caller can only ever resend to their own account), so there's no
+# enumeration concern requiring a limit keyed off a raw, possibly-fake
+# identifier the way the login-link one is. Counting this account's own
+# recent token rows is enough. A shorter window than the login-link
+# limit's one-per-day, since someone waiting on a lost/expired
+# verification email is actively blocked from using the product right
+# now, not just trying to log in again later.
+MAX_RESEND_REQUESTS_PER_WINDOW = 3
+RESEND_RATE_LIMIT_WINDOW = timedelta(hours=1)
 
 
 @users_bp.post("")
@@ -103,6 +118,61 @@ def verify_email():
     token_pair = issue_token_pair(user)
 
     return jsonify({**token_pair, "user": user_to_full_dict(user)}), 200
+
+
+@users_bp.post("/resend-verification-email")
+@jwt_required()
+def resend_verification_email():
+    """
+    Issues a fresh EmailVerificationToken and re-sends the verification
+    email - for when the original one never arrived, expired (24-hour
+    lifetime), or got lost. Authenticated and self-only by construction
+    (there's no target user in the request at all, only the caller's own
+    JWT identity), unlike the enumeration-safe /request-login-link,
+    which has to accept an arbitrary identifier from someone who isn't
+    logged in yet.
+
+    Deliberately does NOT invalidate any still-outstanding tokens from
+    an earlier request - multiple valid tokens for the same account can
+    coexist harmlessly, since verify-email only ever consumes the one
+    it's given; an older email/link still sitting unread in an inbox
+    keeps working right up until whichever token gets used first.
+    """
+    user = User.query.filter_by(public_id=get_jwt_identity()).first()
+    if user is None or user.is_deleted:
+        return jsonify({"error": "account not found"}), 404
+
+    if not user.email:
+        return jsonify({"error": "this account has no email address to verify"}), 400
+
+    if user.email_verified_at is not None:
+        return jsonify({"error": "this email is already verified"}), 409
+
+    window_start = utc_now() - RESEND_RATE_LIMIT_WINDOW
+    recent_request_count = EmailVerificationToken.query.filter(
+        EmailVerificationToken.user_id == user.id,
+        EmailVerificationToken.created_at >= window_start,
+    ).count()
+    if recent_request_count >= MAX_RESEND_REQUESTS_PER_WINDOW:
+        return (
+            jsonify({"error": "too many verification emails requested - please try again later"}),
+            429,
+        )
+
+    token_value = generate_verification_token()
+    verification_token = EmailVerificationToken(user_id=user.id, token=token_value)
+    db.session.add(verification_token)
+    db.session.commit()
+
+    send_verification_email(user.email, token_value)
+
+    response_body = {"message": "Verification email sent."}
+    # Same dev-only convenience as create_user's own first send - see
+    # that endpoint's comment for why this is debug-only.
+    if current_app.debug:
+        response_body["dev_verification_token"] = token_value
+
+    return jsonify(response_body), 200
 
 
 @users_bp.get("/<string:public_id>")

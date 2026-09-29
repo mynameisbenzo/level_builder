@@ -226,6 +226,50 @@ export async function verifyEmail(token: string): Promise<VerifyEmailResult> {
 	}
 }
 
+export interface ResendVerificationEmailResult {
+	success: boolean;
+	error?: string;
+	sessionExpired?: boolean;
+	/** True specifically for a 429 - lets the caller show "you've
+	 * already asked for this a few times" rather than a generic error,
+	 * without the caller needing to know the actual rate-limit numbers
+	 * (those live server-side in app/api/users.py). */
+	rateLimited?: boolean;
+}
+
+/**
+ * Calls POST /api/users/resend-verification-email - authenticated,
+ * self-only (see the backend docstring: there's no target user in the
+ * request at all, just the caller's own JWT). Issues a fresh token
+ * without invalidating whatever token the original signup email still
+ * carries, so an older unread email keeps working too.
+ */
+export async function resendVerificationEmail(
+	accessToken: string
+): Promise<ResendVerificationEmailResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/users/resend-verification-email`, {
+			method: 'POST',
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		if (response.ok) {
+			return { success: true };
+		}
+
+		const data = await response.json().catch(() => ({}));
+
+		return {
+			success: false,
+			sessionExpired: response.status === 401,
+			rateLimited: response.status === 429,
+			error: data.error ?? 'Could not send the verification email. Please try again.'
+		};
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
 export interface UpdateProfileResult {
 	success: boolean;
 	user?: CreatedUser;
@@ -442,11 +486,17 @@ export async function linkTwitchAccount(
 export interface LevelSummary {
 	id: string;
 	title: string;
-	visibility_state: 'draft' | 'testing' | 'published';
+	visibility_state: 'draft' | 'testing' | 'published' | 'unpublished';
 	/** False until a level's first publish - which is also the one moment
 	 * it gets named (see publishLevel). True from then on, even if a
 	 * later edit demotes visibility_state back to 'testing'. */
 	has_been_published: boolean;
+	/** Set only by deleteLevel, and only for a level that had already
+	 * been published (a never-published draft is hard-deleted instead,
+	 * so there's no row left to carry this flag). Terminal - no restore
+	 * action exists. visibility_state moves to 'unpublished' at the same
+	 * time this becomes true. */
+	is_deleted: boolean;
 	draft_content: LevelContent | null;
 	draft_beaten_at: string | null;
 	created_at: string | null;
@@ -615,6 +665,45 @@ export async function publishLevel(
 	}
 }
 
+export interface DeleteLevelResult {
+	success: boolean;
+	error?: string;
+	sessionExpired?: boolean;
+}
+
+/**
+ * Calls DELETE /api/levels/<slug>. What actually happens depends on the
+ * level's own state, entirely server-side - this function doesn't need
+ * to know which: a never-published draft is hard-deleted outright
+ * (gone, frees a draft-cap slot), while an already-published level is
+ * soft-deleted instead (stays in the caller's own list marked deleted,
+ * disappears from everyone else's view, no restore). Either way this
+ * resolves the same way - true on success - so the caller's job is
+ * just to refresh whatever level list it's showing afterward.
+ */
+export async function deleteLevel(slug: string, accessToken: string): Promise<DeleteLevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}`, {
+			method: 'DELETE',
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		if (response.status === 204) {
+			return { success: true };
+		}
+
+		const data = await response.json().catch(() => ({}));
+
+		return {
+			success: false,
+			sessionExpired: response.status === 401,
+			error: data.error ?? 'Could not delete the level. Please try again.'
+		};
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
 export interface PlayLevelResult {
 	success: boolean;
 	title?: string;
@@ -650,8 +739,9 @@ export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 export interface LevelListItem {
 	id: string;
 	title: string;
-	visibility_state: 'draft' | 'testing' | 'published';
+	visibility_state: 'draft' | 'testing' | 'published' | 'unpublished';
 	has_been_published: boolean;
+	is_deleted: boolean;
 	draft_beaten_at: string | null;
 	created_at: string | null;
 }

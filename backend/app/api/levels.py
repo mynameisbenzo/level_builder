@@ -238,6 +238,9 @@ def save_level(slug):
     if "title" in payload:
         return jsonify({"error": "a level's name is set when it's first published"}), 400
 
+    if level.is_deleted:
+        return jsonify({"error": "this level has been deleted and can no longer be edited"}), 409
+
     if "content" in payload:
         content = payload["content"]
         is_valid, content_error = validate_level_content(content)
@@ -281,6 +284,9 @@ def beat_level(slug):
         message, status = gate_error
         return jsonify({"error": message}), status
 
+    if level.is_deleted:
+        return jsonify({"error": "this level has been deleted and can no longer be played or edited"}), 409
+
     if level.draft_content is None:
         return jsonify({"error": "level has no content to beat yet"}), 400
 
@@ -322,6 +328,9 @@ def publish_level(slug):
     if gate_error is not None:
         message, status = gate_error
         return jsonify({"error": message}), status
+
+    if level.is_deleted:
+        return jsonify({"error": "this level has been deleted and can no longer be published"}), 409
 
     payload = request.get_json(silent=True) or {}
     is_first_publish = level.latest_published_version_id is None
@@ -422,6 +431,56 @@ def publish_level(slug):
     return jsonify(level_to_dict(level)), 200
 
 
+@levels_bp.delete("/<string:slug>")
+@jwt_required()
+def delete_level(slug):
+    """
+    One action that means two different things depending on the
+    level's state, rather than two separate endpoints - from the
+    owner's point of view it's the same intent ("I'm done with this")
+    either way:
+
+    - Never published (still just a draft): hard-deleted outright. The
+      row and its history (there is none - nothing publishes without
+      going through LevelVersion, which a draft never has) are gone for
+      good. This is what actually frees a MAX_DRAFT_LEVELS slot.
+
+    - Already published at least once: soft-deleted instead - is_deleted
+      is set, visibility_state moves to UNPUBLISHED, and the row plus
+      every LevelVersion snapshot stay in the database untouched. This
+      is deliberately NOT the same as save_level's demotion-to-TESTING
+      on an edit (that's a normal, reversible mid-progress state); this
+      is the owner saying they're done with it, permanently - there is
+      no restore action. It still counts toward MAX_PUBLISHED_TOTAL
+      forever: deleting a level doesn't refund its one-time contribution
+      to that lifetime cap, any more than never having played a game you
+      bought refunds its price.
+
+    Idempotency: deleting an already-soft-deleted level is rejected
+    (409) rather than silently succeeding again - there's nothing left
+    to do, and a client relying on this as a signal that its delete
+    action actually did something shouldn't get a false one.
+    """
+    level, error = _get_owned_level(slug)
+    if error is not None:
+        message, status = error
+        return jsonify({"error": message}), status
+
+    if level.is_deleted:
+        return jsonify({"error": "this level has already been deleted"}), 409
+
+    if level.latest_published_version_id is None:
+        db.session.delete(level)
+        db.session.commit()
+        return "", 204
+
+    level.is_deleted = True
+    level.visibility_state = LevelVisibilityState.UNPUBLISHED
+    db.session.commit()
+
+    return "", 204
+
+
 @levels_bp.get("/<string:slug>/play")
 def get_level_for_play(slug):
     """
@@ -438,7 +497,7 @@ def get_level_for_play(slug):
     publicly shareable once something is actually live under it.
     """
     level = Level.query.filter_by(slug=slug).first()
-    if level is None or level.latest_published_version_id is None:
+    if level is None or level.latest_published_version_id is None or level.is_deleted:
         return jsonify({"error": "level not found"}), 404
 
     version = db.session.get(LevelVersion, level.latest_published_version_id)
@@ -481,6 +540,7 @@ def list_levels_by_user(username):
     levels = (
         Level.query.filter_by(owner_id=user.id)
         .filter(Level.latest_published_version_id.isnot(None))
+        .filter(Level.is_deleted.is_(False))
         .order_by(Level.created_at.desc())
         .all()
     )

@@ -102,6 +102,19 @@ class Level(db.Model):
     # again, against whatever the draft currently is, every single time.
     draft_beaten_at = db.Column(db.DateTime, nullable=True)
 
+    # Owner-initiated, terminal removal - distinct from visibility_state
+    # alone: a level demoted to TESTING mid-edit or explicitly set to
+    # UNPUBLISHED some other way isn't necessarily "deleted" in the
+    # sense the creator meant to be done with it. DELETE
+    # /api/levels/<slug> is the only thing that ever sets this, and only
+    # for an already-published level (a never-published draft is hard-
+    # deleted instead - see that endpoint). No restore action exists;
+    # this stays True forever once set. Still counts toward
+    # MAX_PUBLISHED_TOTAL in publish_level - deleting a level doesn't
+    # free its slot, since it already consumed its one-time contribution
+    # to that lifetime cap, same as any other published level.
+    is_deleted = db.Column(db.Boolean, nullable=False, default=False)
+
     created_at = db.Column(db.DateTime, default=utc_now)
 
     owner = db.relationship("User", foreign_keys=[owner_id])

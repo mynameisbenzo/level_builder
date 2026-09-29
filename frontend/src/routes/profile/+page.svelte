@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { deleteAccount, listMyLevels, updateProfile, type LevelListItem } from '$lib/api';
+	import {
+		deleteAccount,
+		deleteLevel,
+		listMyLevels,
+		resendVerificationEmail,
+		updateProfile,
+		type LevelListItem
+	} from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { redirectToTwitchLink } from '$lib/twitch';
 	import { startNewLevel } from '$lib/startNewLevel';
@@ -48,6 +55,49 @@
 		}
 	}
 
+	// Per-level delete confirmation - only one level's confirm row is
+	// ever open at a time, tracked by slug rather than a boolean per
+	// level so opening one closes any other.
+	let levelPendingDeleteId: string | null = $state(null);
+	let deletingLevelId: string | null = $state(null);
+	let levelDeleteError = $state('');
+
+	function requestDeleteLevel(id: string) {
+		levelPendingDeleteId = id;
+		levelDeleteError = '';
+	}
+
+	function cancelDeleteLevel() {
+		levelPendingDeleteId = null;
+	}
+
+	async function confirmDeleteLevel(id: string) {
+		if (!auth.accessToken) return;
+
+		deletingLevelId = id;
+		levelDeleteError = '';
+
+		let result = await deleteLevel(id, auth.accessToken);
+		if (result.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			const refreshedToken = auth.accessToken;
+			if (refreshed && refreshedToken) {
+				result = await deleteLevel(id, refreshedToken);
+			}
+		}
+
+		deletingLevelId = null;
+
+		if (result.success) {
+			levelPendingDeleteId = null;
+			await loadMyLevels();
+		} else if (result.sessionExpired) {
+			goto('/login');
+		} else {
+			levelDeleteError = result.error ?? 'Could not delete the level. Please try again.';
+		}
+	}
+
 	// Level actions (create/edit/publish) require a verified email or a
 	// linked Twitch account - see _verification_gate in the backend's
 	// app/api/levels.py. Twitch-linked users are exempt regardless of
@@ -55,6 +105,44 @@
 	let needsVerification = $derived(
 		!!auth.user && !auth.user.email_verified_at && !auth.user.twitch_id
 	);
+
+	// "sent" stays true for the rest of the visit once a resend
+	// succeeds - there's no reason to let it re-fire immediately after
+	// a real send goes through, and the banner's copy makes clear
+	// checking the inbox (not clicking again) is the next step. A
+	// 429 from the backend's own rate limit gets a dedicated message
+	// rather than the generic error, since "you've already asked for
+	// this" is a different situation than something actually failing.
+	let resendStatus: 'idle' | 'sending' | 'sent' | 'error' | 'rate-limited' = $state('idle');
+	let resendError = $state('');
+
+	async function handleResendVerification() {
+		if (!auth.accessToken) return;
+
+		resendStatus = 'sending';
+		resendError = '';
+
+		let result = await resendVerificationEmail(auth.accessToken);
+		if (result.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			const refreshedToken = auth.accessToken;
+			if (refreshed && refreshedToken) {
+				result = await resendVerificationEmail(refreshedToken);
+			}
+		}
+
+		if (result.success) {
+			resendStatus = 'sent';
+		} else if (result.sessionExpired) {
+			goto('/login');
+		} else if (result.rateLimited) {
+			resendStatus = 'rate-limited';
+			resendError = result.error ?? 'Too many requests - please try again later.';
+		} else {
+			resendStatus = 'error';
+			resendError = result.error ?? 'Could not send the verification email. Please try again.';
+		}
+	}
 
 	let username = $state(auth.user?.username ?? '');
 	let hideEmail = $state(auth.user?.hide_email ?? false);
@@ -163,6 +251,20 @@
 					verification link from signup — or link a Twitch account below for the same access
 					without verifying your email.
 				</p>
+				{#if resendStatus === 'sent'}
+					<p class="note verify-note">Verification email sent — check your inbox.</p>
+				{:else}
+					{#if resendStatus === 'error' || resendStatus === 'rate-limited'}
+						<p class="error verify-note">{resendError}</p>
+					{/if}
+					<button
+						class="resend-button"
+						onclick={handleResendVerification}
+						disabled={resendStatus === 'sending' || resendStatus === 'rate-limited'}
+					>
+						{resendStatus === 'sending' ? 'Sending…' : 'Resend verification email'}
+					</button>
+				{/if}
 			</div>
 		{/if}
 
@@ -190,13 +292,54 @@
 			{:else if levels.length === 0}
 				<p class="note levels-status">You haven't created any levels yet.</p>
 			{:else}
+				{#if levelDeleteError}
+					<p class="error levels-status">{levelDeleteError}</p>
+				{/if}
 				<ul class="levels-list">
 					{#each levels as level (level.id)}
 						<li>
-							<a href="/edit/{level.id}">{level.title}</a>
-							<span class="visibility-badge" class:published={level.visibility_state === 'published'}>
-								{level.visibility_state}
-							</span>
+							<div class="level-row">
+								{#if level.is_deleted}
+									<span class="level-title deleted">{level.title}</span>
+								{:else}
+									<a class="level-title" href="/edit/{level.id}">{level.title}</a>
+								{/if}
+								<span
+									class="visibility-badge"
+									class:published={level.visibility_state === 'published'}
+									class:deleted={level.is_deleted}
+								>
+									{level.is_deleted ? 'deleted' : level.visibility_state}
+								</span>
+								{#if !level.is_deleted}
+									<button
+										class="delete-level-button"
+										onclick={() => requestDeleteLevel(level.id)}
+										disabled={deletingLevelId === level.id}
+									>
+										Delete
+									</button>
+								{/if}
+							</div>
+							{#if levelPendingDeleteId === level.id}
+								<div class="level-delete-confirm">
+									<p class="note">
+										{level.has_been_published
+											? "This level has already been published - deleting it can't be undone, and it stays counted toward your published-level limit."
+											: "This can't be undone."}
+									</p>
+									<div class="confirm-row">
+										<button
+											class="danger-button"
+											onclick={() => confirmDeleteLevel(level.id)}
+											disabled={deletingLevelId === level.id}
+										>
+											{deletingLevelId === level.id ? 'Deleting…' : 'Yes, delete'}
+										</button>
+										<button class="cancel-button" onclick={cancelDeleteLevel}>Cancel</button>
+									</div>
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -335,6 +478,29 @@
 		color: #ffe9a8;
 	}
 
+	.verify-note + .verify-note,
+	.verify-banner .resend-button {
+		margin-top: 12px;
+	}
+
+	.resend-button {
+		font-size: 0.85rem;
+		padding: 8px 14px;
+		color: #ffe9a8;
+		background: transparent;
+		border: 1px solid #ffd23f;
+	}
+
+	.resend-button:hover:not(:disabled) {
+		color: #3a301a;
+		background: #ffd23f;
+	}
+
+	.resend-button:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+
 	h1 {
 		font-family: 'Baloo 2', sans-serif;
 		font-weight: 700;
@@ -396,24 +562,37 @@
 	}
 
 	.levels-list li {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 12px;
 		padding: 10px 12px;
 		background: #1a1b3a;
 		border: 2px solid #3a3d76;
 		border-radius: 6px;
 	}
 
-	.levels-list a {
+	.level-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+	}
+
+	.level-title {
 		color: #f4f6ff;
 		text-decoration: none;
 		font-weight: 700;
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.levels-list a:hover {
+	a.level-title:hover {
 		color: #4ecb71;
+	}
+
+	.level-title.deleted {
+		color: #6b6f9e;
+		text-decoration: line-through;
 	}
 
 	.visibility-badge {
@@ -430,6 +609,37 @@
 	.visibility-badge.published {
 		color: #4ecb71;
 		border-color: #4ecb71;
+	}
+
+	.visibility-badge.deleted {
+		color: #ff8a7a;
+		border-color: #ff8a7a;
+	}
+
+	.delete-level-button {
+		flex-shrink: 0;
+		font-size: 0.8rem;
+		padding: 6px 12px;
+		color: #ff8a7a;
+		background: transparent;
+		border: 1px solid #6b3838;
+		box-shadow: none;
+	}
+
+	.delete-level-button:hover:not(:disabled) {
+		color: #f4f6ff;
+		background: #a83c3c;
+		border-color: #a83c3c;
+	}
+
+	.level-delete-confirm {
+		margin-top: 10px;
+		padding-top: 10px;
+		border-top: 1px solid #3a3d76;
+	}
+
+	.level-delete-confirm .note {
+		margin: 0 0 10px;
 	}
 
 	/* Overrides the red danger-zone color above - this heading isn't a

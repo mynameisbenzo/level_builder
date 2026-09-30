@@ -2,6 +2,12 @@
 	import { setTouchDirection, setTouchJump, requestModeToggle } from './touchInput';
 	import { currentMode } from './currentMode';
 
+	// Defaults to true (the editor's own "test my level" flow, which
+	// registers both scenes) - /play/[slug] passes false, since a public
+	// play-through has no Edit Mode to switch to at all (see
+	// gameConfig.ts and the matching guards in PlatformerScene).
+	let { allowModeToggle = true }: { allowModeToggle?: boolean } = $props();
+
 	function press(action: () => void) {
 		return (event: PointerEvent) => {
 			event.preventDefault();
@@ -49,13 +55,15 @@
 		</div>
 	{/if}
 
-	<button
-		class="btn btn-toggle"
-		aria-label="Switch between Play and Edit mode"
-		onpointerdown={press(() => requestModeToggle())}
-	>
-		⇄
-	</button>
+	{#if allowModeToggle}
+		<button
+			class="btn btn-toggle"
+			aria-label="Switch between Play and Edit mode"
+			onpointerdown={press(() => requestModeToggle())}
+		>
+			⇄
+		</button>
+	{/if}
 </div>
 
 <style>

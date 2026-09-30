@@ -3,8 +3,10 @@
 	import Phaser from 'phaser';
 	import { getLevelForPlay } from '$lib/api';
 	import { createGameConfig } from '$lib/game/gameConfig';
+	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
+	import LevelResultModal from './LevelResultModal.svelte';
 	import type { PageProps } from './$types';
 
 	let { params }: PageProps = $props();
@@ -16,6 +18,30 @@
 	let loadStatus: 'loading' | 'ready' | 'error' = $state('loading');
 	let loadError = $state('');
 	let title = $state('');
+	let ownerUsername = $state('');
+
+	// Set the moment a playthrough ends (win or death) - see
+	// LEVEL_BEATEN_EVENT/LEVEL_DIED_EVENT. null means no modal is
+	// showing, i.e. the game is still in progress.
+	let resultOutcome: 'won' | 'died' | null = $state(null);
+
+	function handleLevelBeaten() {
+		resultOutcome = 'won';
+	}
+
+	function handleLevelDied() {
+		resultOutcome = 'died';
+	}
+
+	function handleReplay() {
+		resultOutcome = null;
+		// create() resets every runtime field (hasWon, hasDied, position,
+		// collected keys, ...) on every (re)start, same as the editor's
+		// own "test my level" flow already relied on - restarting is
+		// what actually puts the player back at the level's real spawn
+		// point, not just closing the modal.
+		game?.scene.getScene('PlatformerScene')?.scene.restart();
+	}
 
 	onMount(async () => {
 		const result = await getLevelForPlay(slug);
@@ -27,6 +53,7 @@
 		}
 
 		title = result.title ?? '';
+		ownerUsername = result.ownerUsername ?? '';
 		loadStatus = 'ready';
 
 		// Same reasoning as /edit/[slug] - loadStatus just flipped to
@@ -44,9 +71,13 @@
 		game = new Phaser.Game(
 			createGameConfig(gameContainer, { startMode: 'play', content: result.content })
 		);
+		game.events.on(LEVEL_BEATEN_EVENT, handleLevelBeaten);
+		game.events.on(LEVEL_DIED_EVENT, handleLevelDied);
 	});
 
 	onDestroy(() => {
+		game?.events.off(LEVEL_BEATEN_EVENT, handleLevelBeaten);
+		game?.events.off(LEVEL_DIED_EVENT, handleLevelDied);
 		game?.destroy(true);
 	});
 </script>
@@ -67,9 +98,17 @@
 		</div>
 	{:else}
 		<div class="game-page">
-			<TouchControls />
+			<TouchControls allowModeToggle={false} />
 			<LandscapeGuard />
 			<div class="game-container" bind:this={gameContainer}></div>
+			{#if resultOutcome}
+				<LevelResultModal
+					outcome={resultOutcome}
+					{slug}
+					{ownerUsername}
+					onReplay={handleReplay}
+				/>
+			{/if}
 		</div>
 	{/if}
 {/key}

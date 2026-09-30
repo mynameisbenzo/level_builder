@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { logoutServer } from './api';
 	import { auth } from './auth.svelte';
 
@@ -8,6 +9,12 @@
 		if (refreshToken) {
 			logoutServer(refreshToken);
 		}
+		// Logging out from a page that assumes a logged-in user (profile,
+		// the editor) would otherwise leave that page rendered with a
+		// suddenly-anonymous auth state. The landing page is the one
+		// place that's always valid to land on regardless of where
+		// logout was clicked from.
+		goto('/');
 	}
 </script>
 

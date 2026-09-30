@@ -1,8 +1,10 @@
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models.level import Level, LevelVersion, LevelVisibilityState
+from app.models.level_rating import LevelRating
 from app.models.user import User
 from app.schemas.level import level_to_dict, level_to_summary_dict
 from app.services.level_content import default_level_content, validate_level_content
@@ -508,10 +510,94 @@ def get_level_for_play(slug):
                 "id": level.slug,
                 "title": level.title,
                 "content": version.content,
+                # The result modal's "Leave" action (see
+                # /play/[slug]/+page.svelte) routes back to the owner's
+                # public profile - it needs this to build that link, and
+                # has no other way to learn who owns a level it's only
+                # ever seen a slug for.
+                "owner_username": level.owner.username,
             }
         ),
         200,
     )
+
+
+@levels_bp.post("/<string:slug>/rate")
+@jwt_required()
+def rate_level(slug):
+    """
+    Records a thumbs-up or thumbs-down from the authenticated caller -
+    shown from the result modal after a public playthrough ends (win or
+    death), never from the editor's own test-play flow. Same lookup
+    rules as get_level_for_play: only a level that's actually live and
+    not deleted can be rated, and an unknown/unpublished/deleted slug
+    gets the same 404 either way.
+
+    Idempotent AND switchable per (level, user): rating the same level
+    again - even with the opposite value - updates this one row rather
+    than creating a second one or erroring, so the frontend never has
+    to track whether this is someone's first rating or a changed mind
+    before sending it. A no-op re-send of the same value is likewise
+    harmless.
+    """
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload.get("is_like"), bool):
+        return jsonify({"error": "is_like (true or false) is required"}), 400
+    is_like = payload["is_like"]
+
+    level = Level.query.filter_by(slug=slug).first()
+    if level is None or level.latest_published_version_id is None or level.is_deleted:
+        return jsonify({"error": "level not found"}), 404
+
+    user = User.query.filter_by(public_id=get_jwt_identity()).first()
+    if user is None or user.is_deleted:
+        return jsonify({"error": "account not found"}), 404
+
+    rating = LevelRating.query.filter_by(level_id=level.id, user_id=user.id).first()
+    if rating is None:
+        rating = LevelRating(level_id=level.id, user_id=user.id, is_like=is_like)
+        db.session.add(rating)
+    else:
+        rating.is_like = is_like
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Same race as create_user_row/update_user - two concurrent
+        # first-time ratings from the same person landing at once. The
+        # unique constraint is what actually prevents the duplicate
+        # row; this just keeps that race from surfacing as a 500. The
+        # loser of the race simply doesn't get its value recorded here
+        # - a negligible loss for a rating, not worth a full retry.
+        db.session.rollback()
+
+    return jsonify({"is_like": is_like}), 200
+
+
+@levels_bp.get("/<string:slug>/rating")
+@jwt_required()
+def get_own_rating(slug):
+    """
+    Returns the authenticated caller's own existing rating for this
+    level, if any - what the result modal reads on open so a returning
+    rater sees their previous like/dislike already highlighted instead
+    of both buttons looking unset. Same lookup rules as rate_level: an
+    unknown/unpublished/deleted slug gets a 404, not a hint about which
+    case it is. `is_like: null` (never a 404) means the level itself is
+    fine but this caller simply hasn't rated it yet - the modal treats
+    that exactly like "no selection yet", not an error.
+    """
+    level = Level.query.filter_by(slug=slug).first()
+    if level is None or level.latest_published_version_id is None or level.is_deleted:
+        return jsonify({"error": "level not found"}), 404
+
+    user = User.query.filter_by(public_id=get_jwt_identity()).first()
+    if user is None or user.is_deleted:
+        return jsonify({"error": "account not found"}), 404
+
+    rating = LevelRating.query.filter_by(level_id=level.id, user_id=user.id).first()
+
+    return jsonify({"is_like": rating.is_like if rating else None}), 200
 
 
 @levels_bp.get("/by-user/<string:username>")

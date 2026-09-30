@@ -708,6 +708,10 @@ export interface PlayLevelResult {
 	success: boolean;
 	title?: string;
 	content?: LevelContent;
+	/** Who published this level - the result modal's "Leave" action
+	 * (see /play/[slug]/+page.svelte) routes back to this person's
+	 * public profile. */
+	ownerUsername?: string;
 	error?: string;
 }
 
@@ -722,7 +726,98 @@ export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 			return { success: false, error: data.error ?? 'This level could not be found.' };
 		}
 
-		return { success: true, title: data.title, content: data.content };
+		return {
+			success: true,
+			title: data.title,
+			content: data.content,
+			ownerUsername: data.owner_username
+		};
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface RateLevelResult {
+	success: boolean;
+	error?: string;
+	sessionExpired?: boolean;
+}
+
+/**
+ * Calls POST /api/levels/<slug>/rate - the thumbs-up/thumbs-down from
+ * the result modal shown after a playthrough ends. Authenticated;
+ * idempotent AND switchable on the backend (rating again, even with
+ * the opposite value, updates the same row), so the caller doesn't
+ * need to track whether this is a first rating or a changed mind
+ * before sending it.
+ */
+export async function rateLevel(
+	slug: string,
+	isLike: boolean,
+	accessToken: string
+): Promise<RateLevelResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/rate`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				Authorization: `Bearer ${accessToken}`
+			},
+			body: JSON.stringify({ is_like: isLike })
+		});
+
+		if (response.ok) {
+			return { success: true };
+		}
+
+		const data = await response.json().catch(() => ({}));
+
+		return {
+			success: false,
+			sessionExpired: response.status === 401,
+			error: data.error ?? 'Could not send your rating. Please try again.'
+		};
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface GetLevelRatingResult {
+	success: boolean;
+	/** null means the level's fine but this caller hasn't rated it yet -
+	 * not an error, just "no existing rating to show". Undefined only
+	 * when success is false. */
+	isLike?: boolean | null;
+	error?: string;
+	sessionExpired?: boolean;
+}
+
+/**
+ * Calls GET /api/levels/<slug>/rating - the result modal's own previous
+ * rating for this level, if any, so it can open with that button already
+ * shown as selected instead of looking unset for a returning rater.
+ * Authenticated, same as rateLevel.
+ */
+export async function getLevelRating(
+	slug: string,
+	accessToken: string
+): Promise<GetLevelRatingResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/rating`, {
+			headers: { Authorization: `Bearer ${accessToken}` }
+		});
+
+		const data = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			return {
+				success: false,
+				sessionExpired: response.status === 401,
+				error: data.error ?? 'Could not load your rating.'
+			};
+		}
+
+		return { success: true, isLike: data.is_like };
 	} catch {
 		return { success: false, error: 'Could not reach the server. Please try again.' };
 	}

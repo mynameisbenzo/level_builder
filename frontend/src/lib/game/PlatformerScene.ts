@@ -30,6 +30,17 @@ import {
  * during a long editing session (see gameConfig.ts).
  */
 export const LEVEL_BEATEN_EVENT = 'level-beaten';
+
+/**
+ * Same game-wide emission pattern as LEVEL_BEATEN_EVENT, for the other
+ * end of a playthrough: falling off screen with nowhere to bounce back
+ * to (see triggerDeath). Only ever fires in a public /play/[slug]
+ * session - an owner testing their own level in the editor keeps the
+ * old "bounce back to Edit Mode" behavior instead (see the
+ * LevelEditorScene checks in update()), which was already a fine
+ * outcome for that case and didn't need a modal of its own.
+ */
+export const LEVEL_DIED_EVENT = 'level-died';
 import { canFloat, canPhase, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
@@ -160,6 +171,13 @@ const DOOR_INTERACTION_DISTANCE = 32;
 // How long "Level Cleared!" stays on screen before returning to the
 // Editor.
 const WIN_DISPLAY_DURATION_MS = 2000;
+// How long a public /play/[slug] playthrough waits, after either ending
+// (win or death), before the result modal appears - deliberate breathing
+// room for a win/death sound to play out first, rather than the modal
+// slamming down the instant the door opens or the player falls off
+// screen. Applies to both triggerWin() and triggerDeath() so the two
+// endings feel consistent with each other.
+const RESULT_MODAL_DELAY_MS = 4000;
 
 // Explicit render depths (Phaser defaults everything to 0 and draws by
 // creation order otherwise, which put doors - created after the player -
@@ -255,6 +273,10 @@ export class PlatformerScene extends Phaser.Scene {
 	 * longest delay any currently-collected key could need. */
 	private playerPositionHistory: { x: number; y: number }[] = [];
 	private hasWon = false;
+	/** Only ever set in a public /play/[slug] session - see
+	 * LEVEL_DIED_EVENT. An owner testing in the editor bounces back to
+	 * Edit Mode on death instead and never sets this. */
+	private hasDied = false;
 	/** Runtime-only, reset each session like everything else above -
 	 * whether the player is currently using the float ability (see
 	 * shouldStartFloating/shouldStopFloating in movement.ts). */
@@ -317,6 +339,7 @@ export class PlatformerScene extends Phaser.Scene {
 		// true, so update() would return on its very first line - no
 		// movement, not even Tab - on every session after the first win.
 		this.hasWon = false;
+		this.hasDied = false;
 		this.wasPadJumpButtonDown = false;
 		this.wasTouchJumpDown = false;
 		this.collectedKeyColors = new Set();
@@ -538,13 +561,20 @@ export class PlatformerScene extends Phaser.Scene {
 			.setDepth(HUD_DEPTH)
 			.setScrollFactor(0);
 
-		this.add
-			.text(68, 26, 'Tab: switch to Edit Mode', {
-				font: '14px monospace',
-				color: '#aaaaaa'
-			})
-			.setDepth(HUD_DEPTH)
-			.setScrollFactor(0);
+		// Only shown when there's actually somewhere to toggle to. A
+		// public /play/[slug] session never registers LevelEditorScene at
+		// all (see gameConfig.ts) - a stranger playing someone else's
+		// level has no edit mode to switch to, so telling them about a
+		// Tab shortcut that does nothing would just be confusing.
+		if (this.scene.get('LevelEditorScene')) {
+			this.add
+				.text(68, 26, 'Tab: switch to Edit Mode', {
+					font: '14px monospace',
+					color: '#aaaaaa'
+				})
+				.setDepth(HUD_DEPTH)
+				.setScrollFactor(0);
+		}
 
 		this.gamepadStatusText = this.add
 			.text(10, 68, '', { font: '14px monospace', color: '#ffffff' })
@@ -825,16 +855,32 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 		playSfx(this, 'win');
 
-		// Only in an owner's own edit/test session - /play/[slug] (a
-		// stranger playing someone else's published level) never
-		// registers LevelEditorScene at all (see gameConfig.ts), so this
-		// naturally never fires there. Reaching the win condition on a
-		// public play-through isn't a "beat" in the sense that matters
-		// for publishing - it's just someone playing an already-live
-		// level.
+		// Always emitted, in both contexts - /edit/[slug]'s page listens
+		// for this to call the beat API (only meaningful there), and
+		// /play/[slug]'s page listens for the same event to show its
+		// result modal (only meaningful there). Each page owns its own
+		// separate Phaser game instance, so there's no cross-talk between
+		// the two - emitting unconditionally just means whichever page
+		// is actually hosting this scene hears it. This used to be
+		// gated behind an editor-scene check (a public play-through
+		// "isn't a beat that matters for publishing"), which was true
+		// for the beat-API purpose but also meant a public win never
+		// told the page anything at all - nothing ever showed the result
+		// modal, so the level just sat on "Level Cleared!" forever.
+		//
+		// The public path delays this the same way triggerDeath() delays
+		// LEVEL_DIED_EVENT - room for a win sound to play before the modal
+		// covers the screen. The editor's own listener just records the
+		// beat and isn't shown anything timed off this event, so it keeps
+		// firing immediately rather than waiting on a delay that exists
+		// for the result modal's sake.
 		const editorScene = this.scene.get('LevelEditorScene');
 		if (editorScene) {
 			this.game.events.emit(LEVEL_BEATEN_EVENT);
+		} else {
+			this.time.delayedCall(RESULT_MODAL_DELAY_MS, () => {
+				this.game.events.emit(LEVEL_BEATEN_EVENT);
+			});
 		}
 
 		this.add
@@ -860,6 +906,33 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
+	 * The public-play-only death path (see update()'s LevelEditorScene
+	 * check) - freezes the player where they fell and emits
+	 * LEVEL_DIED_EVENT for the hosting Svelte page to react to. Doesn't
+	 * restart the scene itself: the result modal that event triggers
+	 * offers Replay as an explicit action (which does restart it, via
+	 * the same scene.restart() create() already resets everything for),
+	 * rather than yanking the level back to its start the instant
+	 * someone dies.
+	 */
+	private triggerDeath() {
+		this.hasDied = true;
+		playSfx(this, 'death');
+		this.player.setVelocity(0, 0);
+		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+		if (body) {
+			body.allowGravity = false;
+		}
+		// The freeze above happens right away (update() already returns
+		// early every frame once hasDied is true), but the modal itself
+		// waits - room for a death sound/animation to actually play
+		// before the screen gets covered by a result modal.
+		this.time.delayedCall(RESULT_MODAL_DELAY_MS, () => {
+			this.game.events.emit(LEVEL_DIED_EVENT);
+		});
+	}
+
+	/**
 	 * Engages the float ability: disables gravity so the oscillating
 	 * velocity applied in update() (see getFloatVelocity) isn't fighting
 	 * gravity's own contribution each frame, same reasoning as the win
@@ -882,21 +955,42 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	update(time: number, delta: number) {
-		if (this.hasWon) {
+		if (this.hasWon || this.hasDied) {
 			return;
 		}
 
-		if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
-			clearModeTogglePressed();
-			const nextMode = toggleMode(CURRENT_MODE);
-			this.scene.start(getSceneKeyForMode(nextMode));
-			return;
+		// Both the Tab key and the mobile toggle button only make sense
+		// when there's actually an Edit Mode to switch to - see the HUD
+		// text's own guard in create() for the same reasoning. A public
+		// /play/[slug] session never registers LevelEditorScene, so this
+		// whole block is simply inert there rather than trying to start
+		// a scene that doesn't exist.
+		if (this.scene.get('LevelEditorScene')) {
+			if (Phaser.Input.Keyboard.JustDown(this.toggleKey) || touchInputState.modeTogglePressed) {
+				clearModeTogglePressed();
+				const nextMode = toggleMode(CURRENT_MODE);
+				this.scene.start(getSceneKeyForMode(nextMode));
+				return;
+			}
 		}
 
 		if (hasFallenOffScreen(this.player.y, WORLD_HEIGHT, FALL_OFF_SCREEN_THRESHOLD_PX)) {
-			playSfx(this, 'death');
-			const nextMode = toggleMode(CURRENT_MODE);
-			this.scene.start(getSceneKeyForMode(nextMode));
+			if (this.scene.get('LevelEditorScene')) {
+				// Owner testing their own level in the editor - unchanged
+				// from before, same bounce back to Edit Mode.
+				playSfx(this, 'death');
+				const nextMode = toggleMode(CURRENT_MODE);
+				this.scene.start(getSceneKeyForMode(nextMode));
+				return;
+			}
+
+			// Public /play/[slug] session: there's no Edit Mode to bounce
+			// to (this used to try starting a scene that was never
+			// registered, which is why a stranger dying on someone else's
+			// level used to land on an empty screen instead of anything
+			// useful). Freeze in place and let the hosting Svelte page
+			// react to LEVEL_DIED_EVENT with a real result modal instead.
+			this.triggerDeath();
 			return;
 		}
 

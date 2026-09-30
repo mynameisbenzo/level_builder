@@ -2,6 +2,7 @@ from app.api.levels import MAX_DRAFT_LEVELS, MAX_PUBLISHED_TOTAL, MAX_TITLE_LENG
 from app.extensions import db
 from app.main import create_app
 from app.models.level import Level, LevelVersion
+from app.models.level_rating import LevelRating
 from app.utils.time import utc_now
 
 
@@ -374,6 +375,7 @@ def test_play_endpoint_serves_the_published_content_with_no_auth():
         body = response.get_json()
         assert body["title"] == "My Level"
         assert body["content"]["spawnPosition"] == {"x": 112, "y": 112}
+        assert body["owner_username"] == "creator"
 
 
 def test_play_endpoint_returns_404_for_a_never_published_level():
@@ -991,3 +993,320 @@ def test_published_total_cap_does_not_count_another_users_levels():
         response = _publish(client, token_b, level_b["id"], title="B's first level")
 
         assert response.status_code == 200
+
+# --- delete: a never-published draft is hard-deleted ---
+
+
+def test_deleting_a_never_published_draft_removes_it_entirely():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Throwaway")
+
+        response = client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+        assert response.status_code == 204
+
+        get_response = client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+        assert get_response.status_code == 404
+
+
+def test_deleting_a_draft_frees_a_draft_cap_slot():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+
+        levels = [_create_level(client, token, title=f"Draft {i}") for i in range(MAX_DRAFT_LEVELS)]
+        blocked_response = client.post(
+            "/api/levels", json={"title": "One too many"}, headers=_auth_headers(token)
+        )
+        assert blocked_response.status_code == 409
+
+        client.delete(f"/api/levels/{levels[0]['id']}", headers=_auth_headers(token))
+
+        freed_response = client.post(
+            "/api/levels", json={"title": "Fits now"}, headers=_auth_headers(token)
+        )
+        assert freed_response.status_code == 201
+
+
+# --- delete: an already-published level is soft-deleted instead ---
+
+
+def test_deleting_a_published_level_soft_deletes_it():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Going away")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Going away")
+
+        response = client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+        assert response.status_code == 204
+
+        # The row itself survives - the owner can still see it, marked
+        # deleted, unlike a hard-deleted draft's clean 404.
+        get_response = client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+        assert get_response.status_code == 200
+        body = get_response.get_json()
+        assert body["is_deleted"] is True
+        assert body["visibility_state"] == "unpublished"
+
+
+def test_a_soft_deleted_level_disappears_from_public_endpoints():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client, "deletepublisher", "dp@example.com")
+        level = _create_level(client, token, title="Was Public")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Was Public")
+
+        # Confirm it's actually visible before deleting, so the
+        # assertions below prove deletion caused the disappearance.
+        assert client.get(f"/api/levels/{level['id']}/play").status_code == 200
+        assert len(client.get("/api/levels/by-user/deletepublisher").get_json()) == 1
+
+        client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+
+        assert client.get(f"/api/levels/{level['id']}/play").status_code == 404
+        assert client.get("/api/levels/by-user/deletepublisher").get_json() == []
+
+
+def test_a_soft_deleted_level_cannot_be_saved_beaten_or_published():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Locked After Deletion")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Locked After Deletion")
+        client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+
+        save_response = client.patch(
+            f"/api/levels/{level['id']}", json={"content": _valid_content()}, headers=_auth_headers(token)
+        )
+        assert save_response.status_code == 409
+
+        beat_response = client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        assert beat_response.status_code == 409
+
+        publish_response = client.post(
+            f"/api/levels/{level['id']}/publish", headers=_auth_headers(token)
+        )
+        assert publish_response.status_code == 409
+
+
+def test_deleting_a_published_level_does_not_free_its_published_cap_slot():
+    """
+    Confirms the explicit design decision: a soft-deleted level keeps
+    counting toward MAX_PUBLISHED_TOTAL forever - deleting it doesn't
+    refund the lifetime slot it already consumed by being published.
+    """
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+
+        level = _create_level(client, token, title="Uses a slot")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Uses a slot")
+        # This level (1) + its one version (1) = 2 toward the cap so far.
+        _pad_version_count_to(app, level["id"], MAX_PUBLISHED_TOTAL - 2)
+        # Now exactly at the cap: 1 level + (MAX_PUBLISHED_TOTAL - 1) versions = MAX_PUBLISHED_TOTAL.
+
+        client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+
+        new_level = _create_level(client, token, title="Should still be blocked")
+        client.post(f"/api/levels/{new_level['id']}/beat", headers=_auth_headers(token))
+        response = _publish(client, token, new_level["id"], title="Should still be blocked")
+
+        assert response.status_code == 409
+
+
+def test_deleting_an_already_deleted_level_is_rejected():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token, title="Only once")
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Only once")
+        client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+
+        response = client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
+
+        assert response.status_code == 409
+
+
+def test_deleting_someone_elses_level_is_not_found():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner1", "owner1@example.com")
+        level = _create_level(client, owner_token, title="Not yours")
+
+        other_token = _signup_and_login(app, client, "other1", "other1@example.com")
+        response = client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(other_token))
+
+        assert response.status_code == 404
+
+
+# --- like: a thumbs-up from the result modal ---
+
+
+def test_rating_a_level_requires_authentication():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client)
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        response = client.post(f"/api/levels/{level['id']}/rate", json={"is_like": True})
+
+        assert response.status_code == 401
+
+
+def test_rating_a_level_with_a_like_succeeds():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner2", "owner2@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        rater_token = _signup_and_login(app, client, "rater", "rater@example.com")
+        response = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": True}, headers=_auth_headers(rater_token)
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["is_like"] is True
+
+
+def test_rating_a_level_with_a_dislike_succeeds():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner2b", "owner2b@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        rater_token = _signup_and_login(app, client, "rater0", "rater0@example.com")
+        response = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": False}, headers=_auth_headers(rater_token)
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["is_like"] is False
+
+
+def test_rating_a_level_twice_with_the_same_value_is_a_no_op_not_an_error():
+    """
+    The frontend doesn't track whether a click is someone's first
+    rating or a repeat - the endpoint has to be safe to call more than
+    once for the same (level, user) pair without erroring or creating a
+    second row.
+    """
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner3", "owner3@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        rater_token = _signup_and_login(app, client, "rater2", "rater2@example.com")
+        first = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": True}, headers=_auth_headers(rater_token)
+        )
+        second = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": True}, headers=_auth_headers(rater_token)
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+
+        with app.app_context():
+            rating_count = LevelRating.query.filter_by(
+                level_id=_internal_level_id(level["id"])
+            ).count()
+        assert rating_count == 1
+
+
+def test_switching_a_rating_from_like_to_dislike_updates_the_same_row():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner3b", "owner3b@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        rater_token = _signup_and_login(app, client, "rater2b", "rater2b@example.com")
+        client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": True}, headers=_auth_headers(rater_token)
+        )
+        switched = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": False}, headers=_auth_headers(rater_token)
+        )
+
+        assert switched.status_code == 200
+        assert switched.get_json()["is_like"] is False
+
+        with app.app_context():
+            ratings = LevelRating.query.filter_by(level_id=_internal_level_id(level["id"])).all()
+        assert len(ratings) == 1
+        assert ratings[0].is_like is False
+
+
+def test_rating_a_level_without_is_like_returns_400():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner3c", "owner3c@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        response = client.post(f"/api/levels/{level['id']}/rate", headers=_auth_headers(owner_token))
+
+        assert response.status_code == 400
+
+
+def test_rating_an_unpublished_level_returns_404():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner4", "owner4@example.com")
+        level = _create_level(client, owner_token)
+
+        response = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": True}, headers=_auth_headers(owner_token)
+        )
+
+        assert response.status_code == 404
+
+
+def test_rating_an_unknown_slug_returns_404():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+
+        response = client.post(
+            "/api/levels/NOPE-NOPE-NOPE-NOPE/rate", json={"is_like": True}, headers=_auth_headers(token)
+        )
+
+        assert response.status_code == 404
+
+
+def test_rating_a_deleted_level_returns_404():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner5", "owner5@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+        client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(owner_token))
+
+        rater_token = _signup_and_login(app, client, "rater3", "rater3@example.com")
+        response = client.post(
+            f"/api/levels/{level['id']}/rate", json={"is_like": True}, headers=_auth_headers(rater_token)
+        )
+
+        assert response.status_code == 404
+
+
+def _internal_level_id(slug: str) -> int:
+    return Level.query.filter_by(slug=slug).first().id

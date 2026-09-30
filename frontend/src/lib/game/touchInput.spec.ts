@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
 	clearModeTogglePressed,
 	requestModeToggle,
+	setTouchDash,
 	setTouchDirection,
+	setTouchDuck,
 	setTouchJump,
 	touchInputState
 } from './touchInput';
@@ -11,6 +13,8 @@ beforeEach(() => {
 	touchInputState.left = false;
 	touchInputState.right = false;
 	touchInputState.jump = false;
+	touchInputState.dash = false;
+	touchInputState.duck = false;
 	touchInputState.modeTogglePressed = false;
 });
 
@@ -40,6 +44,24 @@ describe('setTouchJump', () => {
 		expect(touchInputState.jump).toBe(true);
 		setTouchJump(false);
 		expect(touchInputState.jump).toBe(false);
+	});
+});
+
+describe('setTouchDash', () => {
+	it('sets dash pressed and released independently of other state', () => {
+		setTouchDash(true);
+		expect(touchInputState.dash).toBe(true);
+		setTouchDash(false);
+		expect(touchInputState.dash).toBe(false);
+	});
+});
+
+describe('setTouchDuck', () => {
+	it('sets duck pressed and released independently of other state', () => {
+		setTouchDuck(true);
+		expect(touchInputState.duck).toBe(true);
+		setTouchDuck(false);
+		expect(touchInputState.duck).toBe(false);
 	});
 });
 

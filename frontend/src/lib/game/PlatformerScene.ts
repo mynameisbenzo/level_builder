@@ -1006,7 +1006,7 @@ export class PlatformerScene extends Phaser.Scene {
 			: 1;
 
 		// EXPERIMENTAL (purple's phase ability, on its own branch).
-		const isDashHeld = this.dashKey.isDown;
+		const isDashHeld = this.dashKey.isDown || touchInputState.dash;
 		if (hasRisingEdge(isDashHeld, this.wasDashHeldLastFrame)) {
 			this.dashHeldSinceTime = time;
 		}
@@ -1096,7 +1096,7 @@ export class PlatformerScene extends Phaser.Scene {
 		// animation here) and jumping (airborne, i.e. not onGround) are
 		// the only two additional pose inputs; getPlayerPose applies the
 		// actual priority between them (see movement.ts).
-		const isDucking = this.wasd.s.isDown || this.arrows.down.isDown;
+		const isDucking = this.wasd.s.isDown || this.arrows.down.isDown || touchInputState.duck;
 		const pose = getPlayerPose(onGround, isDucking, velocityX);
 
 		if (pose !== this.currentPose) {

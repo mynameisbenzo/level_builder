@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { setTouchDirection, setTouchJump, requestModeToggle } from './touchInput';
+	import {
+		setTouchDirection,
+		setTouchJump,
+		setTouchDash,
+		setTouchDuck,
+		requestModeToggle
+	} from './touchInput';
 	import { currentMode } from './currentMode';
 
 	// Defaults to true (the editor's own "test my level" flow, which
@@ -51,6 +57,26 @@
 				onpointerleave={press(() => setTouchJump(false))}
 			>
 				▲
+			</button>
+			<button
+				class="btn btn-round btn-dash"
+				aria-label="Dash"
+				onpointerdown={press(() => setTouchDash(true))}
+				onpointerup={press(() => setTouchDash(false))}
+				onpointercancel={press(() => setTouchDash(false))}
+				onpointerleave={press(() => setTouchDash(false))}
+			>
+				»
+			</button>
+			<button
+				class="btn btn-round btn-duck"
+				aria-label="Duck"
+				onpointerdown={press(() => setTouchDuck(true))}
+				onpointerup={press(() => setTouchDuck(false))}
+				onpointercancel={press(() => setTouchDuck(false))}
+				onpointerleave={press(() => setTouchDuck(false))}
+			>
+				▼
 			</button>
 		</div>
 	{/if}
@@ -119,10 +145,30 @@
 
 .cluster-right {
 	right: calc(12px + env(safe-area-inset-right, 0px));
+	/* Backwards-L layout: top-left cell left empty, jump top-right, dash
+	   and duck along the bottom - rather than a plain row, so dash/duck
+	   sit closer to the thumb's natural resting position below jump. */
+	display: grid;
+	grid-template-columns: repeat(2, 56px);
+	grid-template-rows: repeat(2, 56px);
 }
 
 .btn-jump {
+	grid-column: 2;
+	grid-row: 1;
 	background: rgba(255, 107, 107, 0.7);
+}
+
+.btn-dash {
+	grid-column: 1;
+	grid-row: 2;
+	background: rgba(255, 210, 63, 0.7);
+}
+
+.btn-duck {
+	grid-column: 2;
+	grid-row: 2;
+	background: rgba(107, 155, 255, 0.7);
 }
 
 .btn-toggle {

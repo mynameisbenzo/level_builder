@@ -155,6 +155,11 @@
 	let deleteStatus: 'idle' | 'deleting' | 'error' = $state('idle');
 	let deleteError = $state('');
 
+	// Which pane the left sidebar shows - Levels is the default landing
+	// view per the redesign spec; Account groups the three
+	// identity/danger cards that used to always be stacked below Levels.
+	let activeTab: 'levels' | 'account' = $state('levels');
+
 	onMount(() => {
 		if (!auth.isLoggedIn) {
 			goto('/login');
@@ -244,30 +249,49 @@
 
 {#if auth.user}
 	<main>
-		{#if needsVerification}
-			<div class="card verify-banner">
-				<p class="note verify-note">
-					Verify your email to create, edit, or publish levels. Check your inbox for the
-					verification link from signup — or link a Twitch account below for the same access
-					without verifying your email.
-				</p>
-				{#if resendStatus === 'sent'}
-					<p class="note verify-note">Verification email sent — check your inbox.</p>
-				{:else}
-					{#if resendStatus === 'error' || resendStatus === 'rate-limited'}
-						<p class="error verify-note">{resendError}</p>
-					{/if}
-					<button
-						class="resend-button"
-						onclick={handleResendVerification}
-						disabled={resendStatus === 'sending' || resendStatus === 'rate-limited'}
-					>
-						{resendStatus === 'sending' ? 'Sending…' : 'Resend verification email'}
-					</button>
-				{/if}
-			</div>
-		{/if}
+		<nav class="sidebar">
+			<button
+				class="tab-button"
+				class:active={activeTab === 'levels'}
+				onclick={() => (activeTab = 'levels')}
+			>
+				Levels
+			</button>
+			<button
+				class="tab-button"
+				class:active={activeTab === 'account'}
+				onclick={() => (activeTab = 'account')}
+			>
+				Account
+			</button>
+		</nav>
 
+		<div class="content">
+			{#if needsVerification}
+				<div class="card verify-banner">
+					<p class="note verify-note">
+						Verify your email to create, edit, or publish levels. Check your inbox for the
+						verification link from signup — or link a Twitch account below for the same access
+						without verifying your email.
+					</p>
+					{#if resendStatus === 'sent'}
+						<p class="note verify-note">Verification email sent — check your inbox.</p>
+					{:else}
+						{#if resendStatus === 'error' || resendStatus === 'rate-limited'}
+							<p class="error verify-note">{resendError}</p>
+						{/if}
+						<button
+							class="resend-button"
+							onclick={handleResendVerification}
+							disabled={resendStatus === 'sending' || resendStatus === 'rate-limited'}
+						>
+							{resendStatus === 'sending' ? 'Sending…' : 'Resend verification email'}
+						</button>
+					{/if}
+				</div>
+			{/if}
+
+			{#if activeTab === 'levels'}
 		<div class="card">
 			<h2 class="new-level-heading">Levels</h2>
 			<p class="note">Start building a new level.</p>
@@ -345,7 +369,7 @@
 				</ul>
 			{/if}
 		</div>
-
+			{:else}
 		<div class="card">
 			<h1>Your account</h1>
 			{#if auth.user}
@@ -440,10 +464,12 @@
 						Cancel
 					</button>
 				</div>
+				{/if}
+			</div>
 			{/if}
-		</div>
-	</main>
-{/if}
+			</div>
+		</main>
+	{/if}
 
 <style>
 	:global(body) {
@@ -452,12 +478,81 @@
 	}
 
 	main {
-		max-width: 480px;
+		max-width: 880px;
 		margin: 0 auto;
 		padding: 48px 24px;
 		display: flex;
+		align-items: flex-start;
+		gap: 32px;
+	}
+
+	.sidebar {
+		flex-shrink: 0;
+		width: 180px;
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		position: sticky;
+		top: 24px;
+	}
+
+	.tab-button {
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 1rem;
+		text-align: left;
+		color: #c7cbef;
+		background: transparent;
+		border: 2px solid transparent;
+		border-radius: 8px;
+		padding: 12px 16px;
+		box-shadow: none;
+		transition:
+			background 0.15s ease,
+			color 0.15s ease,
+			border-color 0.15s ease;
+	}
+
+	.tab-button:hover {
+		background: #252650;
+		color: #f4f6ff;
+	}
+
+	.tab-button.active {
+		background: #252650;
+		border-color: #4ecb71;
+		color: #4ecb71;
+	}
+
+	.content {
+		flex: 1;
+		min-width: 0;
+		max-width: 480px;
+		display: flex;
 		flex-direction: column;
 		gap: 24px;
+	}
+
+	@media (max-width: 640px) {
+		main {
+			flex-direction: column;
+		}
+
+		.sidebar {
+			position: static;
+			flex-direction: row;
+			width: 100%;
+		}
+
+		.tab-button {
+			flex: 1;
+			text-align: center;
+		}
+
+		.content {
+			max-width: none;
+			width: 100%;
+		}
 	}
 
 	.card {

@@ -173,8 +173,17 @@
 
 .btn-toggle {
 	position: fixed;
-	top: calc(16px + env(safe-area-inset-top, 0px));
-	right: calc(16px + env(safe-area-inset-right, 0px));
+	/* allowModeToggle is only ever true on pages that also render the
+	   Save/Cancel navbar above the game canvas (play/+page.svelte,
+	   edit/[slug]/+page.svelte - see the allowModeToggle prop comment
+	   above) - that navbar is ~56px tall (the same figure those pages'
+	   own .game-page height already accounts for), and this button is
+	   position: fixed to the viewport, not to .game-page's own local
+	   coordinate space, so it doesn't get pushed down by the navbar's
+	   normal document flow the way the canvas below it does. Cleared
+	   explicitly here instead. */
+	top: calc(56px + env(safe-area-inset-top, 0px) + 10px);
+	right: calc(10px + env(safe-area-inset-right, 0px));
 	width: 48px;
 	height: 48px;
 	border-radius: 8px;

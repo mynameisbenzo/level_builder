@@ -297,9 +297,24 @@
 	.game-container {
 		width: 100%;
 		height: 100%;
+		/* touch-action isn't inherited from .game-page above - measured
+		   directly in a real browser, the computed touch-action on this
+		   element and the canvas inside it was still "auto" despite
+		   .game-page's "none", which is exactly what let a touch-drag on
+		   the canvas fall through to the browser's own text-selection
+		   gesture. Repeated here and on the canvas itself (below) rather
+		   than trusted to cascade down. */
+		touch-action: none;
+		user-select: none;
+		-webkit-user-select: none;
+		-webkit-touch-callout: none;
 	}
 
 	.game-container :global(canvas) {
 		display: block;
+		touch-action: none;
+		user-select: none;
+		-webkit-user-select: none;
+		-webkit-touch-callout: none;
 	}
 </style>

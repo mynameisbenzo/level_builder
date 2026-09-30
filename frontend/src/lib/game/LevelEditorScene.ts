@@ -96,6 +96,17 @@ const CURRENT_MODE: GameMode = 'edit';
 const GRID_COLOR = 0x333344;
 const BACKGROUND_COLOR = 0x14141f;
 
+// Every toolbar/picker element (anything scroll-factor-0, i.e. fixed to the
+// screen rather than the world) gets this depth explicitly. Without it,
+// Phaser falls back to add-order for draw order - fine at scene startup,
+// but ground tiles, doors, keys, and swap objects are all added *after*
+// the toolbar and keep getting added throughout the session as the level
+// is built, so without an explicit depth they'd render on top of
+// whatever toolbar UI happens to overlap them on screen. World objects
+// (tiles, the player, doors, keys, swap objects, selection borders) are
+// left at Phaser's default depth (0), which is always below this.
+const TOOLBAR_DEPTH = 500;
+
 // Mouse-based edge-scroll panning, active only in 'navigate' interaction
 // mode (see EditorInteractionMode) - hovering within this many pixels of
 // a viewport edge scrolls the camera in that direction, continuously, at
@@ -217,9 +228,23 @@ export class LevelEditorScene extends Phaser.Scene {
 		return (this.isTouchDevice ? 155 : 115) / 2;
 	}
 
+	/** Whether the main toolbar (and whichever bottom-row picker is
+	 * currently armed) is showing at all - controlled by the single
+	 * expand/collapse button (see createToolbarExpandToggle), independent
+	 * of which tool or picker is selected underneath. Starts collapsed:
+	 * a brand-new session opens on a clear canvas with just that one
+	 * button, not the full toolbar. Collapsing does NOT reset anything
+	 * armed for placement (selected tool, selected win-condition item,
+	 * etc.) - only the visuals hide, so the areas the toolbar used to
+	 * cover become placeable again while whatever was already selected
+	 * stays selected. */
+	private isToolbarExpanded = false;
+	private toolbarExpandButton!: Phaser.GameObjects.Text;
+
 	private isInstructionsModalOpen = false;
 	private instructionsModalElements: (Phaser.GameObjects.GameObject &
-		Phaser.GameObjects.Components.ScrollFactor)[] = [];
+		Phaser.GameObjects.Components.ScrollFactor &
+		Phaser.GameObjects.Components.Depth)[] = [];
 
 	// Drag placement state. Orientation is undetermined at the start of a
 	// gesture and locks to whichever axis the pointer first moves along -
@@ -374,6 +399,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		currentMode.set(CURRENT_MODE);
 		this.activeGroupKeys = null;
 		this.interactionMode = 'edit';
+		this.isToolbarExpanded = false;
 		this.isTouchDevice = this.sys.game.device.input.touch;
 
 		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
@@ -381,10 +407,15 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
 		this.drawGrid();
 
+		this.createToolbarExpandToggle();
+
 		const openInstructionsButton = this.add
-			.text(10, 10, '[?] Instructions', { font: this.toolbarFontSize + ' monospace', color: '#ffffff' })
+			.text(10, 10 + this.toolbarRowHeight, '[?] Instructions', {
+				font: this.toolbarFontSize + ' monospace',
+				color: '#ffffff'
+			})
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
 		openInstructionsButton.on('pointerdown', () => this.openInstructionsModal());
 		this.persistentToolbarElements.push(openInstructionsButton);
@@ -400,7 +431,13 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.createStartingCharacterToolbar();
 		this.createWinConditionToolbar();
 		this.createDoorKeyColorPicker();
-		this.refreshStylePickerVisibility();
+
+		// Applies the collapsed starting state to everything created above
+		// in one pass - every create*Toolbar() call already ran its own
+		// narrower refresh, but those only account for isOpen flags, not
+		// isToolbarExpanded, and persistentToolbarElements (created as
+		// visible by default) haven't been touched at all yet.
+		this.refreshToolbarVisibility();
 
 		this.refreshSwapObjectImages();
 		this.refreshDoorImages();
@@ -597,10 +634,82 @@ export class LevelEditorScene extends Phaser.Scene {
 		if (this.isInstructionsModalOpen) {
 			return true;
 		}
+		// The guard strip only exists while the toolbar is actually shown -
+		// collapsed, there's nothing to click through to, so every area it
+		// used to cover (including the space right under the expand
+		// button itself) is fair game for placement again.
+		if (!this.isToolbarExpanded) {
+			return false;
+		}
 		if (screenY <= this.topUiGuardHeight) {
 			return true;
 		}
 		return false;
+	}
+
+	/**
+	 * Whether the main toolbar and any armed bottom-row picker should
+	 * actually be rendered right now - both the expand/collapse toggle and
+	 * Navigate mode (where nothing toolbar-related is usable) gate this.
+	 * Every toolbar/picker visibility method below reads this rather than
+	 * checking isToolbarExpanded directly, so Navigate mode continues to
+	 * hide everything toolbar-related exactly as it already did.
+	 */
+	private isToolbarUiVisible(): boolean {
+		return this.interactionMode === 'edit' && this.isToolbarExpanded;
+	}
+
+	/**
+	 * The single button that shows/hides the entire toolbar - the main
+	 * tools row, the top-right mode toggles, and whichever bottom-row
+	 * picker is currently armed (character-swap, starting-character,
+	 * win-condition, door-key-color, or style). Deliberately its own
+	 * top-level object, not part of persistentToolbarElements, so it stays
+	 * visible and clickable while collapsed - otherwise there'd be no way
+	 * to bring the toolbar back. Depth is set explicitly so it always
+	 * renders above placed tiles/objects, the same way the instructions
+	 * modal already does by virtue of being added later.
+	 */
+	private createToolbarExpandToggle() {
+		this.toolbarExpandButton = this.add
+			.text(10, 10, this.toolbarExpandLabel(), {
+				font: this.toolbarFontSize + ' monospace',
+				color: '#ffd23f'
+			})
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0)
+			.setDepth(TOOLBAR_DEPTH);
+
+		this.toolbarExpandButton.on('pointerdown', () => {
+			this.isToolbarExpanded = !this.isToolbarExpanded;
+			this.toolbarExpandButton.setText(this.toolbarExpandLabel());
+			this.refreshToolbarVisibility();
+		});
+	}
+
+	private toolbarExpandLabel(): string {
+		return this.isToolbarExpanded ? '[x] Hide Toolbar' : '[\u2630] Show Toolbar';
+	}
+
+	/**
+	 * Applies the current expand/collapse (and Navigate-mode) state to
+	 * every toolbar-related element at once: the always-on toolbar
+	 * elements (persistentToolbarElements) plus every bottom-row picker's
+	 * own visibility, each of which independently checks
+	 * isToolbarUiVisible(). None of this resets any armed selection - only
+	 * visuals change; see isToolbarExpanded's own comment for why that
+	 * matters.
+	 */
+	private refreshToolbarVisibility() {
+		const visible = this.isToolbarUiVisible();
+		for (const element of this.persistentToolbarElements) {
+			element.setVisible(visible);
+		}
+		this.refreshCharacterSwapToolbarVisibility();
+		this.refreshStartingCharacterPickerVisibility();
+		this.refreshWinConditionToolbarVisibility();
+		this.refreshDoorKeyColorPickerVisibility();
+		this.refreshStylePickerVisibility();
 	}
 
 	/**
@@ -701,7 +810,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		this.instructionsModalElements = [backdrop, panelBg, title, closeButton, ...lineTexts];
 		for (const element of this.instructionsModalElements) {
-			element.setScrollFactor(0);
+			element.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		}
 	}
 
@@ -725,12 +834,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		const selectBorder = this.add
 			.rectangle(startX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		const selectIcon = this.add
 			.image(startX, y, SELECT_CURSOR_ICON_KEY)
 			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		selectIcon.on('pointerdown', () => this.setEditorTool('select'));
 		this.toolButtons.push({ tool: 'select', hitArea: selectIcon, border: selectBorder });
 
@@ -738,12 +847,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		const eraserBorder = this.add
 			.rectangle(eraserX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		const eraserIcon = this.add
 			.image(eraserX, y, ERASER_ICON_KEY)
 			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		eraserIcon.on('pointerdown', () => this.setEditorTool('eraser'));
 		this.toolButtons.push({ tool: 'eraser', hitArea: eraserIcon, border: eraserBorder });
 
@@ -751,14 +860,14 @@ export class LevelEditorScene extends Phaser.Scene {
 		const swapBorder = this.add
 			.rectangle(swapX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		// No dedicated tool icon exists for this - reusing one color's
 		// swap-object frame as a representative icon.
 		const swapIcon = this.add
 			.image(swapX, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame('beige'))
 			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		swapIcon.on('pointerdown', () => this.setEditorTool('characterSwap'));
 		this.toolButtons.push({ tool: 'characterSwap', hitArea: swapIcon, border: swapBorder });
 
@@ -766,14 +875,14 @@ export class LevelEditorScene extends Phaser.Scene {
 		const winConditionBorder = this.add
 			.rectangle(winConditionX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		// No dedicated tool icon exists for this category either - reusing
 		// the no-key door's frame as a representative icon.
 		const winConditionIcon = this.add
 			.image(winConditionX, y, TILES_ATLAS_KEY, DOOR_NO_KEY_CLOSED_FRAME)
 			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		winConditionIcon.on('pointerdown', () => this.setEditorTool('winCondition'));
 		this.toolButtons.push({
 			tool: 'winCondition',
@@ -788,12 +897,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		const startingCharBorder = this.add
 			.rectangle(startingCharX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.startingCharacterButtonIcon = this.add
 			.image(startingCharX, y, TILES_ATLAS_KEY, getPlayerHudFrame(ensureStartingPlayerColor(this)))
 			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.startingCharacterButtonIcon.on('pointerdown', () => this.toggleStartingCharacterPicker());
 
 		for (const button of this.toolButtons) {
@@ -905,13 +1014,15 @@ export class LevelEditorScene extends Phaser.Scene {
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
 				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, getCharacterSwapObjectFrame(color))
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+
+			image.on('pointerdown', () => this.selectSwapColor(color));
 
 			image.on('pointerdown', () => this.selectSwapColor(color));
 
@@ -935,7 +1046,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * placeable, any number of times.
 	 */
 	private refreshCharacterSwapToolbarVisibility() {
-		const isOpen = this.isCharacterSwapPickerOpen;
+		const isOpen = this.isCharacterSwapPickerOpen && this.isToolbarUiVisible();
 
 		for (const swatch of this.characterSwapSwatches) {
 			swatch.image.setVisible(isOpen);
@@ -1065,13 +1176,15 @@ export class LevelEditorScene extends Phaser.Scene {
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
 				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, getPlayerHudFrame(color))
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+
+			image.on('pointerdown', () => this.selectStartingCharacterColor(color));
 
 			image.on('pointerdown', () => this.selectStartingCharacterColor(color));
 
@@ -1089,20 +1202,21 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * objects' colors must always be distinct.
 	 */
 	private refreshStartingCharacterPickerVisibility() {
+		const isOpen = this.isStartingCharacterPickerOpen && this.isToolbarUiVisible();
 		const currentColor = ensureStartingPlayerColor(this);
 		const usedByObjects = new Set(this.getPlacedSwapObjects().map((object) => object.color));
 
 		for (const swatch of this.startingCharacterSwatches) {
-			swatch.image.setVisible(this.isStartingCharacterPickerOpen);
-			swatch.border.setVisible(this.isStartingCharacterPickerOpen);
+			swatch.image.setVisible(isOpen);
+			swatch.border.setVisible(isOpen);
 
 			const isTakenByObject = usedByObjects.has(swatch.color) && swatch.color !== currentColor;
-			if (this.isStartingCharacterPickerOpen && !isTakenByObject) {
+			if (isOpen && !isTakenByObject) {
 				swatch.image.setInteractive({ useHandCursor: true });
 				swatch.image.setAlpha(1);
 			} else {
 				swatch.image.disableInteractive();
-				swatch.image.setAlpha(this.isStartingCharacterPickerOpen ? 0.3 : 1);
+				swatch.image.setAlpha(isOpen ? 0.3 : 1);
 			}
 
 			swatch.border.setStrokeStyle(3, swatch.color === currentColor ? 0xffd23f : 0x666666);
@@ -1150,12 +1264,12 @@ export class LevelEditorScene extends Phaser.Scene {
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
 				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, frame)
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 			image.on('pointerdown', () => this.selectWinConditionItem(item));
 
 			return { item, image, border };
@@ -1181,7 +1295,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private refreshWinConditionToolbarVisibility() {
-		const isOpen = this.isWinConditionPickerOpen;
+		const isOpen = this.isWinConditionPickerOpen && this.isToolbarUiVisible();
 		for (const swatch of this.winConditionSwatches) {
 			swatch.image.setVisible(isOpen);
 			swatch.border.setVisible(isOpen);
@@ -1404,12 +1518,12 @@ export class LevelEditorScene extends Phaser.Scene {
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
 				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, getKeyFrame(color))
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 			image.on('pointerdown', () => this.selectDoorKeyColor(color));
 
 			return { color, image, border };
@@ -1419,7 +1533,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private refreshDoorKeyColorPickerVisibility() {
-		const isOpen = this.selectedDoorForKeyConfig !== null;
+		const isOpen = this.selectedDoorForKeyConfig !== null && this.isToolbarUiVisible();
 		const currentDoor = this.selectedDoorForKeyConfig
 			? this.getPlacedDoors().find(
 					(door) =>
@@ -1472,7 +1586,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			})
 			.setOrigin(1, 0)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.persistentToolbarElements.push(this.uiModeToggleButton);
 
 		this.uiModeToggleButton.on('pointerdown', () => {
@@ -1500,7 +1614,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			})
 			.setOrigin(1, 0)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.persistentToolbarElements.push(this.cameraModeToggleButton);
 
 		this.cameraModeToggleButton.on('pointerdown', () => {
@@ -1523,7 +1637,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			})
 			.setOrigin(1, 0)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
 		this.interactionModeToggleButton.on('pointerdown', () => this.toggleInteractionMode());
 	}
@@ -1551,7 +1665,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			})
 			.setOrigin(1, 0)
 			.setInteractive({ useHandCursor: true })
-			.setScrollFactor(0);
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.persistentToolbarElements.push(this.fullscreenToggleButton);
 
 		this.fullscreenToggleButton.on('pointerdown', () => {
@@ -1584,17 +1698,19 @@ export class LevelEditorScene extends Phaser.Scene {
 	private toggleInteractionMode() {
 		this.interactionMode = this.interactionMode === 'edit' ? 'navigate' : 'edit';
 		this.interactionModeToggleButton.setText(this.interactionModeLabel(this.interactionMode));
+		this.toolbarExpandButton.setVisible(this.interactionMode === 'edit');
 
-		const showToolbar = this.interactionMode === 'edit';
-		for (const element of this.persistentToolbarElements) {
-			element.setVisible(showToolbar);
-		}
-		if (!showToolbar) {
+		if (this.interactionMode === 'navigate') {
 			// Entering Navigate mode - nothing toolbar-related is usable
 			// there, so close whichever swatch picker (if any) happened
-			// to be open.
+			// to be open. Unlike a plain collapse, this actually resets
+			// what's armed - Navigate is a genuine mode switch, not a
+			// "just hide the UI for a moment" action. isToolbarExpanded
+			// itself is left alone, so returning to Edit mode restores
+			// whichever expand/collapse state the user had before.
 			this.closeAllBottomRowPickers();
 		}
+		this.refreshToolbarVisibility();
 	}
 
 	private getStylePickerMode(): StylePickerMode {
@@ -1614,9 +1730,10 @@ export class LevelEditorScene extends Phaser.Scene {
 	 */
 	private refreshStylePickerVisibility() {
 		const hasSelection = this.activeGroupKeys !== null && this.activeGroupKeys.length > 0;
+		const uiVisible = this.isToolbarUiVisible();
 		const mode = this.getStylePickerMode();
 
-		const toolbarVisible = hasSelection && mode === 'toolbar';
+		const toolbarVisible = hasSelection && uiVisible && mode === 'toolbar';
 		for (const swatch of this.styleSwatches) {
 			swatch.image.setVisible(toolbarVisible);
 			swatch.border.setVisible(toolbarVisible);
@@ -1630,7 +1747,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.refreshSwatchHighlight();
 		}
 
-		const radialVisible = hasSelection && mode === 'radial';
+		const radialVisible = hasSelection && uiVisible && mode === 'radial';
 		if (radialVisible) {
 			// Always close-then-reopen rather than leaving a stale instance
 			// in place, so the highlighted style is never out of date after
@@ -1659,13 +1776,13 @@ export class LevelEditorScene extends Phaser.Scene {
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
 				.setStrokeStyle(3, 0x666666)
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
 			const image = this.add
 				.image(x, y, TILES_ATLAS_KEY, GROUND_TILE_FRAME_SETS[style].single)
 				.setDisplaySize(swatchSize, swatchSize)
 				.setInteractive({ useHandCursor: true })
-				.setScrollFactor(0);
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
 			image.on('pointerdown', () => this.applyStyleToActiveGroup(style));
 

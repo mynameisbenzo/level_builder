@@ -33,54 +33,6 @@ what's been built and what's left, phase by phase.
 
 > **Windows note:** this project uses `psycopg[binary]` (not `psycopg2-binary`) specifically to avoid native-compile issues on Windows. Keep the pinned version in `requirements.txt`.
 
-## Project structure
-level-builder/
-├── backend/ # Flask API
-│ ├── app/
-│ │ ├── main.py # create_app() factory, landing page route
-│ │ ├── config.py # Testing/Development/Production config
-│ │ ├── extensions.py # shared Flask-SQLAlchemy instance
-│ │ ├── templates/ # Jinja - portfolio landing page
-│ │ └── models/ # SQLAlchemy models
-│ ├── tests/
-│ ├── requirements.txt
-│ └── requirements-dev.txt
-├── frontend/ # SvelteKit app
-│ ├── static/assets/
-│ │ ├── kenney/ # Kenney platformer pack (sprites, tiles, sfx)
-│ │ └── icons/ # Eraser + select-tool cursor icons
-│ └── src/
-│ ├── lib/
-│ │ ├── api.ts # backend API client
-│ │ └── game/ # Phaser scenes + supporting logic:
-│ │ ├── PlatformerScene.ts # Play mode
-│ │ ├── LevelEditorScene.ts # Edit mode (default scene)
-│ │ ├── movement.ts # pure input/physics/pose logic (tested)
-│ │ ├── gridSnap.ts # grid snapping + drag fill (tested)
-│ │ ├── groundTiling.ts # auto-tiling + platform run logic (tested)
-│ │ ├── placedObjects.ts # placed-tile data, selection, group merge (tested)
-│ │ ├── characterSwapObjects.ts # floating swap-object logic (tested)
-│ │ ├── winConditions.ts # door win-condition logic (tested)
-│ │ ├── keys.ts # key entity logic (tested)
-│ │ ├── camera.ts # world/viewport sizing, quadrant + edge-scroll math (tested)
-│ │ ├── geometry.ts # shared distance-check utility (tested)
-│ │ ├── sounds.ts # SFX loading, mute/volume settings (tested)
-│ │ ├── tools.ts # editor tool constants
-│ │ ├── atlases.ts # raw texture/atlas/icon loading
-│ │ ├── playerColor.ts # player color selection + frame mappings (tested)
-│ │ ├── playerPose.ts # pose config, hitbox bounds, walk animation
-│ │ ├── playerState.ts # position carryover (tested)
-│ │ ├── mode.ts # Play/Edit mode logic (tested)
-│ │ ├── touchInput.ts # mobile touch input state (tested)
-│ │ ├── currentMode.ts # Svelte store for active mode
-│ │ ├── TouchControls.svelte # on-screen mobile buttons
-│ │ └── LandscapeGuard.svelte # portrait-mode block screen
-│ └── routes/
-│ └── play/ # the game itself
-├── .github/workflows/ # CI: backend-ci.yml, frontend-ci.yml
-├── render.yaml # Render Blueprint (backend + frontend)
-└── .python-version # pins Python 3.10.13 via pyenv
-
 ## Backend setup
 
 ```bash

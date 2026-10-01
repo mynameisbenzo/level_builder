@@ -30,11 +30,8 @@ services:
       - www.pixelmaker.win
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://pixelmaker.win/api
+        value: https://level-builder-backend.onrender.com
     routes:
-      - type: rewrite
-        source: /api/*
-        destination: https://level-builder-backend.onrender.com/api/:splat
       - type: rewrite
         source: /*
         destination: /index.html

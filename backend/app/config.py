@@ -49,6 +49,29 @@ class Config:
     TWITCH_CLIENT_ID = os.environ.get("TWITCH_CLIENT_ID", "")
     TWITCH_CLIENT_SECRET = os.environ.get("TWITCH_CLIENT_SECRET", "")
 
+    # Object storage for level thumbnail screenshots (see
+    # app/services/thumbnails.py) - any S3-compatible provider works
+    # through the same boto3 client (AWS S3, Cloudflare R2, Backblaze
+    # B2, DigitalOcean Spaces, MinIO for local dev), distinguished only
+    # by which endpoint/region/credentials it's pointed at. Left blank
+    # means thumbnail uploads are silently skipped (see publish_level)
+    # rather than the app refusing to start - not every environment
+    # (local dev, CI) needs a real bucket configured.
+    THUMBNAIL_S3_BUCKET = os.environ.get("THUMBNAIL_S3_BUCKET", "")
+    # Omit for real AWS S3 (boto3's own default endpoint is used).
+    # Required for every other S3-compatible provider, e.g.
+    # https://<account_id>.r2.cloudflarestorage.com for Cloudflare R2.
+    THUMBNAIL_S3_ENDPOINT_URL = os.environ.get("THUMBNAIL_S3_ENDPOINT_URL", "")
+    THUMBNAIL_S3_REGION = os.environ.get("THUMBNAIL_S3_REGION", "auto")
+    THUMBNAIL_S3_ACCESS_KEY_ID = os.environ.get("THUMBNAIL_S3_ACCESS_KEY_ID", "")
+    THUMBNAIL_S3_SECRET_ACCESS_KEY = os.environ.get("THUMBNAIL_S3_SECRET_ACCESS_KEY", "")
+    # The base URL thumbnails are actually SERVED from once uploaded -
+    # not always derivable from the bucket/endpoint above (a custom
+    # domain or CDN in front of the bucket, or R2's distinct public
+    # bucket URL, all differ from the upload endpoint itself), so this
+    # is set independently rather than assumed from the other settings.
+    THUMBNAIL_S3_PUBLIC_BASE_URL = os.environ.get("THUMBNAIL_S3_PUBLIC_BASE_URL", "")
+
     # Randomly generated per process if not set - safe for local dev/
     # testing (a restart just means existing JWTs stop validating, no
     # real consequence), but this must never be relied on in production,

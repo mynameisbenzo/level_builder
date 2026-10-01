@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
 	import Phaser from 'phaser';
-	import { getLevelForPlay } from '$lib/api';
+	import { getLevelForPlay, recordLevelCompletion, recordLevelPlay } from '$lib/api';
 	import { createGameConfig } from '$lib/game/gameConfig';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import TouchControls from '$lib/game/TouchControls.svelte';
@@ -27,6 +27,10 @@
 
 	function handleLevelBeaten() {
 		resultOutcome = 'won';
+		// Best-effort, fire-and-forget - a metrics call failing shouldn't
+		// block or interrupt the win screen the player is already looking
+		// at (see recordLevelCompletion's own comment).
+		void recordLevelCompletion(slug);
 	}
 
 	function handleLevelDied() {
@@ -41,6 +45,9 @@
 		// what actually puts the player back at the level's real spawn
 		// point, not just closing the modal.
 		game?.scene.getScene('PlatformerScene')?.scene.restart();
+		// A conscious "Play Again" is a genuine new attempt at the level,
+		// same as the very first load below - counted the same way.
+		void recordLevelPlay(slug);
 	}
 
 	onMount(async () => {
@@ -73,6 +80,10 @@
 		);
 		game.events.on(LEVEL_BEATEN_EVENT, handleLevelBeaten);
 		game.events.on(LEVEL_DIED_EVENT, handleLevelDied);
+
+		// The level actually loaded and a real playthrough is starting -
+		// counted the same way as a later "Play Again" (see handleReplay).
+		void recordLevelPlay(slug);
 	});
 
 	onDestroy(() => {

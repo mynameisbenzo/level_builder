@@ -107,17 +107,28 @@ def _validate_placed_objects(value) -> str | None:
     for i, obj in enumerate(value):
         if not isinstance(obj, dict):
             return f"placedObjects[{i}] must be an object"
-        if obj.get("type") != "ground":
-            return f"placedObjects[{i}].type must be \"ground\""
+
+        object_type = obj.get("type")
+        if object_type not in ("ground", "hazard"):
+            return f'placedObjects[{i}].type must be "ground" or "hazard"'
 
         error = _validate_xy(obj, f"placedObjects[{i}]")
         if error:
             return error
 
-        if obj.get("style") not in GROUND_TILE_STYLES:
-            return f"placedObjects[{i}].style must be one of: {', '.join(sorted(GROUND_TILE_STYLES))}"
-        if not isinstance(obj.get("groupId"), str) or not obj.get("groupId"):
-            return f"placedObjects[{i}].groupId must be a non-empty string"
+        if object_type == "ground":
+            if obj.get("style") not in GROUND_TILE_STYLES:
+                return f"placedObjects[{i}].style must be one of: {', '.join(sorted(GROUND_TILE_STYLES))}"
+            if not isinstance(obj.get("groupId"), str) or not obj.get("groupId"):
+                return f"placedObjects[{i}].groupId must be a non-empty string"
+        else:
+            # Hazard tiles carry no style or grouping - every hazard tile
+            # is the same fixed sprite, and hazards never merge into
+            # multi-tile platforms the way ground tiles do (see
+            # frontend/src/lib/game/placedObjects.ts's HazardPlacedObject).
+            extra_keys = set(obj.keys()) - {"type", "x", "y"}
+            if extra_keys:
+                return f"placedObjects[{i}] (a hazard) must not have: {', '.join(sorted(extra_keys))}"
 
     return None
 

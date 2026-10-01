@@ -500,10 +500,16 @@ export interface LevelSummary {
 	draft_content: LevelContent | null;
 	draft_beaten_at: string | null;
 	created_at: string | null;
+	/** A screenshot of this level's latest published version's initial
+	 * state in play mode, captured client-side at publish time (see
+	 * captureLevelThumbnail.ts). Null until a level's first successful
+	 * publish with a thumbnail - capture and upload are both
+	 * best-effort, so this can stay null indefinitely even for a
+	 * published level. */
+	thumbnail_url: string | null;
 }
 
-export interface LevelResult {
-	success: boolean;
+export interface LevelResult {	success: boolean;
 	level?: LevelSummary;
 	error?: string;
 	sessionExpired?: boolean;
@@ -633,20 +639,36 @@ export async function beatLevel(slug: string, accessToken: string): Promise<Leve
  * it gets named) and must be omitted for every later one - a published
  * level's name can't be changed. The backend applies it in the same
  * transaction as the publish itself, so a rejected publish never names
- * anything. */
+ * anything.
+ *
+ * thumbnail is optional - a `data:image/png;base64,...` string from
+ * captureLevelThumbnail.ts, the level's initial state in play mode.
+ * Best-effort on both ends: omitted entirely if capture failed
+ * client-side, and never something the backend lets block a publish
+ * that's otherwise valid if the upload itself fails server-side (see
+ * publish_level). */
 export async function publishLevel(
 	slug: string,
 	accessToken: string,
-	title?: string
+	title?: string,
+	thumbnail?: string
 ): Promise<LevelResult> {
 	try {
+		const body: Record<string, unknown> = {};
+		if (title !== undefined) {
+			body.title = title;
+		}
+		if (thumbnail) {
+			body.thumbnail = thumbnail;
+		}
+
 		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/publish`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
 				Authorization: `Bearer ${accessToken}`
 			},
-			body: JSON.stringify(title === undefined ? {} : { title })
+			body: JSON.stringify(body)
 		});
 
 		const data = await response.json().catch(() => ({}));
@@ -732,6 +754,52 @@ export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 			content: data.content,
 			ownerUsername: data.owner_username
 		};
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+export interface RecordLevelPlayResult {
+	success: boolean;
+	error?: string;
+}
+
+/**
+ * Calls POST /api/levels/<slug>/play - public, no auth. Records one
+ * real playthrough attempt (distinct from GET .../play above, which
+ * only ever serves content). Called once a playthrough's content has
+ * actually loaded, and again on every "Play Again" - each is a
+ * separate attempt at the level, not just a page view. Best-effort:
+ * a failure here shouldn't block or interrupt the player, so callers
+ * generally just fire this and don't surface its error.
+ */
+export async function recordLevelPlay(slug: string): Promise<RecordLevelPlayResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/play`, { method: 'POST' });
+		if (response.ok) {
+			return { success: true };
+		}
+		const data = await response.json().catch(() => ({}));
+		return { success: false, error: data.error ?? 'Could not record this play.' };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+/**
+ * Calls POST /api/levels/<slug>/complete - public, no auth. Records a
+ * completion the moment LEVEL_BEATEN_EVENT fires during a real
+ * playthrough. Same best-effort reasoning as recordLevelPlay - never
+ * something the player needs to wait on or be told about.
+ */
+export async function recordLevelCompletion(slug: string): Promise<RecordLevelPlayResult> {
+	try {
+		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/complete`, { method: 'POST' });
+		if (response.ok) {
+			return { success: true };
+		}
+		const data = await response.json().catch(() => ({}));
+		return { success: false, error: data.error ?? 'Could not record this completion.' };
 	} catch {
 		return { success: false, error: 'Could not reach the server. Please try again.' };
 	}
@@ -839,6 +907,19 @@ export interface LevelListItem {
 	is_deleted: boolean;
 	draft_beaten_at: string | null;
 	created_at: string | null;
+	/** Lifetime counts of real, public playthroughs - never moved by the
+	 * editor's own test-play loop (draft_beaten_at above), only by a
+	 * genuine visit to /play/<slug>. Zero on a level nobody's played. */
+	play_count: number;
+	completion_count: number;
+	/** completion_count / play_count, or null when play_count is 0 -
+	 * null (not 0) is what distinguishes "nobody's played this yet"
+	 * from "everybody who did failed every time". */
+	completion_rate: number | null;
+	like_count: number;
+	dislike_count: number;
+	/** Same as LevelSummary's own field above - see its doc comment. */
+	thumbnail_url: string | null;
 }
 
 export interface ListLevelsResult {

@@ -322,7 +322,14 @@
 				<ul class="levels-list">
 					{#each levels as level (level.id)}
 						<li>
-							<div class="level-row">
+							<div class="level-item">
+								{#if level.thumbnail_url}
+									<img class="level-thumbnail" src={level.thumbnail_url} alt="" loading="lazy" />
+								{:else}
+									<div class="level-thumbnail level-thumbnail-placeholder" aria-hidden="true"></div>
+								{/if}
+								<div class="level-main">
+									<div class="level-row">
 								{#if level.is_deleted}
 									<span class="level-title deleted">{level.title}</span>
 								{:else}
@@ -345,6 +352,24 @@
 									</button>
 								{/if}
 							</div>
+							{#if level.has_been_published}
+								<div class="level-metrics">
+									<span class="metric"
+										>{level.play_count} {level.play_count === 1 ? 'play' : 'plays'}</span
+									>
+									<span class="metric"
+										>{level.completion_count}
+										{level.completion_count === 1 ? 'completion' : 'completions'}</span
+									>
+									<span class="metric">
+										{level.completion_rate === null
+											? 'no completion rate yet'
+											: `${Math.round(level.completion_rate * 100)}% completion rate`}
+									</span>
+									<span class="metric metric-likes">👍 {level.like_count}</span>
+									<span class="metric metric-dislikes">👎 {level.dislike_count}</span>
+								</div>
+							{/if}
 							{#if levelPendingDeleteId === level.id}
 								<div class="level-delete-confirm">
 									<p class="note">
@@ -364,12 +389,14 @@
 									</div>
 								</div>
 							{/if}
+								</div>
+							</div>
 						</li>
 					{/each}
 				</ul>
 			{/if}
 		</div>
-			{:else}
+		{:else}
 		<div class="card">
 			<h1>Your account</h1>
 			{#if auth.user}
@@ -464,12 +491,12 @@
 						Cancel
 					</button>
 				</div>
-				{/if}
-			</div>
 			{/if}
-			</div>
-		</main>
-	{/if}
+		</div>
+		{/if}
+		</div>
+	</main>
+{/if}
 
 <style>
 	:global(body) {
@@ -663,6 +690,40 @@
 		border-radius: 6px;
 	}
 
+	.level-item {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+	}
+
+	.level-thumbnail {
+		flex-shrink: 0;
+		width: 84px;
+		height: 63px;
+		border-radius: 4px;
+		border: 1px solid #3a3d76;
+		background: #14152c;
+		object-fit: cover;
+	}
+
+	.level-thumbnail-placeholder {
+		/* No capture yet for this level (never published, or the
+		   best-effort screenshot just didn't come through) - a plain
+		   blank tile rather than leaving a gap where the image would be. */
+		background: repeating-linear-gradient(
+			135deg,
+			#14152c,
+			#14152c 8px,
+			#1a1b3a 8px,
+			#1a1b3a 16px
+		);
+	}
+
+	.level-main {
+		flex: 1;
+		min-width: 0;
+	}
+
 	.level-row {
 		display: flex;
 		align-items: center;
@@ -725,6 +786,28 @@
 		color: #f4f6ff;
 		background: #a83c3c;
 		border-color: #a83c3c;
+	}
+
+	.level-metrics {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 14px;
+		margin-top: 8px;
+		padding-top: 8px;
+		border-top: 1px solid #3a3d76;
+	}
+
+	.metric {
+		font-size: 0.78rem;
+		color: #9498d1;
+	}
+
+	.metric-likes {
+		color: #4ecb71;
+	}
+
+	.metric-dislikes {
+		color: #ff8a7a;
 	}
 
 	.level-delete-confirm {

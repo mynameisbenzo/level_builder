@@ -68,3 +68,26 @@ export function ensureSelectCursorIcon(scene: Phaser.Scene) {
 
 	scene.load.image(SELECT_CURSOR_ICON_KEY, SELECT_CURSOR_ICON_PATH);
 }
+
+export const HAZARD_ATLAS_KEY = 'hazards';
+
+/**
+ * Queues the Kenney industrial-platform spritesheet atlas for loading if
+ * it isn't already registered - a separate atlas from TILES_ATLAS_KEY's
+ * spritesheet-tiles-default.png, since the one frame used from it
+ * (platformIndustrial_052.png, a spike strip - see HAZARD_TILE_FRAME in
+ * placedObjects.ts) only exists in this Kenney industrial-pack sheet,
+ * not in the default tileset. Same guarded pattern as the other ensure*
+ * loaders - safe to call from multiple scenes' preload().
+ */
+export function ensureHazardAtlas(scene: Phaser.Scene) {
+	if (scene.textures.exists(HAZARD_ATLAS_KEY)) {
+		return;
+	}
+
+	scene.load.atlasXML(
+		HAZARD_ATLAS_KEY,
+		'/assets/kenney/platformer-pack/Spritesheets/platformIndustrial_sheet.png',
+		'/assets/kenney/platformer-pack/Spritesheets/platformIndustrial_sheet.xml'
+	);
+}

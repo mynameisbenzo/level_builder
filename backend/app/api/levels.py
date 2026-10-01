@@ -1,5 +1,6 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
@@ -8,6 +9,7 @@ from app.models.level_rating import LevelRating
 from app.models.user import User
 from app.schemas.level import level_to_dict, level_to_summary_dict
 from app.services.level_content import default_level_content, validate_level_content
+from app.services.thumbnails import ThumbnailError, upload_level_thumbnail
 from app.utils.time import utc_now
 
 levels_bp = Blueprint("levels", __name__, url_prefix="/api/levels")
@@ -105,6 +107,36 @@ def _get_owned_level(slug: str) -> tuple[Level | None, tuple[str, int] | None]:
     return level, None
 
 
+def _rating_counts_for(level_ids: list[int]) -> dict[int, tuple[int, int]]:
+    """
+    One batched GROUP BY for every level in a list response, rather
+    than a per-level query - see level_to_summary_dict's rating_counts
+    param for why. Returns {level_id: (like_count, dislike_count)};
+    a level_id with no rows at all (nobody has rated it yet) simply
+    isn't a key, and level_to_summary_dict's own (0, 0) default covers
+    that.
+    """
+    if not level_ids:
+        return {}
+
+    rows = (
+        db.session.query(LevelRating.level_id, LevelRating.is_like, func.count(LevelRating.id))
+        .filter(LevelRating.level_id.in_(level_ids))
+        .group_by(LevelRating.level_id, LevelRating.is_like)
+        .all()
+    )
+
+    counts: dict[int, tuple[int, int]] = {}
+    for level_id, is_like, count in rows:
+        likes, dislikes = counts.get(level_id, (0, 0))
+        if is_like:
+            likes = count
+        else:
+            dislikes = count
+        counts[level_id] = (likes, dislikes)
+    return counts
+
+
 @levels_bp.post("")
 @jwt_required()
 def create_level():
@@ -176,8 +208,9 @@ def list_my_levels():
         return jsonify({"error": message}), status
 
     levels = Level.query.filter_by(owner_id=user.id).order_by(Level.created_at.desc()).all()
+    rating_counts = _rating_counts_for([level.id for level in levels])
 
-    return jsonify([level_to_summary_dict(level) for level in levels]), 200
+    return jsonify([level_to_summary_dict(level, rating_counts) for level in levels]), 200
 
 
 @levels_bp.get("/<string:slug>")
@@ -410,11 +443,30 @@ def publish_level(slug):
     )
     next_version_number = (latest_version.version_number + 1) if latest_version else 1
 
+    # Best-effort, client-captured screenshot of this version's initial
+    # state in play mode (see captureLevelThumbnail.ts on the
+    # frontend) - a `data:image/png;base64,...` string, same shape
+    # canvas.toDataURL()/Phaser's renderer.snapshot() always produce.
+    # Deliberately never lets a bad/missing thumbnail, or storage not
+    # being configured at all, block an otherwise-valid publish - a
+    # level without one just has nothing to show yet, same as before
+    # this feature existed.
+    thumbnail_url = None
+    thumbnail_data_url = payload.get("thumbnail")
+    if thumbnail_data_url:
+        try:
+            thumbnail_url = upload_level_thumbnail(
+                thumbnail_data_url, level_id=level.id, version_number=next_version_number
+            )
+        except ThumbnailError as exc:
+            current_app.logger.warning("level thumbnail upload failed for level %s: %s", level.id, exc)
+
     version = LevelVersion(
         level_id=level.id,
         version_number=next_version_number,
         content=level.draft_content,
         beaten_at=level.draft_beaten_at,
+        thumbnail_url=thumbnail_url,
     )
     db.session.add(version)
     # Need version.id actually assigned (via a real INSERT) before it
@@ -427,6 +479,12 @@ def publish_level(slug):
     level.visibility_state = LevelVisibilityState.PUBLISHED
     if new_title is not None:
         level.title = new_title
+    # Only overwritten when this publish actually produced a new one -
+    # a failed upload on a republish must never erase an existing,
+    # still-valid thumbnail from an earlier version (see Level.
+    # thumbnail_url's own docstring).
+    if thumbnail_url is not None:
+        level.thumbnail_url = thumbnail_url
 
     db.session.commit()
 
@@ -520,6 +578,60 @@ def get_level_for_play(slug):
         ),
         200,
     )
+
+
+@levels_bp.post("/<string:slug>/play")
+def record_level_play(slug):
+    """
+    Public, unauthenticated, same lookup rules as get_level_for_play
+    (only a live, non-deleted, published level can record anything,
+    and an unknown/unpublished/deleted slug gets the same 404 either
+    way). Called by /play/[slug] once its initial load succeeds, and
+    again on every "Play Again" - each is a genuine, separate attempt
+    at the level, not just a page view. Deliberately a distinct request
+    from GET .../play (which only ever serves content) rather than
+    folded into it, so a client can re-record a play on replay without
+    needing to re-fetch content it already has.
+
+    No auth and no per-viewer dedup, unlike LevelRating - a play count
+    is meant to reflect how many times a level has actually been
+    attempted, including the same person replaying it repeatedly, not
+    a distinct-people tally.
+    """
+    level = Level.query.filter_by(slug=slug).first()
+    if level is None or level.latest_published_version_id is None or level.is_deleted:
+        return jsonify({"error": "level not found"}), 404
+
+    level.play_count += 1
+    db.session.commit()
+
+    return jsonify({"play_count": level.play_count}), 200
+
+
+@levels_bp.post("/<string:slug>/complete")
+def record_level_complete(slug):
+    """
+    Public, unauthenticated, same lookup rules as record_level_play.
+    Called the moment LEVEL_BEATEN_EVENT fires during a real public
+    playthrough (/play/[slug]) - never from the editor's own test-play
+    loop, which reaches its own win condition through PlatformerScene
+    but reports it via POST .../beat instead, against draft_content,
+    not a published version. A completion here always implies at least
+    one play was already recorded for the same attempt (record_level_play
+    fires on load, before the player can possibly reach the win
+    condition), but this endpoint doesn't re-derive or enforce that
+    ordering itself - the two counters are independent increments, not
+    a state machine, so a request that arrives out of order (or is
+    retried) never leaves either counter looking corrupted.
+    """
+    level = Level.query.filter_by(slug=slug).first()
+    if level is None or level.latest_published_version_id is None or level.is_deleted:
+        return jsonify({"error": "level not found"}), 404
+
+    level.completion_count += 1
+    db.session.commit()
+
+    return jsonify({"completion_count": level.completion_count}), 200
 
 
 @levels_bp.post("/<string:slug>/rate")
@@ -630,5 +742,6 @@ def list_levels_by_user(username):
         .order_by(Level.created_at.desc())
         .all()
     )
+    rating_counts = _rating_counts_for([level.id for level in levels])
 
-    return jsonify([level_to_summary_dict(level) for level in levels]), 200
+    return jsonify([level_to_summary_dict(level, rating_counts) for level in levels]), 200

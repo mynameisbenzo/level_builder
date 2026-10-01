@@ -23,10 +23,11 @@ def level_to_dict(level) -> dict:
         "draft_content": level.draft_content,
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
         "created_at": level.created_at.isoformat() if level.created_at else None,
+        "thumbnail_url": level.thumbnail_url,
     }
 
 
-def level_to_summary_dict(level) -> dict:
+def level_to_summary_dict(level, rating_counts: dict | None = None) -> dict:
     """
     A lighter-weight serialization for list views - deliberately omits
     draft_content entirely, since a list of many levels (an owner's own
@@ -35,8 +36,20 @@ def level_to_summary_dict(level) -> dict:
     Safe to use for both an owner's own private list (drafts/testing
     included) and a public "levels by this creator" list (published
     only) - it carries nothing that needs hiding from a stranger in
-    either case, since it's just id/title/visibility_state/timestamps.
+    either case, since it's just id/title/visibility_state/timestamps
+    plus the aggregate play/completion/like/dislike metrics below.
+
+    rating_counts is an optional {level.id: (like_count, dislike_count)}
+    map, built once by the caller for every level in the list (see
+    list_my_levels/list_levels_by_user) rather than queried here one
+    level at a time - LevelRating has no aggregate columns of its own
+    (see that model), so counting is always a GROUP BY over its rows,
+    and doing that per-level here would mean N extra queries for a list
+    of N levels. Missing from the map (a level nobody has rated yet)
+    defaults to (0, 0).
     """
+    likes, dislikes = (rating_counts or {}).get(level.id, (0, 0))
+
     return {
         "id": level.slug,
         "title": level.title,
@@ -45,4 +58,14 @@ def level_to_summary_dict(level) -> dict:
         "is_deleted": level.is_deleted,
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
         "created_at": level.created_at.isoformat() if level.created_at else None,
+        "play_count": level.play_count,
+        "completion_count": level.completion_count,
+        # null (not 0) with zero plays - "0% completion rate" and "no
+        # one has played this yet" are different facts, and collapsing
+        # them would make a brand-new level look identically bad to one
+        # plenty of people have played and failed.
+        "completion_rate": (level.completion_count / level.play_count) if level.play_count > 0 else None,
+        "like_count": likes,
+        "dislike_count": dislikes,
+        "thumbnail_url": level.thumbnail_url,
     }

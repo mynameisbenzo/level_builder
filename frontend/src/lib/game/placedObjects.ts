@@ -1,22 +1,53 @@
 import { determineOrientation, type GroundTileStyle, type PlatformOrientation } from './groundTiling';
+import { GRID_SIZE } from './gridSnap';
 
-export interface PlacedObject {
+export interface GroundPlacedObject {
 	type: 'ground';
 	x: number;
 	y: number;
 	style: GroundTileStyle;
-	/**
-	 * Identifies which platform this tile belongs to. Assigned once per
-	 * click-and-drag placement action - every tile placed during the same
-	 * gesture shares an id. Two platforms that happen to end up physically
-	 * touching (placed as separate actions) have different ids and stay
-	 * visually and functionally distinct, rather than merging just because
-	 * they're adjacent. A group's orientation (horizontal/vertical) isn't
-	 * stored - it's derived from its tiles' actual positions (see
-	 * determineOrientation in groundTiling.ts).
-	 */
 	groupId: string;
 }
+
+/**
+ * A hazard tile - kills the player on touch in Play mode (see
+ * PlatformerScene's hazards group and die()). Painted the same way
+ * ground tiles are - click-and-drag, using the same drag-orientation
+ * plumbing (see LevelEditorScene's placeHazardIfEmpty) - and sharing the
+ * same array means the same one-object-per-cell rule (isPositionOccupied)
+ * applies for free: a hazard and a ground tile can't occupy the same
+ * cell. Unlike ground tiles, a hazard carries no style or groupId -
+ * every hazard tile is the same fixed sprite (see HAZARD_TILE_FRAME
+ * below), and hazards never merge into multi-tile platforms.
+ */
+export interface HazardPlacedObject {
+	type: 'hazard';
+	x: number;
+	y: number;
+}
+
+export type PlacedObject = GroundPlacedObject | HazardPlacedObject;
+
+// The one frame every hazard tile renders with - lives in a separate
+// atlas from every other placed object (see HAZARD_ATLAS_KEY in
+// atlases.ts), since it isn't part of the default tileset spritesheet
+// the rest of this file's objects draw from.
+export const HAZARD_TILE_FRAME = 'platformIndustrial_052.png';
+
+// Native sprite is 70x30 - squashing it into a 32x32 grid cell (like a
+// ground tile) came out stretched tall and thin. Rendered close to its
+// native size instead, wider and taller than a single grid cell, rather
+// than forced to fit it.
+export const HAZARD_DISPLAY_WIDTH = 28;
+export const HAZARD_DISPLAY_HEIGHT = 16;
+
+// Placed objects are keyed by their grid cell's center (x, y). Centering
+// a taller-than-GRID_SIZE sprite on that same y would let it sink below
+// the cell's bottom edge by just as much as it pokes up above the top.
+// Shifting the sprite's center up by this offset keeps its bottom edge
+// flush with the bottom of the grid cell instead, so it reads as sitting
+// on the ground rather than floating or sinking into it.
+export const HAZARD_Y_OFFSET = (GRID_SIZE - HAZARD_DISPLAY_HEIGHT) / 2;
 
 export const PLACED_OBJECTS_REGISTRY_KEY = 'placedObjects';
 
@@ -45,11 +76,11 @@ export function removePosition(existing: PlacedObject[], x: number, y: number): 
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function updateObjectStyle(
-	existing: PlacedObject[],
+	existing: GroundPlacedObject[],
 	x: number,
 	y: number,
 	style: GroundTileStyle
-): PlacedObject[] {
+): GroundPlacedObject[] {
 	return existing.map((object) =>
 		object.x === x && object.y === y ? { ...object, style } : object
 	);
@@ -67,7 +98,7 @@ export function tileKey(x: number, y: number): string {
  * placement time, not inferred from where tiles happen to sit.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
-export function getSameGroupTileKeys(allObjects: PlacedObject[], groupId: string): string[] {
+export function getSameGroupTileKeys(allObjects: GroundPlacedObject[], groupId: string): string[] {
 	return allObjects
 		.filter((object) => object.groupId === groupId)
 		.map((object) => tileKey(object.x, object.y));
@@ -102,10 +133,10 @@ export function getNextActiveGroupKeys(
  * always compatible.
  */
 function isCompatibleNeighbor(
-	neighbor: PlacedObject,
+	neighbor: GroundPlacedObject,
 	style: GroundTileStyle,
 	orientation: PlatformOrientation,
-	allObjects: PlacedObject[]
+	allObjects: GroundPlacedObject[]
 ): boolean {
 	if (neighbor.style !== style) {
 		return false;
@@ -128,7 +159,7 @@ function isCompatibleNeighbor(
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function resolveGroupIdForPlacement(
-	allObjects: PlacedObject[],
+	allObjects: GroundPlacedObject[],
 	x: number,
 	y: number,
 	orientation: PlatformOrientation,
@@ -162,10 +193,10 @@ export function resolveGroupIdForPlacement(
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function mergeGroupIds(
-	existing: PlacedObject[],
+	existing: GroundPlacedObject[],
 	fromGroupId: string,
 	toGroupId: string
-): PlacedObject[] {
+): GroundPlacedObject[] {
 	if (fromGroupId === toGroupId) {
 		return existing;
 	}
@@ -184,14 +215,14 @@ export function mergeGroupIds(
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function bridgeIfBetweenTwoGroups(
-	updated: PlacedObject[],
+	updated: GroundPlacedObject[],
 	x: number,
 	y: number,
 	orientation: PlatformOrientation,
 	style: GroundTileStyle,
 	gridSize: number,
 	newTileGroupId: string
-): PlacedObject[] {
+): GroundPlacedObject[] {
 	const before =
 		orientation === 'horizontal'
 			? updated.find((object) => object.x === x - gridSize && object.y === y)
@@ -228,10 +259,10 @@ export function bridgeIfBetweenTwoGroups(
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function mergeAdjacentSameStyleGroups(
-	existing: PlacedObject[],
+	existing: GroundPlacedObject[],
 	groupId: string,
 	gridSize: number
-): PlacedObject[] {
+): GroundPlacedObject[] {
 	const groupTiles = existing.filter((object) => object.groupId === groupId);
 	if (groupTiles.length === 0) {
 		return existing;

@@ -4,10 +4,12 @@ import {
 	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
 	ensureEraserIcon,
+	ensureHazardAtlas,
 	ensureSelectCursorIcon,
 	ensureTilesAtlas,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
+	HAZARD_ATLAS_KEY,
 	SELECT_CURSOR_ICON_KEY,
 	SELECT_CURSOR_ICON_PATH,
 	TILES_ATLAS_KEY
@@ -67,6 +69,10 @@ import {
 	bridgeIfBetweenTwoGroups,
 	getNextActiveGroupKeys,
 	getSameGroupTileKeys,
+	HAZARD_TILE_FRAME,
+	HAZARD_Y_OFFSET,
+	HAZARD_DISPLAY_WIDTH,
+	HAZARD_DISPLAY_HEIGHT,
 	isPositionOccupied,
 	mergeAdjacentSameStyleGroups,
 	PLACED_OBJECTS_REGISTRY_KEY,
@@ -74,6 +80,7 @@ import {
 	resolveGroupIdForPlacement,
 	tileKey,
 	updateObjectStyle,
+	type GroundPlacedObject,
 	type PlacedObject
 } from './placedObjects';
 import { DEFAULT_EDITOR_TOOL, EDITOR_TOOL_REGISTRY_KEY, EDITOR_TOOLS, type EditorTool } from './tools';
@@ -393,6 +400,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		ensureTilesAtlas(this);
 		ensureEraserIcon(this);
 		ensureSelectCursorIcon(this);
+		ensureHazardAtlas(this);
 	}
 
 	create() {
@@ -445,9 +453,18 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const initialGroupIds = new Set(placedObjects.map((object) => object.groupId));
+		const initialGroupIds = new Set(
+			placedObjects
+				.filter((object): object is GroundPlacedObject => object.type === 'ground')
+				.map((object) => object.groupId)
+		);
 		for (const groupId of initialGroupIds) {
 			this.refreshGroup(groupId);
+		}
+		for (const object of placedObjects) {
+			if (object.type === 'hazard') {
+				this.renderHazardTile(object.x, object.y);
+			}
 		}
 
 		this.input.on(
@@ -477,7 +494,7 @@ export class LevelEditorScene extends Phaser.Scene {
 					return;
 				}
 
-				if (tool !== 'select') {
+				if (tool !== 'select' && tool !== 'hazard') {
 					// The eraser (and any future non-placement tool) has
 					// nothing useful to do on empty space.
 					return;
@@ -498,7 +515,12 @@ export class LevelEditorScene extends Phaser.Scene {
 				this.dragOriginY = y;
 				this.dragLastX = x;
 				this.dragLastY = y;
-				this.placeTileIfEmpty(x, y, this.dragOrientation);
+
+				if (tool === 'hazard') {
+					this.placeHazardIfEmpty(x, y);
+				} else {
+					this.placeTileIfEmpty(x, y, this.dragOrientation);
+				}
 			}
 		);
 
@@ -518,6 +540,7 @@ export class LevelEditorScene extends Phaser.Scene {
 				return;
 			}
 
+			const tool = this.getEditorTool();
 			const currentX = snapToGrid(pointer.worldX, GRID_SIZE);
 			const currentY = snapToGrid(pointer.worldY, GRID_SIZE);
 
@@ -543,13 +566,21 @@ export class LevelEditorScene extends Phaser.Scene {
 				// pointermove events.
 				const columns = getFillRange(this.dragLastX, currentX, GRID_SIZE);
 				for (const x of columns) {
-					this.placeTileIfEmpty(x, this.dragOriginY, 'horizontal');
+					if (tool === 'hazard') {
+						this.placeHazardIfEmpty(x, this.dragOriginY);
+					} else {
+						this.placeTileIfEmpty(x, this.dragOriginY, 'horizontal');
+					}
 				}
 				this.dragLastX = currentX;
 			} else {
 				const rows = getFillRange(this.dragLastY, currentY, GRID_SIZE);
 				for (const y of rows) {
-					this.placeTileIfEmpty(this.dragOriginX, y, 'vertical');
+					if (tool === 'hazard') {
+						this.placeHazardIfEmpty(this.dragOriginX, y);
+					} else {
+						this.placeTileIfEmpty(this.dragOriginX, y, 'vertical');
+					}
 				}
 				this.dragLastY = currentY;
 			}
@@ -797,6 +828,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			'Click a platform to select it, click again to deselect',
 			'Select a platform to reveal the style picker and change its appearance',
 			'Eraser tool: click or click-drag a tile to remove it',
+			'Hazard tool: click-drag to paint spike tiles - deadly to the touch',
 			'Tab, or the mobile \u21c4 button, switches to Play Mode'
 		];
 		const lineTexts = lines.map((line, index) =>
@@ -826,7 +858,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createToolsToolbar() {
 		const spacing = this.toolbarSpacing;
-		const startX = this.scale.width / 2 - spacing * 2;
+		const startX = this.scale.width / 2 - spacing * 2.5;
 		const y = this.mainToolbarY;
 		const borderSize = this.toolIconBorderSize;
 		const iconSize = this.toolIconSize;
@@ -890,10 +922,23 @@ export class LevelEditorScene extends Phaser.Scene {
 			border: winConditionBorder
 		});
 
+		const hazardX = startX + spacing * 4;
+		const hazardBorder = this.add
+			.rectangle(hazardX, y, borderSize.width, borderSize.height)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+		const hazardIcon = this.add
+			.image(hazardX, y, HAZARD_ATLAS_KEY, HAZARD_TILE_FRAME)
+			.setDisplaySize(iconSize, iconSize)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+		hazardIcon.on('pointerdown', () => this.setEditorTool('hazard'));
+		this.toolButtons.push({ tool: 'hazard', hitArea: hazardIcon, border: hazardBorder });
+
 		// Starting-character picker - not an EditorTool, so it isn't
 		// pushed into toolButtons/refreshToolHighlight; its icon reflects
 		// whichever color is currently chosen instead of a fixed one.
-		const startingCharX = startX + spacing * 4;
+		const startingCharX = startX + spacing * 5;
 		const startingCharBorder = this.add
 			.rectangle(startingCharX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
@@ -992,10 +1037,14 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.tileImagesByKey.get(key)?.destroy();
 		this.tileImagesByKey.delete(key);
 
-		// Whatever remains of the erased tile's group may need its end
-		// caps recomputed (e.g. the tile next to it is now an end, not a
-		// middle piece).
-		this.refreshGroup(erasedObject.groupId);
+		// A hazard tile renders independently (see renderHazardTile) and
+		// never belongs to a ground platform's group - nothing further to
+		// recompute for one. Whatever remains of an erased GROUND tile's
+		// group may need its end caps recomputed instead (e.g. the tile
+		// next to it is now an end, not a middle piece).
+		if (erasedObject.type === 'ground') {
+			this.refreshGroup(erasedObject.groupId);
+		}
 	}
 
 	// ── Character-swap placement tool ───────────────────────────────────
@@ -1880,20 +1929,27 @@ export class LevelEditorScene extends Phaser.Scene {
 			return;
 		}
 
-		let existing =
+		const existingAll =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		// A hazard is never part of an active (selectable) group - only
+		// ground tiles are - but it still has to be preserved untouched
+		// when the ground subset gets written back to the registry below.
+		const otherObjects = existingAll.filter((object) => object.type !== 'ground');
+		let groundObjects = existingAll.filter(
+			(object): object is GroundPlacedObject => object.type === 'ground'
+		);
 
 		for (const key of this.activeGroupKeys) {
 			const [xStr, yStr] = key.split(',');
 			const x = Number(xStr);
 			const y = Number(yStr);
-			existing = updateObjectStyle(existing, x, y, style);
+			groundObjects = updateObjectStyle(groundObjects, x, y, style);
 		}
 
 		// The restyled platform's own id doesn't change - look it up from
 		// any of its tiles now that the style update has been applied.
 		const [firstXStr, firstYStr] = this.activeGroupKeys[0].split(',');
-		const activeObject = existing.find(
+		const activeObject = groundObjects.find(
 			(object) => object.x === Number(firstXStr) && object.y === Number(firstYStr)
 		);
 
@@ -1902,14 +1958,14 @@ export class LevelEditorScene extends Phaser.Scene {
 			// Restyling can now make this platform match a directly
 			// touching different platform - placement-time merging
 			// doesn't retroactively apply, so check for that here.
-			existing = mergeAdjacentSameStyleGroups(existing, groupId, GRID_SIZE);
+			groundObjects = mergeAdjacentSameStyleGroups(groundObjects, groupId, GRID_SIZE);
 			// Reflect the merge (if any) in the current selection, so the
 			// highlight covers the whole newly-combined platform.
-			this.activeGroupKeys = getSameGroupTileKeys(existing, groupId);
-			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
+			this.activeGroupKeys = getSameGroupTileKeys(groundObjects, groupId);
+			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...groundObjects, ...otherObjects]);
 			this.refreshGroup(groupId);
 		} else {
-			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, existing);
+			this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...groundObjects, ...otherObjects]);
 		}
 
 		this.refreshStylePickerVisibility();
@@ -1922,7 +1978,10 @@ export class LevelEditorScene extends Phaser.Scene {
 			const y = Number(yStr);
 			const existing =
 				(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-			const activeObject = existing.find((object) => object.x === x && object.y === y);
+			const activeObject = existing.find(
+				(object): object is GroundPlacedObject =>
+					object.type === 'ground' && object.x === x && object.y === y
+			);
 			if (activeObject) {
 				return activeObject.style;
 			}
@@ -2009,12 +2068,21 @@ export class LevelEditorScene extends Phaser.Scene {
 			return;
 		}
 
+		// Ground-grouping logic (resolveGroupIdForPlacement,
+		// bridgeIfBetweenTwoGroups) only knows about ground tiles - any
+		// hazard tiles have to be split out and reattached afterward
+		// rather than passed through.
+		const groundObjects = existing.filter(
+			(object): object is GroundPlacedObject => object.type === 'ground'
+		);
+		const otherObjects = existing.filter((object) => object.type !== 'ground');
+
 		const style =
 			(this.registry.get(GROUND_TILE_STYLE_REGISTRY_KEY) as GroundTileStyle | undefined) ??
 			DEFAULT_GROUND_TILE_STYLE;
 
 		const groupId = resolveGroupIdForPlacement(
-			existing,
+			groundObjects,
 			x,
 			y,
 			orientation,
@@ -2023,15 +2091,55 @@ export class LevelEditorScene extends Phaser.Scene {
 			createGroupId()
 		);
 
-		let updated: PlacedObject[] = [...existing, { type: 'ground', x, y, style, groupId }];
+		let updatedGround: GroundPlacedObject[] = [
+			...groundObjects,
+			{ type: 'ground', x, y, style, groupId }
+		];
 
 		// If the new tile sits between two existing same-style,
 		// orientation-compatible neighbors that belonged to different
 		// platforms, it bridges them into one.
-		updated = bridgeIfBetweenTwoGroups(updated, x, y, orientation, style, GRID_SIZE, groupId);
+		updatedGround = bridgeIfBetweenTwoGroups(updatedGround, x, y, orientation, style, GRID_SIZE, groupId);
 
-		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...updatedGround, ...otherObjects]);
 		this.refreshGroup(groupId);
+	}
+
+	// ── Hazard placement tool ────────────────────────────────────────────
+
+	private placeHazardIfEmpty(x: number, y: number) {
+		const existing =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+
+		if (isPositionOccupied(existing, x, y)) {
+			return;
+		}
+
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...existing, { type: 'hazard', x, y }]);
+		this.renderHazardTile(x, y);
+	}
+
+	/**
+	 * Renders one hazard tile - unlike ground tiles, a hazard never
+	 * belongs to a multi-tile group (no left/right/center framing, no
+	 * merging), so there's nothing analogous to refreshGroup's batch
+	 * recompute needed here: each hazard is added independently, once,
+	 * and left alone until it's erased. Shares tileImagesByKey with
+	 * ground tiles (both are keyed by grid position) so eraseTile's
+	 * generic image cleanup works for either kind without needing to
+	 * know which one it's looking at.
+	 */
+	private renderHazardTile(x: number, y: number) {
+		const tile = this.add
+			.image(x, y + HAZARD_Y_OFFSET, HAZARD_ATLAS_KEY, HAZARD_TILE_FRAME)
+			.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT)
+			.setInteractive();
+		tile.on('pointerdown', () => {
+			if (this.getEditorTool() === 'eraser') {
+				this.eraseTile(x, y);
+			}
+		});
+		this.tileImagesByKey.set(tileKey(x, y), tile);
 	}
 
 	/**
@@ -2050,7 +2158,9 @@ export class LevelEditorScene extends Phaser.Scene {
 	private refreshGroup(groupId: string) {
 		const allObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-		const groupObjects = allObjects.filter((object) => object.groupId === groupId);
+		const groupObjects = allObjects.filter(
+			(object): object is GroundPlacedObject => object.type === 'ground' && object.groupId === groupId
+		);
 
 		for (const object of groupObjects) {
 			const key = tileKey(object.x, object.y);
@@ -2081,13 +2191,16 @@ export class LevelEditorScene extends Phaser.Scene {
 				const clickedKey = tileKey(x, y);
 				const currentObjects =
 					(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
-				const clickedObject = currentObjects.find(
+				const groundObjects = currentObjects.filter(
+					(object): object is GroundPlacedObject => object.type === 'ground'
+				);
+				const clickedObject = groundObjects.find(
 					(object) => object.x === x && object.y === y
 				);
 				if (!clickedObject) {
 					return;
 				}
-				const groupKeys = getSameGroupTileKeys(currentObjects, clickedObject.groupId);
+				const groupKeys = getSameGroupTileKeys(groundObjects, clickedObject.groupId);
 				const nextActive = getNextActiveGroupKeys(this.activeGroupKeys, clickedKey, groupKeys);
 				this.setActiveGroup(nextActive);
 			});

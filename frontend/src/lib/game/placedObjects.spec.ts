@@ -10,7 +10,7 @@ import {
 	resolveGroupIdForPlacement,
 	tileKey,
 	updateObjectStyle,
-	type PlacedObject
+	type GroundPlacedObject
 } from './placedObjects';
 
 const obj = (
@@ -18,7 +18,7 @@ const obj = (
 	y: number,
 	style: 'grass' | 'stone' = 'grass',
 	groupId = 'a'
-): PlacedObject => ({ type: 'ground', x, y, style, groupId });
+): GroundPlacedObject => ({ type: 'ground', x, y, style, groupId });
 
 describe('isPositionOccupied', () => {
 	it('returns false for an empty list', () => {
@@ -243,5 +243,17 @@ describe('mergeAdjacentSameStyleGroups', () => {
 	it('returns the input unchanged when the group has no tiles', () => {
 		const existing = [obj(16, 0, 'grass', 'a')];
 		expect(mergeAdjacentSameStyleGroups(existing, 'nonexistent', 32)).toEqual(existing);
+	});
+});
+
+describe('isPositionOccupied / removePosition with a mixed ground+hazard array', () => {
+	it('treats a hazard tile as occupying its cell, same as a ground tile', () => {
+		const existing = [obj(0, 0), { type: 'hazard' as const, x: 32, y: 0 }];
+		expect(isPositionOccupied(existing, 32, 0)).toBe(true);
+	});
+
+	it('removes only the exact match regardless of type', () => {
+		const existing = [obj(0, 0), { type: 'hazard' as const, x: 32, y: 0 }];
+		expect(removePosition(existing, 32, 0)).toEqual([obj(0, 0)]);
 	});
 });

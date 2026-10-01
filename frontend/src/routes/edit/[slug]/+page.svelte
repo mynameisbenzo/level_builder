@@ -4,6 +4,7 @@
 	import Phaser from 'phaser';
 	import { beatLevel, getLevel, publishLevel, saveLevel } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { captureLevelThumbnail } from '$lib/game/captureLevelThumbnail';
 	import { createGameConfig } from '$lib/game/gameConfig';
 	import { serializeLevelContent, type LevelContent } from '$lib/game/levelContent';
 	import { LEVEL_BEATEN_EVENT } from '$lib/game/PlatformerScene';
@@ -144,7 +145,41 @@
 
 	async function handleLevelBeaten() {
 		const token = auth.accessToken;
-		if (!token) return;
+		if (!token || !game) return;
+
+		// The beat itself is proven purely client-side (Phaser's local
+		// registry just reached the win condition) - but draft_beaten_at
+		// only means something meaningful once the server's own
+		// draft_content actually matches what was just played. Without
+		// this save, a level that was built but never explicitly saved
+		// would record a beat against content the server still has as
+		// its stale default - and the very next publish's own
+		// always-save-first step (see runPublish) would then see that
+		// as a genuine change and immediately clear the beat it just
+		// recorded, right after the "Level Cleared!" moment.
+		const content = serializeLevelContent(game.registry);
+		let saveResult = await saveLevel(slug, content, token);
+		if (saveResult.sessionExpired) {
+			const refreshed = await auth.tryRefresh();
+			const refreshedToken = auth.accessToken;
+			if (refreshed && refreshedToken) {
+				saveResult = await saveLevel(slug, content, refreshedToken);
+			}
+		}
+
+		if (!saveResult.success) {
+			if (saveResult.sessionExpired) {
+				goto('/login');
+			}
+			// Same reasoning as the beat call failing below - not worth
+			// interrupting "Level Cleared!" with an error for this;
+			// Publish staying disabled (hasBeenBeaten never flips true)
+			// is signal enough.
+			return;
+		}
+
+		visibilityState = saveResult.level!.visibility_state;
+		lastSavedContent = content;
 
 		let result = await beatLevel(slug, token);
 		if (result.sessionExpired) {
@@ -390,12 +425,19 @@
 			return false;
 		}
 
-		let result = await publishLevel(slug, token, newTitle);
+		// Best-effort - a capture that fails or times out (see
+		// captureLevelThumbnail.ts) just means this publish goes out
+		// with no thumbnail, same as if this feature didn't exist;
+		// never something that should stop or delay publishing itself
+		// beyond the capture's own bounded timeout.
+		const thumbnail = await captureLevelThumbnail(content);
+
+		let result = await publishLevel(slug, token, newTitle, thumbnail ?? undefined);
 		if (result.sessionExpired) {
 			const refreshed = await auth.tryRefresh();
 			const refreshedToken = auth.accessToken;
 			if (refreshed && refreshedToken) {
-				result = await publishLevel(slug, refreshedToken, newTitle);
+				result = await publishLevel(slug, refreshedToken, newTitle, thumbnail ?? undefined);
 			}
 		}
 

@@ -44,7 +44,14 @@ export const LEVEL_DIED_EVENT = 'level-died';
 import { canFloat, canPhase, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
-import { CHARACTERS_ATLAS_KEY, ensureCharacterAtlas, ensureTilesAtlas, TILES_ATLAS_KEY } from './atlases';
+import {
+	CHARACTERS_ATLAS_KEY,
+	ensureCharacterAtlas,
+	ensureHazardAtlas,
+	ensureTilesAtlas,
+	HAZARD_ATLAS_KEY,
+	TILES_ATLAS_KEY
+} from './atlases';
 import {
 	ensureStartingPlayerColor,
 	getCharacterSwapObjectFrame,
@@ -59,7 +66,13 @@ import {
 } from './playerPose';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
-import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
+import { 
+	HAZARD_TILE_FRAME, 
+	PLACED_OBJECTS_REGISTRY_KEY, 
+	HAZARD_DISPLAY_WIDTH, 
+	HAZARD_DISPLAY_HEIGHT, 
+	HAZARD_Y_OFFSET,
+	type PlacedObject } from './placedObjects';
 import {
 	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
 	getSwapResult,
@@ -253,6 +266,7 @@ export class PlatformerScene extends Phaser.Scene {
 	};
 	private arrows!: Phaser.Types.Input.Keyboard.CursorKeys;
 	private platforms!: Phaser.Physics.Arcade.StaticGroup;
+	private hazards!: Phaser.Physics.Arcade.StaticGroup;
 	private currentPose: PlayerPose | null = null;
 	private playerPoseConfig!: ReturnType<typeof getPlayerPoseConfig>;
 	private hudPortrait!: Phaser.GameObjects.Image;
@@ -277,6 +291,12 @@ export class PlatformerScene extends Phaser.Scene {
 	 * LEVEL_DIED_EVENT. An owner testing in the editor bounces back to
 	 * Edit Mode on death instead and never sets this. */
 	private hasDied = false;
+	/** Guards die() against running more than once within the same
+	 * physics step - e.g. the player's body overlapping more than one
+	 * hazard tile at once, or a repeated overlap firing before an
+	 * editor-mode death's scene.start() has actually taken effect.
+	 * Runtime-only, reset each session like everything else above. */
+	private isDying = false;
 	/** Runtime-only, reset each session like everything else above -
 	 * whether the player is currently using the float ability (see
 	 * shouldStartFloating/shouldStopFloating in movement.ts). */
@@ -325,6 +345,7 @@ export class PlatformerScene extends Phaser.Scene {
 	preload() {
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
+		ensureHazardAtlas(this);
 		ensureSounds(this);
 	}
 
@@ -340,6 +361,7 @@ export class PlatformerScene extends Phaser.Scene {
 		// movement, not even Tab - on every session after the first win.
 		this.hasWon = false;
 		this.hasDied = false;
+		this.isDying = false;
 		this.wasPadJumpButtonDown = false;
 		this.wasTouchJumpDown = false;
 		this.collectedKeyColors = new Set();
@@ -432,6 +454,9 @@ export class PlatformerScene extends Phaser.Scene {
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 		const tilesByGroupId = new Map<string, PositionedTile[]>();
 		for (const object of placedObjects) {
+			if (object.type !== 'ground') {
+				continue;
+			}
 			const tiles = tilesByGroupId.get(object.groupId) ?? [];
 			tiles.push({ x: object.x, y: object.y, style: object.style, groupId: object.groupId });
 			tilesByGroupId.set(object.groupId, tiles);
@@ -449,6 +474,24 @@ export class PlatformerScene extends Phaser.Scene {
 			}
 		}
 		this.platformCollider = this.physics.add.collider(this.player, this.platforms);
+
+		// Hazard tiles: a spike strip that kills on touch (see die()
+		// below) - a static physics group like platforms, but overlap
+		// rather than a collider, since the whole point is that the
+		// player passes into it rather than being physically blocked.
+		this.hazards = this.physics.add.staticGroup();
+		for (const object of placedObjects) {
+			if (object.type !== 'hazard') continue;
+			const tile = this.hazards.create(
+				object.x,
+				object.y + HAZARD_Y_OFFSET,
+				HAZARD_ATLAS_KEY,
+				HAZARD_TILE_FRAME
+			) as Phaser.Physics.Arcade.Sprite;
+			tile.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT);
+			tile.refreshBody();
+		}
+		this.physics.add.overlap(this.player, this.hazards, () => this.die());
 
 		const swapObjectsData =
 			(this.registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as
@@ -906,14 +949,39 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
-	 * The public-play-only death path (see update()'s LevelEditorScene
-	 * check) - freezes the player where they fell and emits
-	 * LEVEL_DIED_EVENT for the hosting Svelte page to react to. Doesn't
-	 * restart the scene itself: the result modal that event triggers
-	 * offers Replay as an explicit action (which does restart it, via
-	 * the same scene.restart() create() already resets everything for),
-	 * rather than yanking the level back to its start the instant
-	 * someone dies.
+	 * Shared by both ways a playthrough can end in death: falling off
+	 * the world, or touching a hazard tile (see the overlap set up in
+	 * create()). In the editor (testing your own level), death bounces
+	 * back to Edit Mode, same as it always has for falling off screen;
+	 * in a public /play/[slug] session, it's the triggerDeath() path
+	 * below instead. isDying guards against running this twice in the
+	 * same physics step - e.g. the player's body overlapping more than
+	 * one hazard tile in one frame.
+	 */
+	private die() {
+		if (this.hasWon || this.hasDied || this.isDying) {
+			return;
+		}
+		this.isDying = true;
+
+		if (this.scene.get('LevelEditorScene')) {
+			playSfx(this, 'death');
+			const nextMode = toggleMode(CURRENT_MODE);
+			this.scene.start(getSceneKeyForMode(nextMode));
+			return;
+		}
+
+		this.triggerDeath();
+	}
+
+	/**
+	 * The public-play-only death path (see die() above) - freezes the
+	 * player where they fell/died and emits LEVEL_DIED_EVENT for the
+	 * hosting Svelte page to react to. Doesn't restart the scene itself:
+	 * the result modal that event triggers offers Replay as an explicit
+	 * action (which does restart it, via the same scene.restart()
+	 * create() already resets everything for), rather than yanking the
+	 * level back to its start the instant someone dies.
 	 */
 	private triggerDeath() {
 		this.hasDied = true;
@@ -975,22 +1043,7 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 
 		if (hasFallenOffScreen(this.player.y, WORLD_HEIGHT, FALL_OFF_SCREEN_THRESHOLD_PX)) {
-			if (this.scene.get('LevelEditorScene')) {
-				// Owner testing their own level in the editor - unchanged
-				// from before, same bounce back to Edit Mode.
-				playSfx(this, 'death');
-				const nextMode = toggleMode(CURRENT_MODE);
-				this.scene.start(getSceneKeyForMode(nextMode));
-				return;
-			}
-
-			// Public /play/[slug] session: there's no Edit Mode to bounce
-			// to (this used to try starting a scene that was never
-			// registered, which is why a stranger dying on someone else's
-			// level used to land on an empty screen instead of anything
-			// useful). Freeze in place and let the hosting Svelte page
-			// react to LEVEL_DIED_EVENT with a real result modal instead.
-			this.triggerDeath();
+			this.die();
 			return;
 		}
 

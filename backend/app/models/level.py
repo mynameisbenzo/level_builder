@@ -115,6 +115,29 @@ class Level(db.Model):
     # to that lifetime cap, same as any other published level.
     is_deleted = db.Column(db.Boolean, nullable=False, default=False)
 
+    # Simple lifetime counters, incremented by the public play/complete
+    # endpoints (POST /api/levels/<slug>/play and .../complete) - every
+    # visit to /play/[slug] records a play the moment it loads (and
+    # again on every explicit "Play Again"), and a completion is
+    # recorded the moment LEVEL_BEATEN_EVENT fires. Deliberately NOT
+    # the same thing as the editor's own draft_beaten_at/PlayAttempt-
+    # flavored aspirations on LevelVersion below (clear_rate_cached) -
+    # those are about the creator's own test-play loop while building;
+    # these are about real, public playthroughs of a published level,
+    # and never move for the owner's own test plays in the editor.
+    play_count = db.Column(db.Integer, nullable=False, default=0)
+    completion_count = db.Column(db.Integer, nullable=False, default=0)
+
+    # Denormalized copy of latest_published_version.thumbnail_url,
+    # purely so a level list (level_to_summary_dict) can show a
+    # thumbnail without joining to LevelVersion for every row - same
+    # reasoning as remixed_from_level_id above. Kept in sync by
+    # publish_level; never set anywhere else, and never cleared back to
+    # None by a publish whose own thumbnail upload happened to fail
+    # (see that endpoint) - a stale-but-real thumbnail beats none at
+    # all for an already-published level.
+    thumbnail_url = db.Column(db.String(500), nullable=True)
+
     created_at = db.Column(db.DateTime, default=utc_now)
 
     owner = db.relationship("User", foreign_keys=[owner_id])
@@ -171,6 +194,15 @@ class LevelVersion(db.Model):
     # PlayAttempt rows are the source of truth, these are just a cache.
     clear_rate_cached = db.Column(db.Float, nullable=True)
     difficulty_label_cached = db.Column(db.String(20), nullable=True)
+
+    # A screenshot of this exact version's initial state in play mode,
+    # captured client-side at the moment it was published (see
+    # captureLevelThumbnail.ts and publish_level) and uploaded to
+    # whichever S3-compatible bucket THUMBNAIL_S3_BUCKET names (see
+    # app/services/thumbnails.py). Nullable - not every environment has
+    # thumbnail storage configured, and a failed upload must never
+    # block the publish itself, so a version can legitimately have none.
+    thumbnail_url = db.Column(db.String(500), nullable=True)
 
     created_at = db.Column(db.DateTime, default=utc_now)
 

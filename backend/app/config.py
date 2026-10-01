@@ -120,6 +120,21 @@ class TestingConfig(Config):
     # in the local environment/.env - tests must not depend on, or
     # accidentally trigger, a real external API call.
     RESEND_API_KEY = ""
+    # Same reasoning as RESEND_API_KEY above - once a real bucket and
+    # credentials are configured in .env for local dev, Config picks
+    # them up via os.environ.get(...) regardless of which config class
+    # is active. Several tests specifically assert the "no thumbnail
+    # storage configured" behavior (storage_configured() is False,
+    # upload_level_thumbnail raising ThumbnailError, the plain-S3-URL
+    # fallback with no public base URL set), and those must hold no
+    # matter what's sitting in the local environment - tests must not
+    # depend on, or accidentally upload to, a real bucket either.
+    THUMBNAIL_S3_BUCKET = ""
+    THUMBNAIL_S3_ENDPOINT_URL = ""
+    THUMBNAIL_S3_REGION = "auto"
+    THUMBNAIL_S3_ACCESS_KEY_ID = ""
+    THUMBNAIL_S3_SECRET_ACCESS_KEY = ""
+    THUMBNAIL_S3_PUBLIC_BASE_URL = ""
 
 
 class DevelopmentConfig(Config):

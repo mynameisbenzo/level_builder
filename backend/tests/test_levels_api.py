@@ -1308,5 +1308,33 @@ def test_rating_a_deleted_level_returns_404():
         assert response.status_code == 404
 
 
+def test_getting_own_rating_requires_authentication():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner6", "owner6@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        response = client.get(f"/api/levels/{level['id']}/rating")
+
+        assert response.status_code == 401
+
+
+def test_getting_own_rating_before_rating_returns_null():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, "owner7", "owner7@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level["id"])
+
+        rater_token = _signup_and_login(app, client, "rater4", "rater4@example.com")
+        response = client.get(f"/api/levels/{level['id']}/rating", headers=_auth_headers(rater_token))
+
+        assert response.status_code == 200
+        assert response.get_json()["is_like"] is None
+
+
 def _internal_level_id(slug: str) -> int:
     return Level.query.filter_by(slug=slug).first().id

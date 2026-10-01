@@ -2,21 +2,22 @@ import type Phaser from 'phaser';
 
 /**
  * Every sound this game currently knows how to play, one key per game
- * event. Enemy sounds aren't listed yet - there's nothing to trigger one
- * from until enemies actually exist. Background music isn't listed
- * either - the bundled Kenney pack has no looping track, and music needs
- * different handling than one-shot SFX anyway (a playMusic/stopMusic
- * pair that checks whether a track is already playing before starting a
- * new instance, so a scene reload doesn't restart or double it up) -
- * that's worth building once there's an actual track to plug into it,
- * not speculatively now.
+ * event. Background music isn't listed - the bundled Kenney pack has no
+ * looping track, and music needs different handling than one-shot SFX
+ * anyway (a playMusic/stopMusic pair that checks whether a track is
+ * already playing before starting a new instance, so a scene reload
+ * doesn't restart or double it up) - that's worth building once there's
+ * an actual track to plug into it, not speculatively now.
  */
 export const SOUND_ASSETS = {
 	jump: '/assets/kenney/platformer-pack/Sounds/sfx_jump.ogg',
 	characterSwap: '/assets/kenney/platformer-pack/Sounds/sfx_magic.ogg',
 	death: '/assets/kenney/platformer-pack/Sounds/sfx_disappear.ogg',
 	win: '/assets/kenney/platformer-pack/Sounds/sfx_gem.ogg',
-	key: '/assets/kenney/platformer-pack/Sounds/sfx_coin.ogg'
+	key: '/assets/kenney/platformer-pack/Sounds/sfx_coin.ogg',
+	// Stomping an enemy, specifically - distinct from the player's own
+	// "death" sound so the two don't sound identical.
+	enemyStomp: '/assets/kenney/platformer-pack/Sounds/sfx_hurt.ogg'
 } as const;
 
 export type SoundKey = keyof typeof SOUND_ASSETS;

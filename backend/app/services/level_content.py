@@ -26,6 +26,10 @@ GROUND_TILE_STYLES = {"grass", "dirt", "sand", "snow", "stone", "purple"}
 PLAYER_COLORS = {"beige", "green", "pink", "purple", "yellow"}
 KEY_COLORS = {"blue", "green", "red", "yellow"}
 CAMERA_MODES = {"follow", "quadrant"}
+# Mirrors frontend/src/lib/game/enemies.ts's ENEMY_TYPES - only the
+# spider exists so far, but kept as a set (not a single string check) for
+# the same reason the frontend does: a second enemy is already planned.
+ENEMY_TYPES = {"spider"}
 
 # Ground tiles get a much larger budget than everything else below
 # because they're the one object type placeable via click-and-drag
@@ -109,8 +113,8 @@ def _validate_placed_objects(value) -> str | None:
             return f"placedObjects[{i}] must be an object"
 
         object_type = obj.get("type")
-        if object_type not in ("ground", "hazard"):
-            return f'placedObjects[{i}].type must be "ground" or "hazard"'
+        if object_type not in ("ground", "hazard", "enemy"):
+            return f'placedObjects[{i}].type must be "ground", "hazard", or "enemy"'
 
         error = _validate_xy(obj, f"placedObjects[{i}]")
         if error:
@@ -121,7 +125,7 @@ def _validate_placed_objects(value) -> str | None:
                 return f"placedObjects[{i}].style must be one of: {', '.join(sorted(GROUND_TILE_STYLES))}"
             if not isinstance(obj.get("groupId"), str) or not obj.get("groupId"):
                 return f"placedObjects[{i}].groupId must be a non-empty string"
-        else:
+        elif object_type == "hazard":
             # Hazard tiles carry no style or grouping - every hazard tile
             # is the same fixed sprite, and hazards never merge into
             # multi-tile platforms the way ground tiles do (see
@@ -129,6 +133,12 @@ def _validate_placed_objects(value) -> str | None:
             extra_keys = set(obj.keys()) - {"type", "x", "y"}
             if extra_keys:
                 return f"placedObjects[{i}] (a hazard) must not have: {', '.join(sorted(extra_keys))}"
+        else:
+            if obj.get("enemyType") not in ENEMY_TYPES:
+                return f"placedObjects[{i}].enemyType must be one of: {', '.join(sorted(ENEMY_TYPES))}"
+            extra_keys = set(obj.keys()) - {"type", "x", "y", "enemyType"}
+            if extra_keys:
+                return f"placedObjects[{i}] (an enemy) must not have: {', '.join(sorted(extra_keys))}"
 
     return None
 

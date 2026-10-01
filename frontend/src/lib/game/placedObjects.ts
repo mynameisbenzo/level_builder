@@ -1,5 +1,6 @@
 import { determineOrientation, type GroundTileStyle, type PlatformOrientation } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
+import type { EnemyType } from './enemies';
 
 export interface GroundPlacedObject {
 	type: 'ground';
@@ -26,7 +27,21 @@ export interface HazardPlacedObject {
 	y: number;
 }
 
-export type PlacedObject = GroundPlacedObject | HazardPlacedObject;
+/**
+ * An enemy spawn point - which kind (enemyType) patrols/behaves however
+ * that kind is defined in enemies.ts and the two scenes. Like a hazard,
+ * an enemy carries no style or grouping of its own; unlike a hazard, it
+ * isn't a fixed single sprite - enemyType is what the two scenes use to
+ * pick which frames, speed, and behavior apply.
+ */
+export interface EnemyPlacedObject {
+	type: 'enemy';
+	enemyType: EnemyType;
+	x: number;
+	y: number;
+}
+
+export type PlacedObject = GroundPlacedObject | HazardPlacedObject | EnemyPlacedObject;
 
 // The one frame every hazard tile renders with - lives in a separate
 // atlas from every other placed object (see HAZARD_ATLAS_KEY in

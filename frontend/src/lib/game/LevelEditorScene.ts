@@ -3,10 +3,12 @@ import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import {
 	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
+	ensureEnemiesAtlas,
 	ensureEraserIcon,
 	ensureHazardAtlas,
 	ensureSelectCursorIcon,
 	ensureTilesAtlas,
+	ENEMIES_ATLAS_KEY,
 	ERASER_ICON_KEY,
 	ERASER_ICON_PATH,
 	HAZARD_ATLAS_KEY,
@@ -14,6 +16,7 @@ import {
 	SELECT_CURSOR_ICON_PATH,
 	TILES_ATLAS_KEY
 } from './atlases';
+import { SPIDER_DISPLAY_HEIGHT, SPIDER_DISPLAY_WIDTH, SPIDER_IDLE_FRAME } from './enemies';
 import {
 	ensureStartingPlayerColor,
 	getCharacterSwapObjectFrame,
@@ -401,6 +404,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		ensureEraserIcon(this);
 		ensureSelectCursorIcon(this);
 		ensureHazardAtlas(this);
+		ensureEnemiesAtlas(this);
 	}
 
 	create() {
@@ -464,6 +468,8 @@ export class LevelEditorScene extends Phaser.Scene {
 		for (const object of placedObjects) {
 			if (object.type === 'hazard') {
 				this.renderHazardTile(object.x, object.y);
+			} else if (object.type === 'enemy') {
+				this.renderEnemyTile(object.x, object.y);
 			}
 		}
 
@@ -494,7 +500,7 @@ export class LevelEditorScene extends Phaser.Scene {
 					return;
 				}
 
-				if (tool !== 'select' && tool !== 'hazard') {
+				if (tool !== 'select' && tool !== 'hazard' && tool !== 'enemy') {
 					// The eraser (and any future non-placement tool) has
 					// nothing useful to do on empty space.
 					return;
@@ -518,6 +524,8 @@ export class LevelEditorScene extends Phaser.Scene {
 
 				if (tool === 'hazard') {
 					this.placeHazardIfEmpty(x, y);
+				} else if (tool === 'enemy') {
+					this.placeEnemyIfEmpty(x, y);
 				} else {
 					this.placeTileIfEmpty(x, y, this.dragOrientation);
 				}
@@ -568,6 +576,8 @@ export class LevelEditorScene extends Phaser.Scene {
 				for (const x of columns) {
 					if (tool === 'hazard') {
 						this.placeHazardIfEmpty(x, this.dragOriginY);
+					} else if (tool === 'enemy') {
+						this.placeEnemyIfEmpty(x, this.dragOriginY);
 					} else {
 						this.placeTileIfEmpty(x, this.dragOriginY, 'horizontal');
 					}
@@ -578,6 +588,8 @@ export class LevelEditorScene extends Phaser.Scene {
 				for (const y of rows) {
 					if (tool === 'hazard') {
 						this.placeHazardIfEmpty(this.dragOriginX, y);
+					} else if (tool === 'enemy') {
+						this.placeEnemyIfEmpty(this.dragOriginX, y);
 					} else {
 						this.placeTileIfEmpty(this.dragOriginX, y, 'vertical');
 					}
@@ -829,6 +841,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			'Select a platform to reveal the style picker and change its appearance',
 			'Eraser tool: click or click-drag a tile to remove it',
 			'Hazard tool: click-drag to paint spike tiles - deadly to the touch',
+			'Enemy tool: click-drag to place spiders - stomp them from above, or they\'ll hurt you',
 			'Tab, or the mobile \u21c4 button, switches to Play Mode'
 		];
 		const lineTexts = lines.map((line, index) =>
@@ -858,7 +871,7 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createToolsToolbar() {
 		const spacing = this.toolbarSpacing;
-		const startX = this.scale.width / 2 - spacing * 2.5;
+		const startX = this.scale.width / 2 - spacing * 3;
 		const y = this.mainToolbarY;
 		const borderSize = this.toolIconBorderSize;
 		const iconSize = this.toolIconSize;
@@ -935,10 +948,23 @@ export class LevelEditorScene extends Phaser.Scene {
 		hazardIcon.on('pointerdown', () => this.setEditorTool('hazard'));
 		this.toolButtons.push({ tool: 'hazard', hitArea: hazardIcon, border: hazardBorder });
 
+		const enemyX = startX + spacing * 5;
+		const enemyBorder = this.add
+			.rectangle(enemyX, y, borderSize.width, borderSize.height)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+		const enemyIcon = this.add
+			.image(enemyX, y, ENEMIES_ATLAS_KEY, SPIDER_IDLE_FRAME)
+			.setDisplaySize(iconSize, iconSize)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+		enemyIcon.on('pointerdown', () => this.setEditorTool('enemy'));
+		this.toolButtons.push({ tool: 'enemy', hitArea: enemyIcon, border: enemyBorder });
+
 		// Starting-character picker - not an EditorTool, so it isn't
 		// pushed into toolButtons/refreshToolHighlight; its icon reflects
 		// whichever color is currently chosen instead of a fixed one.
-		const startingCharX = startX + spacing * 5;
+		const startingCharX = startX + spacing * 6;
 		const startingCharBorder = this.add
 			.rectangle(startingCharX, y, borderSize.width, borderSize.height)
 			.setStrokeStyle(2, 0x666666)
@@ -2133,6 +2159,48 @@ export class LevelEditorScene extends Phaser.Scene {
 		const tile = this.add
 			.image(x, y + HAZARD_Y_OFFSET, HAZARD_ATLAS_KEY, HAZARD_TILE_FRAME)
 			.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT)
+			.setInteractive();
+		tile.on('pointerdown', () => {
+			if (this.getEditorTool() === 'eraser') {
+				this.eraseTile(x, y);
+			}
+		});
+		this.tileImagesByKey.set(tileKey(x, y), tile);
+	}
+
+	// ── Enemy placement tool ─────────────────────────────────────────────
+
+	private placeEnemyIfEmpty(x: number, y: number) {
+		const existing =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+
+		if (isPositionOccupied(existing, x, y)) {
+			return;
+		}
+
+		// Only one enemy type exists yet (see ENEMY_TYPES in enemies.ts) -
+		// hardcoded here the same way the hazard tool hardcodes its one
+		// fixed sprite, rather than building a picker UI for a choice that
+		// doesn't exist yet.
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [
+			...existing,
+			{ type: 'enemy', enemyType: 'spider', x, y }
+		]);
+		this.renderEnemyTile(x, y);
+	}
+
+	/**
+	 * Renders one enemy spawn point in its idle frame - the Editor shows a
+	 * static preview, not the patrol/animation behavior that only applies
+	 * in Play mode (see PlatformerScene). Shares tileImagesByKey with
+	 * ground and hazard tiles, same reasoning as renderHazardTile: eraseTile's
+	 * generic image cleanup works for any of them without needing to know
+	 * which kind it's looking at.
+	 */
+	private renderEnemyTile(x: number, y: number) {
+		const tile = this.add
+			.image(x, y, ENEMIES_ATLAS_KEY, SPIDER_IDLE_FRAME)
+			.setDisplaySize(SPIDER_DISPLAY_WIDTH, SPIDER_DISPLAY_HEIGHT)
 			.setInteractive();
 		tile.on('pointerdown', () => {
 			if (this.getEditorTool() === 'eraser') {

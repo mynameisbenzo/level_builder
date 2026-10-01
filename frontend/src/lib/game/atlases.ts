@@ -91,3 +91,23 @@ export function ensureHazardAtlas(scene: Phaser.Scene) {
 		'/assets/kenney/platformer-pack/Spritesheets/platformIndustrial_sheet.xml'
 	);
 }
+
+export const ENEMIES_ATLAS_KEY = 'enemies';
+
+/**
+ * Queues the Kenney enemies spritesheet atlas for loading if it isn't
+ * already registered - every enemy sprite (spider now, more later - see
+ * EnemyType in enemies.ts) lives in this one shared atlas. Same guarded
+ * pattern as the other ensure* loaders.
+ */
+export function ensureEnemiesAtlas(scene: Phaser.Scene) {
+	if (scene.textures.exists(ENEMIES_ATLAS_KEY)) {
+		return;
+	}
+
+	scene.load.atlasXML(
+		ENEMIES_ATLAS_KEY,
+		'/assets/kenney/platformer-pack/Spritesheets/enemies.png',
+		'/assets/kenney/platformer-pack/Spritesheets/enemies.xml'
+	);
+}

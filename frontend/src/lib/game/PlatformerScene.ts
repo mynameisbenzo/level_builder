@@ -47,11 +47,34 @@ import { ensureSounds, playSfx } from './sounds';
 import {
 	CHARACTERS_ATLAS_KEY,
 	ensureCharacterAtlas,
+	ensureEnemiesAtlas,
 	ensureHazardAtlas,
 	ensureTilesAtlas,
+	ENEMIES_ATLAS_KEY,
 	HAZARD_ATLAS_KEY,
 	TILES_ATLAS_KEY
 } from './atlases';
+import {
+	getNextPatrolDirection,
+	getPlatformBoundsForEnemy,
+	getSpiderHitboxSize,
+	getSpiderWalkFrame,
+	isStompHit,
+	SPIDER_DEAD_FRAME,
+	SPIDER_DEAD_HOLD_MS,
+	SPIDER_DISPLAY_HEIGHT,
+	SPIDER_DISPLAY_WIDTH,
+	SPIDER_FLICKER_COUNT,
+	SPIDER_FLICKER_INTERVAL_MS,
+	SPIDER_HIT_FRAME,
+	SPIDER_IDLE_FRAME,
+	SPIDER_PATROL_SPEED,
+	SPIDER_STOMP_BOUNCE_VELOCITY,
+	SPIDER_STOMP_JUMP_GRACE_MS,
+	SPIDER_STOMP_TOLERANCE_PX,
+	type GroundTilePosition,
+	type PatrolBounds
+} from './enemies';
 import {
 	ensureStartingPlayerColor,
 	getCharacterSwapObjectFrame,
@@ -256,6 +279,22 @@ interface TrackedSwapObject {
 	onCooldown: boolean;
 }
 
+interface TrackedSpider {
+	sprite: Phaser.Physics.Arcade.Sprite;
+	direction: 1 | -1;
+	/** null when no ground tile was found directly beneath this spider's
+	 * spawn point (see getPlatformBoundsForEnemy) - it stands still
+	 * rather than patrolling over open air. */
+	bounds: PatrolBounds | null;
+	/** Set once stomped - stops patrol/animation updates and further
+	 * overlap handling (its body is also disabled) while the death
+	 * animation plays out, see killSpider. */
+	isDead: boolean;
+	/** The walk frame currently shown, so update() only calls setTexture
+	 * when it actually changes rather than every single frame. */
+	lastWalkFrame: string;
+}
+
 export class PlatformerScene extends Phaser.Scene {
 	private player!: Phaser.Physics.Arcade.Sprite;
 	private wasd!: {
@@ -274,6 +313,14 @@ export class PlatformerScene extends Phaser.Scene {
 	private doors: TrackedDoor[] = [];
 	private keys: TrackedKey[] = [];
 	private uncollectedKeysGroup!: Phaser.Physics.Arcade.Group;
+	private spiders: TrackedSpider[] = [];
+	private spiderGroup!: Phaser.Physics.Arcade.Group;
+	/** Timestamp (Phaser scene time, ms) until which a jump press counts
+	 * as a ground-equivalent jump even though the player isn't physically
+	 * touching the ground - set by a spider stomp's bounce (see
+	 * killSpider) so "jump is refreshed" doesn't require landing on the
+	 * exact same physics frame the bounce happens on. 0 when not active. */
+	private jumpAvailableUntil = 0;
 	/** Which key colors the player currently holds - runtime-only, reset
 	 * every fresh Play session, same principle as everything else that
 	 * shouldn't leak between sessions (see the create() reset block). */
@@ -346,6 +393,7 @@ export class PlatformerScene extends Phaser.Scene {
 		ensureCharacterAtlas(this);
 		ensureTilesAtlas(this);
 		ensureHazardAtlas(this);
+		ensureEnemiesAtlas(this);
 		ensureSounds(this);
 	}
 
@@ -371,6 +419,8 @@ export class PlatformerScene extends Phaser.Scene {
 		this.pMeterMs = 0;
 		this.dashHeldSinceTime = 0;
 		this.wasDashHeldLastFrame = false;
+		this.spiders = [];
+		this.jumpAvailableUntil = 0;
 
 		currentMode.set(CURRENT_MODE);
 
@@ -453,6 +503,12 @@ export class PlatformerScene extends Phaser.Scene {
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
 		const tilesByGroupId = new Map<string, PositionedTile[]>();
+		// A lighter-weight parallel list (just x/y/groupId, not style) -
+		// everything getPlatformBoundsForEnemy needs to work out which
+		// platform a spider spawns on and how far it can patrol, without
+		// that pure function needing to know about GroundPlacedObject at
+		// all.
+		const groundTilePositions: GroundTilePosition[] = [];
 		for (const object of placedObjects) {
 			if (object.type !== 'ground') {
 				continue;
@@ -460,6 +516,7 @@ export class PlatformerScene extends Phaser.Scene {
 			const tiles = tilesByGroupId.get(object.groupId) ?? [];
 			tiles.push({ x: object.x, y: object.y, style: object.style, groupId: object.groupId });
 			tilesByGroupId.set(object.groupId, tiles);
+			groundTilePositions.push({ x: object.x, y: object.y, groupId: object.groupId });
 		}
 		for (const tiles of tilesByGroupId.values()) {
 			for (const { x, y, frame } of getGroupFrames(tiles, GRID_SIZE)) {
@@ -492,6 +549,58 @@ export class PlatformerScene extends Phaser.Scene {
 			tile.refreshBody();
 		}
 		this.physics.add.overlap(this.player, this.hazards, () => this.die());
+
+		// Spiders: patrol back and forth along whichever ground platform
+		// they were placed on (see getPlatformBoundsForEnemy), turning
+		// around at its edges. A real physics body (gravity + collider
+		// against platforms, same as the player) rather than a kinematic
+		// tween - this is what lets a spider rest naturally on its
+		// platform and be stomped from above using the same kind of
+		// position/velocity checks the player's own movement uses.
+		this.spiderGroup = this.physics.add.group();
+		for (const object of placedObjects) {
+			if (object.type !== 'enemy' || object.enemyType !== 'spider') {
+				continue;
+			}
+
+			const sprite = this.physics.add.sprite(object.x, object.y, ENEMIES_ATLAS_KEY, SPIDER_IDLE_FRAME);
+			sprite.setDisplaySize(SPIDER_DISPLAY_WIDTH, SPIDER_DISPLAY_HEIGHT);
+			sprite.refreshBody();
+			// Narrower than the full sprite - see SPIDER_HITBOX_WIDTH_RATIO's
+			// comment for why: without this, two spiders in adjacent cells
+			// could register overlapping bodies and turn a clean stomp into
+			// an accidental death from the neighbor. setOffset keeps the
+			// body centered horizontally and planted at the sprite's feet
+			// (not centered vertically), matching where a spider visually
+			// stands.
+			const spiderBody = sprite.body as Phaser.Physics.Arcade.Body;
+			const hitbox = getSpiderHitboxSize(sprite.frame.width, sprite.frame.height);
+			spiderBody.setSize(hitbox.width, hitbox.height);
+			spiderBody.setOffset(
+				(sprite.frame.width - hitbox.width) / 2,
+				sprite.frame.height - hitbox.height
+			);
+			this.spiderGroup.add(sprite);
+
+			const bounds = getPlatformBoundsForEnemy(groundTilePositions, object.x, object.y, GRID_SIZE);
+			this.spiders.push({ sprite, direction: 1, bounds, isDead: false, lastWalkFrame: SPIDER_IDLE_FRAME });
+		}
+		this.physics.add.collider(this.spiderGroup, this.platforms);
+		// Spiders collide with each other too (not just overlap) - this is
+		// what keeps two spiders from ever actually occupying the same
+		// space, whether they were placed right next to each other in the
+		// Editor or walked into each other while patrolling. Arcade
+		// physics separates colliding bodies on its own every step; the
+		// callback just reverses each one's patrol direction on contact,
+		// same as reaching the edge of its platform (see
+		// handleSpiderCollision).
+		this.physics.add.collider(this.spiderGroup, this.spiderGroup, (spiderObjectA, spiderObjectB) => {
+			this.handleSpiderCollision(spiderObjectA as Phaser.Physics.Arcade.Sprite);
+			this.handleSpiderCollision(spiderObjectB as Phaser.Physics.Arcade.Sprite);
+		});
+		this.physics.add.overlap(this.player, this.spiderGroup, (_player, spiderObject) => {
+			this.handlePlayerSpiderOverlap(spiderObject as Phaser.Physics.Arcade.Sprite);
+		});
 
 		const swapObjectsData =
 			(this.registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as
@@ -1001,6 +1110,134 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
+	 * Moves and animates every living spider: continues patrolling in its
+	 * current direction, reversing at its platform's edges (see
+	 * getNextPatrolDirection), and advances its walk-cycle frame. A dead
+	 * spider is skipped entirely - its death animation (playSpiderDeathAnimation)
+	 * owns its texture from the moment it's stomped.
+	 */
+	private updateSpiders(time: number) {
+		for (const spider of this.spiders) {
+			if (spider.isDead) {
+				continue;
+			}
+
+			if (!spider.bounds) {
+				// No ground tile directly beneath this spider's spawn point
+				// - nothing to patrol along, so it just stands in place
+				// rather than wandering over open air.
+				spider.sprite.setVelocityX(0);
+				continue;
+			}
+
+			spider.direction = getNextPatrolDirection(spider.sprite.x, spider.direction, spider.bounds);
+			spider.sprite.setVelocityX(SPIDER_PATROL_SPEED * spider.direction);
+			spider.sprite.setFlipX(spider.direction < 0);
+
+			const frame = getSpiderWalkFrame(time);
+			if (frame !== spider.lastWalkFrame) {
+				spider.sprite.setTexture(ENEMIES_ATLAS_KEY, frame);
+				spider.lastWalkFrame = frame;
+			}
+		}
+	}
+
+	/**
+	 * Reverses a spider's patrol direction on contact with another
+	 * spider - the same reaction as reaching the edge of its platform
+	 * (see getNextPatrolDirection), just triggered by a neighbor instead
+	 * of running out of ground. Arcade physics has already separated the
+	 * two bodies by the time this callback runs; this only decides which
+	 * way each one heads next. A dead spider's body is disabled (see
+	 * killSpider) so it never reaches this callback in the first place,
+	 * but the isDead check is kept anyway as a defensive no-op.
+	 */
+	private handleSpiderCollision(spiderSprite: Phaser.Physics.Arcade.Sprite) {
+		const spider = this.spiders.find((tracked) => tracked.sprite === spiderSprite);
+		if (!spider || spider.isDead) {
+			return;
+		}
+		spider.direction = spider.direction === 1 ? -1 : 1;
+	}
+
+	/**
+	 * Decides what touching a given spider means: landing on top of it
+	 * (a stomp - see isStompHit) kills it, anything else (walking into it
+	 * from the side, or being hit from underneath) kills the player, same
+	 * as a hazard tile. Looks the sprite back up in this.spiders (the
+	 * overlap callback only gives back the GameObject, not which tracked
+	 * spider it belongs to) and bails out if it's already dead - a body
+	 * stays enabled for the first physics step a kill happens in, so the
+	 * overlap can still fire once more that same step before killSpider's
+	 * body.enable = false takes effect.
+	 */
+	private handlePlayerSpiderOverlap(spiderSprite: Phaser.Physics.Arcade.Sprite) {
+		const spider = this.spiders.find((tracked) => tracked.sprite === spiderSprite);
+		if (!spider || spider.isDead) {
+			return;
+		}
+
+		const playerBody = this.player.body as Phaser.Physics.Arcade.Body;
+		const spiderBody = spiderSprite.body as Phaser.Physics.Arcade.Body;
+
+		if (isStompHit(playerBody.velocity.y, playerBody.bottom, spiderBody.top, SPIDER_STOMP_TOLERANCE_PX)) {
+			this.killSpider(spider);
+		} else {
+			this.die();
+		}
+	}
+
+	/**
+	 * Kills a stomped spider: stops and disables its body immediately (so
+	 * it can't be stomped or collided with again mid-death-animation),
+	 * bounces the player upward, and refreshes their jump/float budget the
+	 * same way landing on real ground would (see jumpAvailableUntil and
+	 * airborneStartTime) - "jump is refreshed" means a jump press shortly
+	 * after this bounce gets full height, not just the automatic hop, and
+	 * a float-capable character gets their float time back too.
+	 */
+	private killSpider(spider: TrackedSpider) {
+		spider.isDead = true;
+		spider.sprite.setVelocity(0, 0);
+		const body = spider.sprite.body as Phaser.Physics.Arcade.Body;
+		body.enable = false;
+
+		playSfx(this, 'enemyStomp');
+
+		this.player.setVelocityY(SPIDER_STOMP_BOUNCE_VELOCITY);
+		this.airborneStartTime = this.time.now;
+		this.jumpAvailableUntil = this.time.now + SPIDER_STOMP_JUMP_GRACE_MS;
+
+		this.playSpiderDeathAnimation(spider);
+	}
+
+	/**
+	 * Flickers between the spider's idle and hit frames SPIDER_FLICKER_COUNT
+	 * times, then holds on its dead frame for SPIDER_DEAD_HOLD_MS before
+	 * destroying it for good and dropping it from this.spiders.
+	 */
+	private playSpiderDeathAnimation(spider: TrackedSpider) {
+		let flickerStep = 0;
+		this.time.addEvent({
+			delay: SPIDER_FLICKER_INTERVAL_MS,
+			repeat: SPIDER_FLICKER_COUNT - 1,
+			callback: () => {
+				flickerStep++;
+				const frame = flickerStep % 2 === 1 ? SPIDER_HIT_FRAME : SPIDER_IDLE_FRAME;
+				spider.sprite.setTexture(ENEMIES_ATLAS_KEY, frame);
+			}
+		});
+
+		this.time.delayedCall(SPIDER_FLICKER_INTERVAL_MS * SPIDER_FLICKER_COUNT, () => {
+			spider.sprite.setTexture(ENEMIES_ATLAS_KEY, SPIDER_DEAD_FRAME);
+			this.time.delayedCall(SPIDER_DEAD_HOLD_MS, () => {
+				spider.sprite.destroy();
+				this.spiders = this.spiders.filter((tracked) => tracked !== spider);
+			});
+		});
+	}
+
+	/**
 	 * Engages the float ability: disables gravity so the oscillating
 	 * velocity applied in update() (see getFloatVelocity) isn't fighting
 	 * gravity's own contribution each frame, same reasoning as the win
@@ -1048,6 +1285,7 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 
 		this.updateKeys(time);
+		this.updateSpiders(time);
 		this.updateQuadrantCamera();
 
 		const currentPlayerColor = this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
@@ -1245,18 +1483,25 @@ export class PlatformerScene extends Phaser.Scene {
 			this.player.setVelocityY(getFloatVelocity(time, FLOAT_BOUNCE_AMPLITUDE, FLOAT_BOUNCE_PERIOD_MS));
 		} else {
 			if (!openedDoorThisFrame) {
+				// A spider stomp's bounce (see killSpider) grants a brief
+				// window where a jump press counts the same as actually
+				// touching the ground - this is what makes stomping a
+				// spider "refresh" the jump rather than just bouncing the
+				// player with no way to follow up with a real jump.
+				const canJumpFromStomp = time < this.jumpAvailableUntil;
 				const velocityY = getJumpVelocity(
-					{ jumpJustPressed, onGround },
+					{ jumpJustPressed, onGround: onGround || canJumpFromStomp },
 					JUMP_VELOCITY * jumpVelocityMultiplier
 				);
 				if (velocityY !== null) {
 					this.player.setVelocityY(velocityY);
-					// A fresh jump from the ground starts a new airborne
-					// period, resetting the float budget - this is the
-					// "only way to get more float time is to land and jump
-					// again" rule that closes the release-and-re-press
-					// exploit.
+					// A fresh jump from the ground (or an equally fresh one
+					// off a stomped spider) starts a new airborne period,
+					// resetting the float budget - this is the "only way to
+					// get more float time is to land and jump again" rule
+					// that closes the release-and-re-press exploit.
 					this.airborneStartTime = time;
+					this.jumpAvailableUntil = 0;
 					playSfx(this, 'jump');
 				}
 			}

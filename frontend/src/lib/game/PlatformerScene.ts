@@ -608,7 +608,27 @@ export class PlatformerScene extends Phaser.Scene {
 			const bounds = getPlatformBoundsForEnemy(groundTilePositions, object.x, object.y, GRID_SIZE);
 			this.spiders.push({ sprite, direction: 1, bounds, isDead: false, lastWalkFrame: SPIDER_IDLE_FRAME });
 		}
-		this.physics.add.collider(this.spiderGroup, this.platforms);
+		// Reverses a spider's direction the instant it's physically blocked
+		// sideways by a platform - not just when it reaches the edge of its
+		// OWN platform (see getNextPatrolDirection/bounds above), but also
+		// when a different, diagonally-offset platform happens to be close
+		// enough to block it first. Without this, Arcade physics zeroes the
+		// spider's velocity on contact but nothing ever tells it to turn
+		// around, so it was getting stuck walking in place (animating, going
+		// nowhere) against a neighboring platform it never reaches its own
+		// bounds against.
+		this.physics.add.collider(this.spiderGroup, this.platforms, (spiderObject) => {
+			this.handleSpiderPlatformCollision(spiderObject as Phaser.Physics.Arcade.Sprite);
+		});
+		// Hazards are solid to spiders (unlike to the player, who dies on
+		// touch instead - see the overlap set up above) - a spider that
+		// patrols into one turns around exactly like it would at a
+		// platform's edge or another spider, reusing the same reversal
+		// logic since it only cares that it was blocked sideways, not what
+		// it was blocked by.
+		this.physics.add.collider(this.spiderGroup, this.hazards, (spiderObject) => {
+			this.handleSpiderPlatformCollision(spiderObject as Phaser.Physics.Arcade.Sprite);
+		});
 		// Spiders collide with each other too (not just overlap) - this is
 		// what keeps two spiders from ever actually occupying the same
 		// space, whether they were placed right next to each other in the
@@ -1196,7 +1216,7 @@ export class PlatformerScene extends Phaser.Scene {
 
 			spider.direction = getNextPatrolDirection(spider.sprite.x, spider.direction, spider.bounds);
 			spider.sprite.setVelocityX(SPIDER_PATROL_SPEED * spider.direction);
-			spider.sprite.setFlipX(spider.direction < 0);
+			spider.sprite.setFlipX(spider.direction > 0);
 
 			const frame = getSpiderWalkFrame(time);
 			if (frame !== spider.lastWalkFrame) {
@@ -1222,6 +1242,29 @@ export class PlatformerScene extends Phaser.Scene {
 			return;
 		}
 		spider.direction = spider.direction === 1 ? -1 : 1;
+	}
+
+	/**
+	 * Reverses a spider's patrol direction when it's physically blocked
+	 * sideways by something solid - a platform tile (e.g. a different,
+	 * diagonally-offset platform placed close enough to collide with it
+	 * before it ever reaches its own platform's computed bounds, see
+	 * getPlatformBoundsForEnemy) or a hazard tile (solid to spiders, even
+	 * though the player dies on touching one instead - see the player/
+	 * hazards overlap set up in create()). Only reacts to a horizontal
+	 * block (blocked.left/right) - landing on top of something
+	 * (blocked.down) is completely normal and shouldn't flip the patrol
+	 * direction.
+	 */
+	private handleSpiderPlatformCollision(spiderSprite: Phaser.Physics.Arcade.Sprite) {
+		const spider = this.spiders.find((tracked) => tracked.sprite === spiderSprite);
+		if (!spider || spider.isDead) {
+			return;
+		}
+		const body = spiderSprite.body as Phaser.Physics.Arcade.Body;
+		if (body.blocked.left || body.blocked.right) {
+			spider.direction = spider.direction === 1 ? -1 : 1;
+		}
 	}
 
 	/**

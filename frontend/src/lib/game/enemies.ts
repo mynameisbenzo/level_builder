@@ -95,14 +95,20 @@ export interface GroundTilePosition {
 
 /**
  * Finds the horizontal span (in world px) of the platform an enemy is
- * standing on, so it knows where to turn around. Looks for a ground tile
- * directly beneath the enemy's spawn position (one grid cell down), then
- * collects every tile sharing that tile's platform (groupId) and row (y)
- * - deliberately not the whole group regardless of row, since a vertical
- * platform's group spans multiple y values at the same x, which isn't a
- * span to patrol along at all. Returns null if there's no ground tile
- * directly beneath the enemy (nothing to patrol along), in which case the
- * enemy should just stand still rather than wandering over open air.
+ * standing on, so it knows where to turn around. Looks for the NEAREST
+ * ground tile directly beneath the enemy's spawn position, at any
+ * distance - not just exactly one grid cell down. An enemy placed a
+ * couple of cells above its platform still falls (gravity + the
+ * spiders/platforms collider, see create()) and lands on that same
+ * tile, so patrol bounds are computed from wherever it'll actually end
+ * up, not from a spawn position that happens not to be flush against
+ * it yet. Then collects every tile sharing that tile's platform
+ * (groupId) and row (y) - deliberately not the whole group regardless
+ * of row, since a vertical platform's group spans multiple y values at
+ * the same x, which isn't a span to patrol along at all. Returns null
+ * if there's no ground tile anywhere beneath the enemy in its column
+ * (nothing to patrol along, ever), in which case the enemy should just
+ * stand still rather than wandering over open air.
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function getPlatformBoundsForEnemy(
@@ -111,12 +117,12 @@ export function getPlatformBoundsForEnemy(
 	enemyY: number,
 	gridSize: number
 ): PatrolBounds | null {
-	const standingTile = groundTiles.find(
-		(tile) => tile.x === enemyX && tile.y === enemyY + gridSize
-	);
-	if (!standingTile) {
+	const tilesBelow = groundTiles.filter((tile) => tile.x === enemyX && tile.y > enemyY);
+	if (tilesBelow.length === 0) {
 		return null;
 	}
+
+	const standingTile = tilesBelow.reduce((nearest, tile) => (tile.y < nearest.y ? tile : nearest));
 
 	const sameRow = groundTiles.filter(
 		(tile) => tile.groupId === standingTile.groupId && tile.y === standingTile.y

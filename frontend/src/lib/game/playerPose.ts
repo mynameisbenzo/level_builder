@@ -39,6 +39,18 @@ export const PLAYER_DUCK_CONTENT_BOUNDS = {
 	height: PLAYER_SPRITE_CONTENT_BOUNDS.height / 2
 };
 
+/**
+ * The frame shown the instant a player dies, regardless of pose (jump,
+ * duck, mid-walk-animation, etc.) - every color has a dedicated
+ * character_<color>_hit frame in the atlas for exactly this, separate
+ * from the four frames getPlayerPoseConfig cycles through during normal
+ * play.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getPlayerHitFrame(color: PlayerColor): string {
+	return playerFrameName(color, 'hit');
+}
+
 export const PLAYER_WALK_ANIMATION_KEY = 'player-walk';
 
 /**

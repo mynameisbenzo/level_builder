@@ -83,6 +83,7 @@ import {
 	type PlayerColor
 } from './playerColor';
 import {
+	getPlayerHitFrame,
 	getPlayerPoseConfig,
 	PLAYER_DISPLAY_SIZE,
 	setPlayerWalkAnimationColor
@@ -181,6 +182,19 @@ const STICK_DEADZONE = 0.2;
 const GAMEPAD_MESSAGE_HOLD_MS = 2000;
 const GAMEPAD_MESSAGE_FADE_MS = 800;
 const FALL_OFF_SCREEN_THRESHOLD_PX = 100;
+
+// Death sequence: however a death was triggered (a hazard, a spider, or
+// simply falling with nothing underneath), the player freezes in place
+// on the hit frame for this long before gravity resumes and they fall
+// through every tile beneath them (see die()). DEATH_FALL_THRESHOLD_PX
+// is deliberately separate from FALL_OFF_SCREEN_THRESHOLD_PX above - that
+// one is how far below the world a *living* player has to fall before
+// it counts as dying at all; this one is how far below the world a
+// player already in the post-death fall has to go before the sequence
+// is considered finished and the actual outcome (editor bounce-back or
+// the result modal) fires.
+const DEATH_FREEZE_DURATION_MS = 1000;
+const DEATH_FALL_THRESHOLD_PX = 32;
 
 // Character-swap objects: distance-based trigger/cooldown, plus the
 // reactivation "pop" animation's scale steps and per-step durations.
@@ -338,12 +352,20 @@ export class PlatformerScene extends Phaser.Scene {
 	 * LEVEL_DIED_EVENT. An owner testing in the editor bounces back to
 	 * Edit Mode on death instead and never sets this. */
 	private hasDied = false;
-	/** Guards die() against running more than once within the same
-	 * physics step - e.g. the player's body overlapping more than one
-	 * hazard tile at once, or a repeated overlap firing before an
-	 * editor-mode death's scene.start() has actually taken effect.
-	 * Runtime-only, reset each session like everything else above. */
+	/** True from the moment a death is triggered until the post-death
+	 * fall finishes (see die()/updateDeathFall) - guards against running
+	 * die() more than once within the same physics step (e.g. the
+	 * player's body overlapping more than one hazard tile at once), and
+	 * also tells update() to skip all normal game logic (movement,
+	 * spiders, the camera, door/swap checks) for the whole death
+	 * sequence, leaving only gravity to carry the player down. Runtime-
+	 * only, reset each session like everything else above. */
 	private isDying = false;
+	/** False during the initial 1-second freeze (see
+	 * DEATH_FREEZE_DURATION_MS), true once gravity has resumed and the
+	 * player is actually falling through the level - only meaningful
+	 * while isDying is true. Runtime-only, reset each session. */
+	private isFallingThroughLevel = false;
 	/** Runtime-only, reset each session like everything else above -
 	 * whether the player is currently using the float ability (see
 	 * shouldStartFloating/shouldStopFloating in movement.ts). */
@@ -410,6 +432,7 @@ export class PlatformerScene extends Phaser.Scene {
 		this.hasWon = false;
 		this.hasDied = false;
 		this.isDying = false;
+		this.isFallingThroughLevel = false;
 		this.wasPadJumpButtonDown = false;
 		this.wasTouchJumpDown = false;
 		this.collectedKeyColors = new Set();
@@ -1058,23 +1081,70 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
-	 * Shared by both ways a playthrough can end in death: falling off
-	 * the world, or touching a hazard tile (see the overlap set up in
-	 * create()). In the editor (testing your own level), death bounces
-	 * back to Edit Mode, same as it always has for falling off screen;
-	 * in a public /play/[slug] session, it's the triggerDeath() path
-	 * below instead. isDying guards against running this twice in the
-	 * same physics step - e.g. the player's body overlapping more than
-	 * one hazard tile in one frame.
+	 * Shared by every way a playthrough can end in death: falling off
+	 * the world with nothing underneath, touching a hazard tile, or
+	 * touching a spider other than stomping it (see the overlaps set up
+	 * in create()). Rather than resolving the outcome immediately, this
+	 * kicks off the shared death sequence - freeze on the hit frame,
+	 * then fall through the level - and the actual outcome (editor
+	 * bounce-back, or the public result modal) only fires once that
+	 * sequence reaches the bottom (see finishDeathFall). isDying guards
+	 * against running this twice in the same physics step - e.g. the
+	 * player's body overlapping more than one hazard tile at once.
 	 */
 	private die() {
 		if (this.hasWon || this.hasDied || this.isDying) {
 			return;
 		}
 		this.isDying = true;
+		this.isFallingThroughLevel = false;
 
+		playSfx(this, 'death');
+
+		// Freeze exactly where they died - zero velocity and gravity off
+		// so the pause is a true hold in place, not just a slow drift -
+		// and switch to the character's hit frame. update() already
+		// skips the normal per-frame pose logic once isDying is true
+		// (see the top of update()), so nothing overwrites this texture
+		// until the fall sequence itself changes it again.
+		this.player.setVelocity(0, 0);
+		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
+		if (body) {
+			body.allowGravity = false;
+		}
+		this.player.anims.stop();
+		const currentPlayerColor = this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as
+			| PlayerColor
+			| undefined;
+		if (currentPlayerColor) {
+			this.player.setTexture(CHARACTERS_ATLAS_KEY, getPlayerHitFrame(currentPlayerColor));
+		}
+
+		this.time.delayedCall(DEATH_FREEZE_DURATION_MS, () => {
+			// Falling through every tile beneath them, rather than
+			// resting back on whatever they died on top of, needs the
+			// player/platforms collider itself turned off - the same
+			// collider the (experimental) phase ability already toggles
+			// via this .active flag, see update()'s isPhasing handling.
+			this.platformCollider.active = false;
+			if (body) {
+				body.allowGravity = true;
+			}
+			this.isFallingThroughLevel = true;
+		});
+	}
+
+	/**
+	 * Runs once the post-death fall (see die()) has carried the player
+	 * DEATH_FALL_THRESHOLD_PX below the bottom of the world - the point
+	 * at which the death sequence is considered finished and the actual
+	 * outcome fires. In the editor (testing your own level), that means
+	 * bouncing back to Edit Mode, same as a death always has; in a
+	 * public /play/[slug] session, it's the triggerDeath() path below
+	 * instead.
+	 */
+	private finishDeathFall() {
 		if (this.scene.get('LevelEditorScene')) {
-			playSfx(this, 'death');
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;
@@ -1084,26 +1154,20 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
-	 * The public-play-only death path (see die() above) - freezes the
-	 * player where they fell/died and emits LEVEL_DIED_EVENT for the
+	 * The public-play-only conclusion of a death (see finishDeathFall
+	 * above) - marks the session as died (update() returns immediately
+	 * from here on, same as hasWon) and emits LEVEL_DIED_EVENT for the
 	 * hosting Svelte page to react to. Doesn't restart the scene itself:
 	 * the result modal that event triggers offers Replay as an explicit
 	 * action (which does restart it, via the same scene.restart()
 	 * create() already resets everything for), rather than yanking the
-	 * level back to its start the instant someone dies.
+	 * level back to its start the instant the fall finishes.
 	 */
 	private triggerDeath() {
 		this.hasDied = true;
-		playSfx(this, 'death');
-		this.player.setVelocity(0, 0);
-		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
-		if (body) {
-			body.allowGravity = false;
-		}
-		// The freeze above happens right away (update() already returns
-		// early every frame once hasDied is true), but the modal itself
-		// waits - room for a death sound/animation to actually play
-		// before the screen gets covered by a result modal.
+		// Room for the death sound/fall animation to actually finish
+		// playing out before the screen gets covered by a result modal -
+		// same delay, and same reasoning, as triggerWin()'s own delay.
 		this.time.delayedCall(RESULT_MODAL_DELAY_MS, () => {
 			this.game.events.emit(LEVEL_DIED_EVENT);
 		});
@@ -1261,6 +1325,23 @@ export class PlatformerScene extends Phaser.Scene {
 
 	update(time: number, delta: number) {
 		if (this.hasWon || this.hasDied) {
+			return;
+		}
+
+		if (this.isDying) {
+			// The entire death sequence (the 1-second freeze, then the
+			// fall through the level) pauses everything else - no
+			// movement input, no spider patrol, no camera panning - the
+			// only thing still happening is gravity pulling the player
+			// down once the freeze ends. This is also why none of the
+			// normal per-frame logic below (pose, animation, jump, etc.)
+			// needs its own "unless dying" guard: it simply never runs.
+			if (
+				this.isFallingThroughLevel &&
+				hasFallenOffScreen(this.player.y, WORLD_HEIGHT, DEATH_FALL_THRESHOLD_PX)
+			) {
+				this.finishDeathFall();
+			}
 			return;
 		}
 

@@ -421,7 +421,87 @@ def test_play_endpoint_still_serves_the_last_published_version_after_a_demoting_
         assert response.status_code == 200
         # Still the originally-published content, not the in-progress edit.
         assert response.get_json()["content"]["spawnPosition"] != {"x": 208, "y": 208}
-        
+
+
+def test_record_play_counts_an_anonymous_request():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level['id'])
+
+        # Deliberately no Authorization header - most plays are anonymous.
+        response = client.post(f"/api/levels/{level['id']}/play")
+
+        assert response.status_code == 200
+        assert response.get_json()["play_count"] == 1
+
+
+def test_record_play_counts_a_logged_in_non_owner():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, username="creator", email="c@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level['id'])
+
+        other_token = _signup_and_login(app, client, username="visitor", email="v@example.com")
+        response = client.post(f"/api/levels/{level['id']}/play", headers=_auth_headers(other_token))
+
+        assert response.status_code == 200
+        assert response.get_json()["play_count"] == 1
+
+
+def test_record_play_does_not_count_the_levels_own_owner():
+    """
+    The actual fix this is testing for: a creator play-testing their own
+    published level from /u/[username] shouldn't inflate their own play
+    count - see _is_requester_the_owner in app/api/levels.py.
+    """
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level['id'])
+
+        response = client.post(f"/api/levels/{level['id']}/play", headers=_auth_headers(token))
+
+        assert response.status_code == 200
+        assert response.get_json()["play_count"] == 0
+
+
+def test_record_completion_does_not_count_the_levels_own_owner():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level['id'])
+
+        response = client.post(f"/api/levels/{level['id']}/complete", headers=_auth_headers(token))
+
+        assert response.status_code == 200
+        assert response.get_json()["completion_count"] == 0
+
+
+def test_record_completion_counts_a_logged_in_non_owner():
+    app, client = _client()
+    with app.app_context():
+        owner_token = _signup_and_login(app, client, username="creator", email="c@example.com")
+        level = _create_level(client, owner_token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
+        _publish(client, owner_token, level['id'])
+
+        other_token = _signup_and_login(app, client, username="visitor", email="v@example.com")
+        response = client.post(
+            f"/api/levels/{level['id']}/complete", headers=_auth_headers(other_token)
+        )
+
+        assert response.status_code == 200
+        assert response.get_json()["completion_count"] == 1
+
 
 # --- list my levels (owner-only) ---
 

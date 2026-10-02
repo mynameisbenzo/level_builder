@@ -2,6 +2,7 @@
 	import { onDestroy, onMount, tick } from 'svelte';
 	import Phaser from 'phaser';
 	import { getLevelForPlay, recordLevelCompletion, recordLevelPlay } from '$lib/api';
+	import { auth } from '$lib/auth.svelte';
 	import { createGameConfig } from '$lib/game/gameConfig';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import TouchControls from '$lib/game/TouchControls.svelte';
@@ -29,8 +30,10 @@
 		resultOutcome = 'won';
 		// Best-effort, fire-and-forget - a metrics call failing shouldn't
 		// block or interrupt the win screen the player is already looking
-		// at (see recordLevelCompletion's own comment).
-		void recordLevelCompletion(slug);
+		// at (see recordLevelCompletion's own comment). Passing the access
+		// token (when logged in) is what lets the backend recognize the
+		// level's own owner and skip counting their own playthrough.
+		void recordLevelCompletion(slug, auth.accessToken ?? undefined);
 	}
 
 	function handleLevelDied() {
@@ -46,8 +49,9 @@
 		// point, not just closing the modal.
 		game?.scene.getScene('PlatformerScene')?.scene.restart();
 		// A conscious "Play Again" is a genuine new attempt at the level,
-		// same as the very first load below - counted the same way.
-		void recordLevelPlay(slug);
+		// same as the very first load below - counted the same way
+		// (including the same owner-exclusion via the access token).
+		void recordLevelPlay(slug, auth.accessToken ?? undefined);
 	}
 
 	onMount(async () => {
@@ -83,7 +87,7 @@
 
 		// The level actually loaded and a real playthrough is starting -
 		// counted the same way as a later "Play Again" (see handleReplay).
-		void recordLevelPlay(slug);
+		void recordLevelPlay(slug, auth.accessToken ?? undefined);
 	});
 
 	onDestroy(() => {

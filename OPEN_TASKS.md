@@ -244,6 +244,20 @@ already have a link to:
       levels by title, and searching for creators by username. No
       design work done yet on ranking/sorting (newest? most played?
       highest clear rate?) or what filters make sense.
+- [ ] **Endless mode** - serves a random published level, and on
+      finishing it (win or death, TBD) automatically advances to
+      another random level from a *different* creator, rather than the
+      player picking one link at a time. Likely wants its own, better
+      metrics tracking than the current per-level play/completion
+      counters, since a play started via endless mode isn't really the
+      same signal as someone following a direct link to that specific
+      level - exact shape (a distinct `source: 'endless' | 'direct'` on
+      play records? a separate attempt table entirely, once
+      `PlayAttempt` above exists?) not yet designed. No design work done
+      yet on level selection (fully random vs. weighted by rating/clear
+      rate), repeat-avoidance within a session, or how/whether it
+      interacts with the owner-exclusion logic already in place for
+      play counts.
 
 ## Future Considerations (way down the line)
 

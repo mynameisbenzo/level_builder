@@ -2,6 +2,7 @@
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import IosInstallBanner from '$lib/IosInstallBanner.svelte';
+	import StaleInstallBanner from '$lib/StaleInstallBanner.svelte';
 
 	let { children } = $props();
 </script>
@@ -25,5 +26,6 @@
 	/>
 </svelte:head>
 
+<StaleInstallBanner />
 <IosInstallBanner />
 {@render children()}

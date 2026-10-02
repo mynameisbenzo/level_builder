@@ -106,7 +106,20 @@ class Config:
     # actually gets stored. Overridden to empty in TestingConfig, since
     # SQLite has no session-timezone concept and would error on this
     # Postgres-specific connect arg.
-    SQLALCHEMY_ENGINE_OPTIONS = {"connect_args": {"options": "-c timezone=utc"}}
+    # pool_pre_ping: Neon's serverless Postgres can suspend/restart its
+    # compute endpoint out from under an idle pooled connection - the
+    # connection object looks fine to SQLAlchemy until it's actually
+    # reused, at which point the query fails with
+    # psycopg.errors.AdminShutdown ("terminating connection due to
+    # administrator command"), confirmed as the real cause of a
+    # production 500 on /api/auth/twitch/callback. pre_ping runs a
+    # cheap SELECT 1 on a pooled connection before handing it to a
+    # request; if that fails, SQLAlchemy transparently discards it and
+    # opens a fresh one instead of letting the real query blow up.
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "connect_args": {"options": "-c timezone=utc"},
+        "pool_pre_ping": True,
+    }
 
 
 class TestingConfig(Config):

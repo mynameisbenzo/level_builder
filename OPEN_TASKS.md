@@ -36,6 +36,64 @@ and the design decisions behind them, and
       mechanism exists now, but nothing currently checks
       `email_verified_at` to gate any other action
 
+### Account tiers & content restrictions
+
+Design settled, not yet built. Three tiers - anonymous (no account),
+free, and paid - restrict both how much of the level grid an editor can
+reach and which catalog content they can use.
+
+- [ ] **`User.is_paid`** (boolean, default `false`) - the only new
+      billing-state field needed. No subscription/expiry fields: the
+      paid tier is a one-time purchase, not a recurring plan, so
+      there's no lapse to model.
+- [ ] **Tier derivation** - one function, called identically from the
+      editor-load response and the save/publish validator (never
+      computed independently client-side vs. server-side):
+      `role in {OWNER, DEVELOPER, MODERATOR} -> paid`, else
+      `is_paid -> paid`, else `logged in -> free`, else `anonymous`.
+- [ ] **Screen-bounds policy**, anchored **bottom-left** of the fixed
+      3x30 world (`WORLD_ROWS`/`WORLD_COLUMNS` in `camera.ts`) so a
+      later upgrade always expands a level outward/upward from what's
+      already built rather than shifting existing content: anonymous =
+      1x1 (bottom-left screen only), free = 2x2 (bottom-left 2 rows x
+      2 columns), paid = full 3x30.
+      - Enforced by clamping the space-bar drag-pan's scrollable range
+        in `LevelEditorScene` to the tier's pixel rect (not the full
+        world's `camera.setBounds`). This is specifically about the
+        pan-to-look-around-while-building camera used during editing -
+        a separate concern from the in-game `follow`/`quadrant` camera
+        modes used during play.
+- [ ] **Catalog gating** - anonymous and free both get the full
+      *current* catalog (every existing tile style, enemy type, hazard,
+      win-condition/door type, character-swap color, character) with no
+      content restriction - only the screen-bounds restriction above
+      applies to them. Going forward, anything *newly added* to a
+      catalog is paid-only by default.
+      - Requires refactoring each flat catalog array (`ENEMY_TYPES`,
+        `GROUND_TILE_STYLES`, `PLAYER_COLORS`, door types, etc.) into
+        `{ id, displayName, icon, minTier }` entries - there's no
+        per-item metadata registry today, just flat `as const` arrays
+        with labels/icons hardcoded inline in `LevelEditorScene.ts`.
+        Every existing item gets `minTier: 'free'`.
+      - Locked (`minTier: 'paid'`) items render **disabled** in the
+        toolbar - plain disabled state, no upsell tooltip/copy for now
+        (not the `title=`-on-disabled pattern used elsewhere, e.g. the
+        Publish button's "Test and beat your level first").
+      - **Separate locked-items toolbar/shelf** - once there's enough
+        paid-only content to warrant its own grouping, rather than
+        disabled items scattered among unlocked ones.
+- [ ] **Backend is the real gate, not the toolbar** - the save/publish
+      validator (same spot as today's `MAX_GROUND_TILES` etc. in
+      `level_content.py`) must independently re-derive the account's
+      tier and reject any `draft_content` with a placed object outside
+      the tier's bottom-left rect, or of a type whose `minTier` exceeds
+      the account's tier - regardless of what the editor UI allowed,
+      since the UI restriction alone can't stop a direct API call.
+- [ ] `is_paid` stays unset until a payment processor is chosen (see
+      "Payment processor for the paid tier" under Future Considerations
+      below) - nothing in this design is blocked on that; the gating
+      logic just needs the boolean to exist.
+
 ### Levels & versioning
 
 - [ ] `PlayAttempt` model — source of truth for clear rate; only
@@ -192,6 +250,12 @@ already have a link to:
 Not part of the active technical roadmap — noted for later, pricing
 model only, details TBD:
 
+- [ ] **Payment processor for the paid website tier** — not yet chosen
+      (Stripe or otherwise). The settled design for that tier (see
+      "Account tiers & content restrictions" in Phase 3) is a
+      **one-time purchase**, which conflicts with the "monthly
+      subscription" framing of the next bullet below - that bullet
+      predates this decision and hasn't been reconciled with it yet.
 - [ ] **Website access** — monthly subscription, all DLC updates
       included
 - [ ] **Standalone Steam version** — flat fee, new content blocked by a

@@ -36,6 +36,29 @@
 		}, 2000);
 	}
 
+	// Per-level Share button feedback - same keyed-by-id pattern as
+	// /profile's own level list, copying the public /play link instead
+	// of the /edit one since there's no edit access from here.
+	let levelShareStatusById: Record<string, 'idle' | 'copied' | 'error'> = $state({});
+	const levelShareStatusResetTimeouts: Record<string, ReturnType<typeof setTimeout>> = {};
+
+	async function handleShareLevelClick(id: string) {
+		const url = `${window.location.origin}/play/${id}`;
+
+		try {
+			await navigator.clipboard.writeText(url);
+			levelShareStatusById[id] = 'copied';
+		} catch {
+			window.prompt('Copy this link:', url);
+			levelShareStatusById[id] = 'error';
+		}
+
+		clearTimeout(levelShareStatusResetTimeouts[id]);
+		levelShareStatusResetTimeouts[id] = setTimeout(() => {
+			levelShareStatusById[id] = 'idle';
+		}, 2000);
+	}
+
 	onMount(async () => {
 		const [userResult, levelsResult] = await Promise.all([
 			getUserByUsername(username),
@@ -64,6 +87,9 @@
 
 	onDestroy(() => {
 		clearTimeout(shareStatusResetTimeout);
+		for (const timeout of Object.values(levelShareStatusResetTimeouts)) {
+			clearTimeout(timeout);
+		}
 	});
 </script>
 
@@ -113,7 +139,47 @@
 					<ul class="levels-list">
 						{#each levels as level (level.id)}
 							<li>
-								<a href="/play/{level.id}">{level.title}</a>
+								<div class="level-item">
+									{#if level.thumbnail_url}
+										<img class="level-thumbnail" src={level.thumbnail_url} alt="" loading="lazy" />
+									{:else}
+										<div class="level-thumbnail level-thumbnail-placeholder" aria-hidden="true"></div>
+									{/if}
+									<div class="level-main">
+										<div class="level-row">
+											<a class="level-title" href="/play/{level.id}">{level.title}</a>
+											<button
+												class="share-level-button"
+												onclick={() => handleShareLevelClick(level.id)}
+												title="Copy a link to this level"
+											>
+												{#if levelShareStatusById[level.id] === 'copied'}
+													Copied!
+												{:else if levelShareStatusById[level.id] === 'error'}
+													Couldn't copy
+												{:else}
+													Share
+												{/if}
+											</button>
+										</div>
+										<div class="level-metrics">
+											<span class="metric"
+												>{level.play_count} {level.play_count === 1 ? 'play' : 'plays'}</span
+											>
+											<span class="metric"
+												>{level.completion_count}
+												{level.completion_count === 1 ? 'completion' : 'completions'}</span
+											>
+											<span class="metric">
+												{level.completion_rate === null
+													? 'no completion rate yet'
+													: `${Math.round(level.completion_rate * 100)}% completion rate`}
+											</span>
+											<span class="metric metric-likes">👍 {level.like_count}</span>
+											<span class="metric metric-dislikes">👎 {level.dislike_count}</span>
+										</div>
+									</div>
+								</div>
 							</li>
 						{/each}
 					</ul>
@@ -220,13 +286,99 @@
 		border-radius: 6px;
 	}
 
-	.levels-list a {
+	.level-item {
+		display: flex;
+		gap: 12px;
+		align-items: flex-start;
+	}
+
+	.level-thumbnail {
+		flex-shrink: 0;
+		width: 84px;
+		height: 63px;
+		border-radius: 4px;
+		border: 1px solid #3a3d76;
+		background: #14152c;
+		object-fit: cover;
+	}
+
+	.level-thumbnail-placeholder {
+		/* No capture for this level (the best-effort screenshot just
+		   didn't come through) - a plain blank tile rather than leaving
+		   a gap where the image would be. */
+		background: repeating-linear-gradient(
+			135deg,
+			#14152c,
+			#14152c 8px,
+			#1a1b3a 8px,
+			#1a1b3a 16px
+		);
+	}
+
+	.level-main {
+		flex: 1;
+		min-width: 0;
+	}
+
+	.level-row {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 8px 12px;
+	}
+
+	.level-title {
 		color: #f4f6ff;
 		text-decoration: none;
 		font-weight: 700;
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
-	.levels-list a:hover {
+	.level-title:hover {
 		color: #4ecb71;
+	}
+
+	.share-level-button {
+		flex-shrink: 0;
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 0.8rem;
+		padding: 6px 12px;
+		color: #c7cbef;
+		background: transparent;
+		border: 1px solid #3a3d76;
+		border-radius: 10px;
+		cursor: pointer;
+	}
+
+	.share-level-button:hover {
+		color: #f4f6ff;
+		border-color: #6b6f9e;
+	}
+
+	.level-metrics {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 4px 14px;
+		margin-top: 8px;
+		padding-top: 8px;
+		border-top: 1px solid #3a3d76;
+	}
+
+	.metric {
+		font-size: 0.78rem;
+		color: #9498d1;
+	}
+
+	.metric-likes {
+		color: #4ecb71;
+	}
+
+	.metric-dislikes {
+		color: #ff8a7a;
 	}
 </style>

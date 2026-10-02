@@ -69,6 +69,22 @@ export function ensureSelectCursorIcon(scene: Phaser.Scene) {
 	scene.load.image(SELECT_CURSOR_ICON_KEY, SELECT_CURSOR_ICON_PATH);
 }
 
+export const TOOLBAR_TOGGLE_ICON_KEY = 'toolbar-toggle-icon';
+export const TOOLBAR_TOGGLE_ICON_PATH = '/assets/icons/toolbar-toggle.png';
+
+/**
+ * Queues the toolbar expand/collapse button's icon for loading if it
+ * isn't already registered. Same guarded pattern as the other ensure*
+ * loaders.
+ */
+export function ensureToolbarToggleIcon(scene: Phaser.Scene) {
+	if (scene.textures.exists(TOOLBAR_TOGGLE_ICON_KEY)) {
+		return;
+	}
+
+	scene.load.image(TOOLBAR_TOGGLE_ICON_KEY, TOOLBAR_TOGGLE_ICON_PATH);
+}
+
 export const HAZARD_ATLAS_KEY = 'hazards';
 
 /**

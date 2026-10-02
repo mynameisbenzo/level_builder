@@ -1420,8 +1420,14 @@ export class PlatformerScene extends Phaser.Scene {
 			? getJumpVelocityMultiplier(getJumpHeightMultiplier(currentPlayerColor))
 			: 1;
 
+		// Looked up here (rather than down with the rest of the gamepad
+		// reads below) because the dash check right after this needs it -
+		// everything else that reads `pad` still works fine reading the
+		// same reference further down.
+		const pad = this.input.gamepad?.getPad(0);
+
 		// EXPERIMENTAL (purple's phase ability, on its own branch).
-		const isDashHeld = this.dashKey.isDown || touchInputState.dash;
+		const isDashHeld = this.dashKey.isDown || touchInputState.dash || (pad?.X ?? false);
 		if (hasRisingEdge(isDashHeld, this.wasDashHeldLastFrame)) {
 			this.dashHeldSinceTime = time;
 		}
@@ -1470,7 +1476,6 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 
 		const onGround = this.player.body?.blocked.down ?? false;
-		const pad = this.input.gamepad?.getPad(0);
 
 		const padStickLeft = pad ? exceedsDeadzone(pad.leftStick.x, STICK_DEADZONE) && pad.leftStick.x < 0 : false;
 		const padStickRight = pad ? exceedsDeadzone(pad.leftStick.x, STICK_DEADZONE) && pad.leftStick.x > 0 : false;

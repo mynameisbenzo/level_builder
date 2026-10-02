@@ -14,7 +14,9 @@ import {
 	HAZARD_ATLAS_KEY,
 	SELECT_CURSOR_ICON_KEY,
 	SELECT_CURSOR_ICON_PATH,
-	TILES_ATLAS_KEY
+	ensureToolbarToggleIcon,
+	TILES_ATLAS_KEY,
+	TOOLBAR_TOGGLE_ICON_KEY
 } from './atlases';
 import { SPIDER_DISPLAY_HEIGHT, SPIDER_DISPLAY_WIDTH, SPIDER_IDLE_FRAME } from './enemies';
 import {
@@ -249,7 +251,21 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * cover become placeable again while whatever was already selected
 	 * stays selected. */
 	private isToolbarExpanded = false;
-	private toolbarExpandButton!: Phaser.GameObjects.Text;
+	private toolbarExpandButton!: Phaser.GameObjects.Image;
+	/** The filled background behind the expand/collapse icon - unlike the
+	 * other toolbar icons' borders (plain stroke, no fill), this one is
+	 * meant to read as an actual button rather than just an outlined hit
+	 * area, since it's the one thing still visible when everything else
+	 * is collapsed. */
+	private toolbarExpandButtonBackground!: Phaser.GameObjects.Rectangle;
+	/** Shared by createToolbarExpandToggle (to size the button itself) and
+	 * create() (to position the Instructions button below it) - sized to
+	 * match the bottom-row swatches, plus a little padding so the
+	 * background reads as a real button frame around the icon rather than
+	 * the icon just touching its own edges. */
+	private get toolbarExpandButtonSize(): number {
+		return this.swatchSize + 8;
+	}
 
 	private isInstructionsModalOpen = false;
 	private instructionsModalElements: (Phaser.GameObjects.GameObject &
@@ -405,6 +421,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		ensureSelectCursorIcon(this);
 		ensureHazardAtlas(this);
 		ensureEnemiesAtlas(this);
+		ensureToolbarToggleIcon(this);
 	}
 
 	create() {
@@ -422,7 +439,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.createToolbarExpandToggle();
 
 		const openInstructionsButton = this.add
-			.text(10, 10 + this.toolbarRowHeight, '[?] Instructions', {
+			.text(10, 10 + this.toolbarExpandButtonSize + 6, '[?] Instructions', {
 				font: this.toolbarFontSize + ' monospace',
 				color: '#ffffff'
 			})
@@ -714,24 +731,32 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * modal already does by virtue of being added later.
 	 */
 	private createToolbarExpandToggle() {
+		const backgroundSize = this.toolbarExpandButtonSize;
+		const iconSize = this.swatchSize;
+		const centerX = 10 + backgroundSize / 2;
+		const centerY = 10 + backgroundSize / 2;
+
+		// Filled (not just outlined) so this reads as an actual button -
+		// it's the one thing still on screen when everything else is
+		// collapsed, so it needs to look pressable on its own rather than
+		// blending into the canvas behind it.
+		this.toolbarExpandButtonBackground = this.add
+			.rectangle(centerX, centerY, backgroundSize, backgroundSize, 0x1a1b3a, 0.85)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0)
+			.setDepth(TOOLBAR_DEPTH);
+
 		this.toolbarExpandButton = this.add
-			.text(10, 10, this.toolbarExpandLabel(), {
-				font: this.toolbarFontSize + ' monospace',
-				color: '#ffd23f'
-			})
+			.image(centerX, centerY, TOOLBAR_TOGGLE_ICON_KEY)
+			.setDisplaySize(iconSize, iconSize)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0)
 			.setDepth(TOOLBAR_DEPTH);
 
 		this.toolbarExpandButton.on('pointerdown', () => {
 			this.isToolbarExpanded = !this.isToolbarExpanded;
-			this.toolbarExpandButton.setText(this.toolbarExpandLabel());
 			this.refreshToolbarVisibility();
 		});
-	}
-
-	private toolbarExpandLabel(): string {
-		return this.isToolbarExpanded ? '[x] Hide Toolbar' : '[\u2630] Show Toolbar';
 	}
 
 	/**
@@ -1655,11 +1680,16 @@ export class LevelEditorScene extends Phaser.Scene {
 	private createUiModeToggle() {
 		const mode = this.getStylePickerMode();
 		this.uiModeToggleButton = this.add
-			.text(this.scale.width - 10, 10, this.uiModeLabel(mode), {
-				font: this.toolbarFontSize + ' monospace',
-				color: '#00d9ff'
-			})
-			.setOrigin(1, 0)
+			.text(
+				this.scale.width - 10,
+				this.scale.height - 10 - this.toolbarRowHeight * 3,
+				this.uiModeLabel(mode),
+				{
+					font: this.toolbarFontSize + ' monospace',
+					color: '#00d9ff'
+				}
+			)
+			.setOrigin(1, 1)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.persistentToolbarElements.push(this.uiModeToggleButton);
@@ -1683,11 +1713,16 @@ export class LevelEditorScene extends Phaser.Scene {
 	private createCameraModeToggle() {
 		const mode = ensureCameraMode(this);
 		this.cameraModeToggleButton = this.add
-			.text(this.scale.width - 10, 10 + this.toolbarRowHeight, this.cameraModeLabel(mode), {
-				font: this.toolbarFontSize + ' monospace',
-				color: '#00d9ff'
-			})
-			.setOrigin(1, 0)
+			.text(
+				this.scale.width - 10,
+				this.scale.height - 10 - this.toolbarRowHeight * 2,
+				this.cameraModeLabel(mode),
+				{
+					font: this.toolbarFontSize + ' monospace',
+					color: '#00d9ff'
+				}
+			)
+			.setOrigin(1, 1)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.persistentToolbarElements.push(this.cameraModeToggleButton);
@@ -1706,11 +1741,16 @@ export class LevelEditorScene extends Phaser.Scene {
 
 	private createInteractionModeToggle() {
 		this.interactionModeToggleButton = this.add
-			.text(this.scale.width - 10, 10 + this.toolbarRowHeight * 2, this.interactionModeLabel(this.interactionMode), {
-				font: this.toolbarFontSize + ' monospace',
-				color: '#ffd23f'
-			})
-			.setOrigin(1, 0)
+			.text(
+				this.scale.width - 10,
+				this.scale.height - 10 - this.toolbarRowHeight,
+				this.interactionModeLabel(this.interactionMode),
+				{
+					font: this.toolbarFontSize + ' monospace',
+					color: '#ffd23f'
+				}
+			)
+			.setOrigin(1, 1)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 
@@ -1734,11 +1774,11 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 
 		this.fullscreenToggleButton = this.add
-			.text(this.scale.width - 10, 10 + this.toolbarRowHeight * 3, this.fullscreenLabel(), {
+			.text(this.scale.width - 10, this.scale.height - 10, this.fullscreenLabel(), {
 				font: this.toolbarFontSize + ' monospace',
 				color: '#00ff9f'
 			})
-			.setOrigin(1, 0)
+			.setOrigin(1, 1)
 			.setInteractive({ useHandCursor: true })
 			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.persistentToolbarElements.push(this.fullscreenToggleButton);
@@ -1774,6 +1814,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.interactionMode = this.interactionMode === 'edit' ? 'navigate' : 'edit';
 		this.interactionModeToggleButton.setText(this.interactionModeLabel(this.interactionMode));
 		this.toolbarExpandButton.setVisible(this.interactionMode === 'edit');
+		this.toolbarExpandButtonBackground.setVisible(this.interactionMode === 'edit');
 
 		if (this.interactionMode === 'navigate') {
 			// Entering Navigate mode - nothing toolbar-related is usable

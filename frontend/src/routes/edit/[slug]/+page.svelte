@@ -47,6 +47,13 @@
 	let publishStatus: 'idle' | 'publishing' | 'error' = $state('idle');
 	let publishError = $state('');
 
+	// The Share button only ever copies to the clipboard - there's no
+	// request involved, so this is purely a transient label swap
+	// ('Copied!'/'Couldn't copy') that reverts on its own after a couple
+	// seconds, same idea as a toast but inline on the button itself.
+	let shareStatus: 'idle' | 'copied' | 'error' = $state('idle');
+	let shareStatusResetTimeout: ReturnType<typeof setTimeout> | undefined;
+
 	// What the server actually has stored, as of the last successful
 	// save (or the initial load). Compared against the live editor
 	// content to decide whether Back needs to ask about unsaved work,
@@ -265,7 +272,36 @@
 
 	onDestroy(() => {
 		game?.destroy(true);
+		clearTimeout(shareStatusResetTimeout);
 	});
+
+	/**
+	 * Copies the level's public /play link to the clipboard. Only shown
+	 * once hasBeenPublished is true (see the button markup below) - a
+	 * level that's never been published has no live LevelVersion yet, so
+	 * /play/<slug> would just 404 for anyone who followed the link (see
+	 * get_level_for_play's own docstring in the backend).
+	 */
+	async function handleShareClick() {
+		const url = `${window.location.origin}/play/${slug}`;
+
+		try {
+			await navigator.clipboard.writeText(url);
+			shareStatus = 'copied';
+		} catch {
+			// Clipboard access can fail (permissions, insecure context,
+			// an older browser without the API at all) - the link itself
+			// was still built fine, so fall back to a manual prompt
+			// rather than leaving the person with nothing.
+			window.prompt('Copy this link:', url);
+			shareStatus = 'error';
+		}
+
+		clearTimeout(shareStatusResetTimeout);
+		shareStatusResetTimeout = setTimeout(() => {
+			shareStatus = 'idle';
+		}, 2000);
+	}
 
 	async function handleSave() {
 		const token = auth.accessToken;
@@ -517,6 +553,18 @@
 				<span class="inline-error">{publishError}</span>
 			{/if}
 
+			{#if hasBeenPublished}
+				<button class="share-button" onclick={handleShareClick} title="Copy a link to this level">
+					{#if shareStatus === 'copied'}
+						Copied!
+					{:else if shareStatus === 'error'}
+						Couldn't copy
+					{:else}
+						Share
+					{/if}
+				</button>
+			{/if}
+
 			<button onclick={handleSave} disabled={saveStatus === 'saving'}>
 				{saveStatus === 'saving' ? 'Saving…' : 'Save'}
 			</button>
@@ -736,10 +784,16 @@
 	}
 
 	.cancel-button,
-	.back-button {
+	.back-button,
+	.share-button {
 		color: #c7cbef;
 		background: transparent;
 		border: 1px solid #3a3d76;
+	}
+
+	.share-button:hover {
+		color: #f4f6ff;
+		border-color: #6b6f9e;
 	}
 
 	.leave-button {

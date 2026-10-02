@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import {
 		deleteAccount,
@@ -61,6 +61,39 @@
 	let levelPendingDeleteId: string | null = $state(null);
 	let deletingLevelId: string | null = $state(null);
 	let levelDeleteError = $state('');
+
+	// Per-level Share button feedback - keyed by level.id (the slug, same
+	// as /edit/[slug]'s own shareStatus) since multiple levels in this
+	// list can each have their own button. Plain, not $state - only the
+	// object it populates needs to be reactive, not the timeout handles
+	// themselves.
+	let shareStatusByLevelId: Record<string, 'idle' | 'copied' | 'error'> = $state({});
+	const shareStatusResetTimeouts: Record<string, ReturnType<typeof setTimeout>> = {};
+
+	/**
+	 * Same idea as the editor's own Share button (see
+	 * /edit/[slug]/+page.svelte) - copies the level's public /play link
+	 * to the clipboard with a transient 'Copied!' label. Only rendered
+	 * for a level that's been published at least once and isn't deleted
+	 * (see the markup below) - anything else has no live /play/<id> page
+	 * to share yet.
+	 */
+	async function handleShareLevelClick(id: string) {
+		const url = `${window.location.origin}/play/${id}`;
+
+		try {
+			await navigator.clipboard.writeText(url);
+			shareStatusByLevelId[id] = 'copied';
+		} catch {
+			window.prompt('Copy this link:', url);
+			shareStatusByLevelId[id] = 'error';
+		}
+
+		clearTimeout(shareStatusResetTimeouts[id]);
+		shareStatusResetTimeouts[id] = setTimeout(() => {
+			shareStatusByLevelId[id] = 'idle';
+		}, 2000);
+	}
 
 	function requestDeleteLevel(id: string) {
 		levelPendingDeleteId = id;
@@ -171,6 +204,12 @@
 		// that 403 as a generic "could not load your levels" error.
 		if (needsVerification) return;
 		void loadMyLevels();
+	});
+
+	onDestroy(() => {
+		for (const timeout of Object.values(shareStatusResetTimeouts)) {
+			clearTimeout(timeout);
+		}
 	});
 
 	async function handleSave(event: SubmitEvent) {
@@ -342,6 +381,21 @@
 								>
 									{level.is_deleted ? 'deleted' : level.visibility_state}
 								</span>
+								{#if level.has_been_published && !level.is_deleted}
+									<button
+										class="share-level-button"
+										onclick={() => handleShareLevelClick(level.id)}
+										title="Copy a link to this level"
+									>
+										{#if shareStatusByLevelId[level.id] === 'copied'}
+											Copied!
+										{:else if shareStatusByLevelId[level.id] === 'error'}
+											Couldn't copy
+										{:else}
+											Share
+										{/if}
+									</button>
+								{/if}
 								{#if !level.is_deleted}
 									<button
 										class="delete-level-button"
@@ -786,6 +840,21 @@
 		color: #f4f6ff;
 		background: #a83c3c;
 		border-color: #a83c3c;
+	}
+
+	.share-level-button {
+		flex-shrink: 0;
+		font-size: 0.8rem;
+		padding: 6px 12px;
+		color: #c7cbef;
+		background: transparent;
+		border: 1px solid #3a3d76;
+		box-shadow: none;
+	}
+
+	.share-level-button:hover {
+		color: #f4f6ff;
+		border-color: #6b6f9e;
 	}
 
 	.level-metrics {

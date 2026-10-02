@@ -580,56 +580,88 @@ def get_level_for_play(slug):
     )
 
 
+def _is_requester_the_owner(level) -> bool:
+    """
+    True only when the request carries a valid access token belonging
+    to this level's own owner - used by record_level_play/
+    record_level_complete to keep a creator play-testing their own
+    published level from inflating its own play/completion counts.
+    Both callers use @jwt_required(optional=True), so get_jwt_identity()
+    is simply None for an anonymous request (no token, or a bad/expired
+    one) rather than raising - which is exactly the common case here,
+    since most plays are anonymous.
+    """
+    identity = get_jwt_identity()
+    if identity is None:
+        return False
+
+    user = User.query.filter_by(public_id=identity).first()
+    return user is not None and user.id == level.owner_id
+
+
 @levels_bp.post("/<string:slug>/play")
+@jwt_required(optional=True)
 def record_level_play(slug):
     """
-    Public, unauthenticated, same lookup rules as get_level_for_play
-    (only a live, non-deleted, published level can record anything,
-    and an unknown/unpublished/deleted slug gets the same 404 either
-    way). Called by /play/[slug] once its initial load succeeds, and
-    again on every "Play Again" - each is a genuine, separate attempt
-    at the level, not just a page view. Deliberately a distinct request
-    from GET .../play (which only ever serves content) rather than
-    folded into it, so a client can re-record a play on replay without
-    needing to re-fetch content it already has.
+    Same lookup rules as get_level_for_play (only a live, non-deleted,
+    published level can record anything, and an unknown/unpublished/
+    deleted slug gets the same 404 either way). Called by /play/[slug]
+    once its initial load succeeds, and again on every "Play Again" -
+    each is a genuine, separate attempt at the level, not just a page
+    view. Deliberately a distinct request from GET .../play (which only
+    ever serves content) rather than folded into it, so a client can
+    re-record a play on replay without needing to re-fetch content it
+    already has.
 
-    No auth and no per-viewer dedup, unlike LevelRating - a play count
-    is meant to reflect how many times a level has actually been
-    attempted, including the same person replaying it repeatedly, not
-    a distinct-people tally.
+    Optionally authenticated (unlike every @jwt_required() endpoint
+    above, a missing/invalid token here isn't rejected - most plays are
+    anonymous) purely so a logged-in creator play-testing their own
+    published level from /u/[username] doesn't inflate their own play
+    count every time - see _is_requester_the_owner. Anyone else,
+    anonymous or logged in, still counts, and there's still no
+    per-viewer dedup for them: a play count is meant to reflect how
+    many times a level has actually been attempted, including the same
+    non-owner replaying it repeatedly, not a distinct-people tally.
     """
     level = Level.query.filter_by(slug=slug).first()
     if level is None or level.latest_published_version_id is None or level.is_deleted:
         return jsonify({"error": "level not found"}), 404
 
-    level.play_count += 1
-    db.session.commit()
+    if not _is_requester_the_owner(level):
+        level.play_count += 1
+        db.session.commit()
 
     return jsonify({"play_count": level.play_count}), 200
 
 
 @levels_bp.post("/<string:slug>/complete")
+@jwt_required(optional=True)
 def record_level_complete(slug):
     """
-    Public, unauthenticated, same lookup rules as record_level_play.
-    Called the moment LEVEL_BEATEN_EVENT fires during a real public
-    playthrough (/play/[slug]) - never from the editor's own test-play
-    loop, which reaches its own win condition through PlatformerScene
-    but reports it via POST .../beat instead, against draft_content,
-    not a published version. A completion here always implies at least
-    one play was already recorded for the same attempt (record_level_play
-    fires on load, before the player can possibly reach the win
-    condition), but this endpoint doesn't re-derive or enforce that
-    ordering itself - the two counters are independent increments, not
-    a state machine, so a request that arrives out of order (or is
-    retried) never leaves either counter looking corrupted.
+    Same lookup rules as record_level_play, including the same
+    optional-auth owner exclusion (see _is_requester_the_owner) - a
+    creator beating their own published level from /u/[username]
+    shouldn't inflate their own completion count any more than their
+    own play count. Called the moment LEVEL_BEATEN_EVENT fires during a
+    real public playthrough (/play/[slug]) - never from the editor's
+    own test-play loop, which reaches its own win condition through
+    PlatformerScene but reports it via POST .../beat instead, against
+    draft_content, not a published version. A completion here always
+    implies at least one play was already recorded for the same
+    attempt (record_level_play fires on load, before the player can
+    possibly reach the win condition), but this endpoint doesn't
+    re-derive or enforce that ordering itself - the two counters are
+    independent increments, not a state machine, so a request that
+    arrives out of order (or is retried) never leaves either counter
+    looking corrupted.
     """
     level = Level.query.filter_by(slug=slug).first()
     if level is None or level.latest_published_version_id is None or level.is_deleted:
         return jsonify({"error": "level not found"}), 404
 
-    level.completion_count += 1
-    db.session.commit()
+    if not _is_requester_the_owner(level):
+        level.completion_count += 1
+        db.session.commit()
 
     return jsonify({"completion_count": level.completion_count}), 200
 

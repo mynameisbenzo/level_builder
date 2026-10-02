@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { getUserByUsername, listLevelsByUser, type LevelListItem, type PublicUser } from '$lib/api';
 	import Navbar from '$lib/Navbar.svelte';
 	import type { PageProps } from './$types';
@@ -11,6 +11,30 @@
 	let errorMessage = $state('');
 	let user: PublicUser | undefined = $state();
 	let levels: LevelListItem[] = $state([]);
+
+	// Same copy-link pattern as the Share buttons elsewhere (see
+	// /profile) - lets anyone looking at this page, owner or visitor,
+	// copy a link straight to it rather than needing to grab the
+	// browser's own address bar.
+	let shareStatus: 'idle' | 'copied' | 'error' = $state('idle');
+	let shareStatusResetTimeout: ReturnType<typeof setTimeout> | undefined;
+
+	async function handleShareClick() {
+		const url = `${window.location.origin}/u/${username}`;
+
+		try {
+			await navigator.clipboard.writeText(url);
+			shareStatus = 'copied';
+		} catch {
+			window.prompt('Copy this link:', url);
+			shareStatus = 'error';
+		}
+
+		clearTimeout(shareStatusResetTimeout);
+		shareStatusResetTimeout = setTimeout(() => {
+			shareStatus = 'idle';
+		}, 2000);
+	}
 
 	onMount(async () => {
 		const [userResult, levelsResult] = await Promise.all([
@@ -37,6 +61,10 @@
 			errorMessage = levelsResult.error ?? 'Could not load this user\u2019s levels.';
 		}
 	});
+
+	onDestroy(() => {
+		clearTimeout(shareStatusResetTimeout);
+	});
 </script>
 
 <svelte:head>
@@ -57,7 +85,18 @@
 			</div>
 		{:else if user}
 			<div class="card">
-				<h1>{user.username}</h1>
+				<div class="profile-header">
+					<h1>{user.username}</h1>
+					<button class="share-profile-button" onclick={handleShareClick}>
+						{#if shareStatus === 'copied'}
+							Copied!
+						{:else if shareStatus === 'error'}
+							Couldn't copy
+						{:else}
+							Share
+						{/if}
+					</button>
+				</div>
 				{#if user.twitch_display_name}
 					<p class="note secondary">Twitch: {user.twitch_display_name}</p>
 				{/if}
@@ -106,11 +145,37 @@
 		padding: 32px;
 	}
 
+	.profile-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		flex-wrap: wrap;
+	}
+
 	h1 {
 		font-family: 'Baloo 2', sans-serif;
 		font-weight: 700;
 		font-size: 1.6rem;
 		margin: 0;
+	}
+
+	.share-profile-button {
+		flex-shrink: 0;
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 0.8rem;
+		padding: 6px 12px;
+		color: #c7cbef;
+		background: transparent;
+		border: 1px solid #3a3d76;
+		border-radius: 10px;
+		cursor: pointer;
+	}
+
+	.share-profile-button:hover {
+		color: #f4f6ff;
+		border-color: #6b6f9e;
 	}
 
 	h2 {

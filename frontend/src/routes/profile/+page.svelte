@@ -31,6 +31,19 @@
 	let levelsError = $state('');
 	let levels: LevelListItem[] = $state([]);
 
+	// Split for the Published/Drafts tabs - a level is published the
+	// moment it's been published at least once (has_been_published),
+	// regardless of its current visibility_state (still true while
+	// 'testing', i.e. edited since the last publish but not
+	// republished yet) - matches the same has_been_published check
+	// already used for the Share button and metrics below. A deleted
+	// draft (never published) is hard-deleted server-side and never
+	// shows up here at all (see DELETE /api/levels/<slug>), so every
+	// is_deleted row in this list already has has_been_published true
+	// and therefore always lands in Published, never Drafts.
+	let publishedLevels = $derived(levels.filter((level) => level.has_been_published));
+	let draftLevels = $derived(levels.filter((level) => !level.has_been_published));
+
 	async function loadMyLevels() {
 		const token = auth.accessToken;
 		if (!token) return;
@@ -69,6 +82,30 @@
 	// themselves.
 	let shareStatusByLevelId: Record<string, 'idle' | 'copied' | 'error'> = $state({});
 	const shareStatusResetTimeouts: Record<string, ReturnType<typeof setTimeout>> = {};
+
+	// Share-this-profile button, in the Account tab - same copy-link
+	// pattern as the per-level buttons above, just a single status
+	// instead of one per id since there's only ever one profile link.
+	let profileShareStatus: 'idle' | 'copied' | 'error' = $state('idle');
+	let profileShareStatusResetTimeout: ReturnType<typeof setTimeout> | undefined;
+
+	async function handleShareProfileClick() {
+		if (!auth.user) return;
+		const url = `${window.location.origin}/u/${auth.user.username}`;
+
+		try {
+			await navigator.clipboard.writeText(url);
+			profileShareStatus = 'copied';
+		} catch {
+			window.prompt('Copy this link:', url);
+			profileShareStatus = 'error';
+		}
+
+		clearTimeout(profileShareStatusResetTimeout);
+		profileShareStatusResetTimeout = setTimeout(() => {
+			profileShareStatus = 'idle';
+		}, 2000);
+	}
 
 	/**
 	 * Same idea as the editor's own Share button (see
@@ -188,10 +225,15 @@
 	let deleteStatus: 'idle' | 'deleting' | 'error' = $state('idle');
 	let deleteError = $state('');
 
-	// Which pane the left sidebar shows - Levels is the default landing
-	// view per the redesign spec; Account groups the three
-	// identity/danger cards that used to always be stacked below Levels.
-	let activeTab: 'levels' | 'account' = $state('levels');
+	// Which pane the left sidebar shows. Published and Drafts used to be
+	// one combined "Levels" list with a visibility badge on every row to
+	// tell them apart - split into separate tabs instead, since other
+	// users can only ever see published levels anyway (see
+	// /u/[username]), so there's no reason the owner's own badge-reading
+	// should be the only way to tell which is which. Published is the
+	// default landing view; Account groups the three identity/danger
+	// cards that used to always be stacked below the levels list.
+	let activeTab: 'published' | 'drafts' | 'account' = $state('published');
 
 	onMount(() => {
 		if (!auth.isLoggedIn) {
@@ -210,6 +252,7 @@
 		for (const timeout of Object.values(shareStatusResetTimeouts)) {
 			clearTimeout(timeout);
 		}
+		clearTimeout(profileShareStatusResetTimeout);
 	});
 
 	async function handleSave(event: SubmitEvent) {
@@ -288,13 +331,36 @@
 
 {#if auth.user}
 	<main>
+		<div class="card profile-share-card">
+			<p class="note public-profile-link">
+				<a href="/u/{auth.user.username}">View your public profile</a>
+				<button class="share-profile-button" onclick={handleShareProfileClick}>
+					{#if profileShareStatus === 'copied'}
+						Copied!
+					{:else if profileShareStatus === 'error'}
+						Couldn't copy
+					{:else}
+						Share
+					{/if}
+				</button>
+			</p>
+		</div>
+
+		<div class="layout">
 		<nav class="sidebar">
 			<button
 				class="tab-button"
-				class:active={activeTab === 'levels'}
-				onclick={() => (activeTab = 'levels')}
+				class:active={activeTab === 'published'}
+				onclick={() => (activeTab = 'published')}
 			>
-				Levels
+				Published
+			</button>
+			<button
+				class="tab-button"
+				class:active={activeTab === 'drafts'}
+				onclick={() => (activeTab = 'drafts')}
+			>
+				Drafts
 			</button>
 			<button
 				class="tab-button"
@@ -330,57 +396,29 @@
 				</div>
 			{/if}
 
-			{#if activeTab === 'levels'}
-		<div class="card">
-			<h2 class="new-level-heading">Levels</h2>
-			<p class="note">Start building a new level.</p>
-			{#if newLevelStatus === 'error'}
-				<p class="error">{newLevelError}</p>
-			{/if}
-			<button
-				class="new-level-button"
-				onclick={handleNewLevel}
-				disabled={newLevelStatus === 'creating' || needsVerification}
-				title={needsVerification ? 'Verify your email or link Twitch first' : undefined}
-			>
-				{newLevelStatus === 'creating' ? 'Creating…' : 'New Level'}
-			</button>
-
-			{#if needsVerification}
-				<!-- Nothing to load - see the verify-your-email banner above. -->
-			{:else if levelsStatus === 'loading'}
-				<p class="note levels-status">Loading your levels…</p>
-			{:else if levelsStatus === 'error'}
-				<p class="error levels-status">{levelsError}</p>
-			{:else if levels.length === 0}
-				<p class="note levels-status">You haven't created any levels yet.</p>
-			{:else}
-				{#if levelDeleteError}
-					<p class="error levels-status">{levelDeleteError}</p>
-				{/if}
-				<ul class="levels-list">
-					{#each levels as level (level.id)}
-						<li>
-							<div class="level-item">
-								{#if level.thumbnail_url}
-									<img class="level-thumbnail" src={level.thumbnail_url} alt="" loading="lazy" />
-								{:else}
-									<div class="level-thumbnail level-thumbnail-placeholder" aria-hidden="true"></div>
-								{/if}
-								<div class="level-main">
-									<div class="level-row">
+			{#snippet levelRow(level: LevelListItem)}
+				<li>
+					<div class="level-item">
+						{#if level.thumbnail_url}
+							<img class="level-thumbnail" src={level.thumbnail_url} alt="" loading="lazy" />
+						{:else}
+							<div class="level-thumbnail level-thumbnail-placeholder" aria-hidden="true"></div>
+						{/if}
+						<div class="level-main">
+							<div class="level-row">
 								{#if level.is_deleted}
 									<span class="level-title deleted">{level.title}</span>
 								{:else}
 									<a class="level-title" href="/edit/{level.id}">{level.title}</a>
 								{/if}
-								<span
-									class="visibility-badge"
-									class:published={level.visibility_state === 'published'}
-									class:deleted={level.is_deleted}
-								>
-									{level.is_deleted ? 'deleted' : level.visibility_state}
-								</span>
+								{#if level.is_deleted || level.visibility_state === 'testing'}
+									<span class="visibility-badge" class:deleted={level.is_deleted}>
+										{level.is_deleted ? 'deleted' : 'testing'}
+									</span>
+								{/if}
+							</div>
+
+							<div class="level-actions">
 								{#if level.has_been_published && !level.is_deleted}
 									<button
 										class="share-level-button"
@@ -406,6 +444,7 @@
 									</button>
 								{/if}
 							</div>
+
 							{#if level.has_been_published}
 								<div class="level-metrics">
 									<span class="metric"
@@ -443,9 +482,65 @@
 									</div>
 								</div>
 							{/if}
-								</div>
-							</div>
-						</li>
+						</div>
+					</div>
+				</li>
+			{/snippet}
+
+			{#if activeTab === 'published'}
+		<div class="card">
+			<h2 class="new-level-heading">Published</h2>
+
+			{#if needsVerification}
+				<!-- Nothing to load - see the verify-your-email banner above. -->
+			{:else if levelsStatus === 'loading'}
+				<p class="note levels-status">Loading your levels…</p>
+			{:else if levelsStatus === 'error'}
+				<p class="error levels-status">{levelsError}</p>
+			{:else if publishedLevels.length === 0}
+				<p class="note levels-status">You haven't published any levels yet.</p>
+			{:else}
+				{#if levelDeleteError}
+					<p class="error levels-status">{levelDeleteError}</p>
+				{/if}
+				<ul class="levels-list">
+					{#each publishedLevels as level (level.id)}
+						{@render levelRow(level)}
+					{/each}
+				</ul>
+			{/if}
+		</div>
+		{:else if activeTab === 'drafts'}
+		<div class="card">
+			<h2 class="new-level-heading">Drafts</h2>
+			<p class="note">Start building a new level.</p>
+			{#if newLevelStatus === 'error'}
+				<p class="error">{newLevelError}</p>
+			{/if}
+			<button
+				class="new-level-button"
+				onclick={handleNewLevel}
+				disabled={newLevelStatus === 'creating' || needsVerification}
+				title={needsVerification ? 'Verify your email or link Twitch first' : undefined}
+			>
+				{newLevelStatus === 'creating' ? 'Creating…' : 'New Level'}
+			</button>
+
+			{#if needsVerification}
+				<!-- Nothing to load - see the verify-your-email banner above. -->
+			{:else if levelsStatus === 'loading'}
+				<p class="note levels-status">Loading your levels…</p>
+			{:else if levelsStatus === 'error'}
+				<p class="error levels-status">{levelsError}</p>
+			{:else if draftLevels.length === 0}
+				<p class="note levels-status">You haven't started any new levels yet.</p>
+			{:else}
+				{#if levelDeleteError}
+					<p class="error levels-status">{levelDeleteError}</p>
+				{/if}
+				<ul class="levels-list">
+					{#each draftLevels as level (level.id)}
+						{@render levelRow(level)}
 					{/each}
 				</ul>
 			{/if}
@@ -453,12 +548,6 @@
 		{:else}
 		<div class="card">
 			<h1>Your account</h1>
-			{#if auth.user}
-				<p class="note public-profile-link">
-					<a href="/u/{auth.user.username}">View your public profile</a>
-				</p>
-			{/if}
-
 			<form onsubmit={handleSave}>
 				<label>
 					Username
@@ -549,6 +638,7 @@
 		</div>
 		{/if}
 		</div>
+		</div>
 	</main>
 {/if}
 
@@ -563,8 +653,15 @@
 		margin: 0 auto;
 		padding: 48px 24px;
 		display: flex;
+		flex-direction: column;
+		gap: 24px;
+	}
+
+	.layout {
+		display: flex;
 		align-items: flex-start;
 		gap: 32px;
+		width: 100%;
 	}
 
 	.sidebar {
@@ -615,7 +712,7 @@
 	}
 
 	@media (max-width: 640px) {
-		main {
+		.layout {
 			flex-direction: column;
 		}
 
@@ -781,8 +878,21 @@
 	.level-row {
 		display: flex;
 		align-items: center;
-		justify-content: space-between;
 		gap: 12px;
+	}
+
+	/* A separate wrapping row for the action buttons, rather than
+	   cramming them into .level-row alongside the title - that's what
+	   was letting Share/Delete spill outside the card on narrower
+	   widths (flex-shrink: 0 buttons with nowhere to go once the title
+	   had already shrunk to its ellipsis). Wrapping here keeps them
+	   inside the card on any width instead. */
+	.level-actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+		gap: 8px;
+		margin-top: 6px;
 	}
 
 	.level-title {
@@ -814,11 +924,6 @@
 		border: 1px solid #3a3d76;
 		border-radius: 999px;
 		padding: 3px 10px;
-	}
-
-	.visibility-badge.published {
-		color: #4ecb71;
-		border-color: #4ecb71;
 	}
 
 	.visibility-badge.deleted {
@@ -994,8 +1099,35 @@
 		margin: 0 0 16px;
 	}
 
+	.profile-share-card {
+		padding: 20px 24px;
+	}
+
+	.public-profile-link {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		flex-wrap: wrap;
+		margin: 0;
+	}
+
 	.public-profile-link a {
 		color: #4ecb71;
+	}
+
+	.share-profile-button {
+		flex-shrink: 0;
+		font-size: 0.8rem;
+		padding: 6px 12px;
+		color: #c7cbef;
+		background: transparent;
+		border: 1px solid #3a3d76;
+		box-shadow: none;
+	}
+
+	.share-profile-button:hover {
+		color: #f4f6ff;
+		border-color: #6b6f9e;
 	}
 
 	button {

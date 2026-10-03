@@ -29,9 +29,22 @@ CAMERA_MODES = {"follow", "quadrant"}
 # Mirrors frontend/src/lib/game/backgrounds.ts's BACKGROUND_THEMES - only
 # the bottom (ground-level) row's art actually varies by theme; the
 # fade/sky rows above it are shared across every theme, same reasoning
-# as that file's own comment.
-BACKGROUND_THEMES = {"hills", "desert"}
-DEFAULT_BACKGROUND_THEME = "hills"
+# as that file's own comment. Each value is a spritesheet-backgrounds
+# frame suffix directly (e.g. "fade_desert" -> the atlas's own
+# "background_fade_desert" frame), not just a bare setting name, since
+# the atlas ships both a "color_<x>" and a "fade_<x>" frame per setting
+# and both are selectable themes in their own right.
+BACKGROUND_THEMES = {
+    "color_hills",
+    "color_desert",
+    "color_mushrooms",
+    "color_trees",
+    "fade_hills",
+    "fade_desert",
+    "fade_mushrooms",
+    "fade_trees",
+}
+DEFAULT_BACKGROUND_THEME = "color_hills"
 # Mirrors frontend/src/lib/game/enemies.ts's ENEMY_TYPES - only the
 # spider exists so far, but kept as a set (not a single string check) for
 # the same reason the frontend does: a second enemy is already planned.

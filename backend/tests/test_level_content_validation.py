@@ -118,7 +118,7 @@ def test_missing_background_theme_defaults_and_passes():
 
 
 def test_valid_background_theme_passes():
-    is_valid, error = validate_level_content(_minimal_valid_content(backgroundTheme="desert"))
+    is_valid, error = validate_level_content(_minimal_valid_content(backgroundTheme="fade_desert"))
     assert is_valid is True
     assert error is None
 

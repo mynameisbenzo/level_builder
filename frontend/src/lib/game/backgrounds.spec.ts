@@ -3,9 +3,11 @@ import { BACKGROUND_THEMES, getBackgroundFrameForRow, getThemeSwatchFrame } from
 import { WORLD_ROWS } from './camera';
 
 describe('getThemeSwatchFrame', () => {
-	it('maps a theme to its background_color_<theme> frame', () => {
-		expect(getThemeSwatchFrame('hills')).toBe('background_color_hills');
-		expect(getThemeSwatchFrame('desert')).toBe('background_color_desert');
+	it('maps a theme to its background_<theme> frame', () => {
+		expect(getThemeSwatchFrame('color_hills')).toBe('background_color_hills');
+		expect(getThemeSwatchFrame('color_desert')).toBe('background_color_desert');
+		expect(getThemeSwatchFrame('fade_hills')).toBe('background_fade_hills');
+		expect(getThemeSwatchFrame('fade_desert')).toBe('background_fade_desert');
 	});
 });
 

@@ -15,17 +15,27 @@ export const BACKGROUND_DEPTH = -1;
 /**
  * Every background theme a level can choose, mirrored on the backend in
  * app/services/level_content.py's BACKGROUND_THEMES. Each name here maps
- * directly onto the spritesheet's own "background_color_<theme>" frame
- * (see getThemeSwatchFrame) - adding a theme means adding both a name
- * here AND confirming the atlas actually ships a
- * background_color_<name> frame for it (spritesheet-backgrounds-default
- * .xml currently also has fade/color pairs for "mushrooms" and "trees"
- * ready to go, beyond what's wired in here).
+ * directly onto the spritesheet's own "background_<theme>" frame (see
+ * getThemeSwatchFrame) - adding a theme means adding both a name here
+ * AND confirming the atlas actually ships a background_<name> frame for
+ * it. spritesheet-backgrounds-default.xml ships exactly these 8 as
+ * color/fade pairs across 4 settings (hills, desert, mushrooms, trees),
+ * so this list is already complete - there's no 9th pair waiting in the
+ * atlas the way there used to be.
  */
-export const BACKGROUND_THEMES = ['hills', 'desert'] as const;
+export const BACKGROUND_THEMES = [
+	'color_hills',
+	'color_desert',
+	'color_mushrooms',
+	'color_trees',
+	'fade_hills',
+	'fade_desert',
+	'fade_mushrooms',
+	'fade_trees'
+] as const;
 export type BackgroundTheme = (typeof BACKGROUND_THEMES)[number];
 
-export const DEFAULT_BACKGROUND_THEME: BackgroundTheme = 'hills';
+export const DEFAULT_BACKGROUND_THEME: BackgroundTheme = 'color_hills';
 export const BACKGROUND_THEME_REGISTRY_KEY = 'backgroundTheme';
 
 /**
@@ -56,7 +66,7 @@ export function setBackgroundTheme(scene: Phaser.Scene, theme: BackgroundTheme) 
  * Pure function, no Phaser dependency, safe to unit test directly.
  */
 export function getThemeSwatchFrame(theme: BackgroundTheme): string {
-	return `background_color_${theme}`;
+	return `background_${theme}`;
 }
 
 /**

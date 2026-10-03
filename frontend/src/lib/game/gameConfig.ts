@@ -28,6 +28,21 @@ export function createGameConfig(
 		type: Phaser.AUTO,
 		parent,
 		backgroundColor: '#1d1d2e',
+		// Draws every texture-based game object at whole-integer screen
+		// positions. The hairline gaps between adjacent background tiles
+		// (see backgrounds.ts) aren't atlas/texture bleed - forcing that
+		// atlas's filter to NEAREST didn't fix them - they're a
+		// sub-pixel rounding seam between two separately positioned,
+		// edge-to-edge Image game objects, which shows up specifically
+		// because `scale.mode: FIT` below stretches the fixed 800x600
+		// logical resolution to fill the browser window at whatever
+		// (generally non-integer) factor the actual window size works
+		// out to. roundPixels snaps every such object's final rendered
+		// position to a whole pixel, which is what actually closes a
+		// gap of this kind - see
+		// https://docs.phaser.io/api-documentation/typedef/types-core#roundpixels.
+		roundPixels: true,
+		pixelArt: true,
 		scale: {
 			mode: Phaser.Scale.FIT,
 			autoCenter: Phaser.Scale.CENTER_BOTH,

@@ -102,6 +102,33 @@ def test_invalid_player_starting_color_is_rejected():
     assert "playerStartingColor" in error
 
 
+def test_missing_background_theme_defaults_and_passes():
+    """
+    Unlike every other field above, backgroundTheme is optional -
+    _minimal_valid_content() never sets it (same as every other test
+    fixture in this file and in test_levels_api.py), which is exactly
+    the real-world case this covers: a level saved before this field
+    existed has no "backgroundTheme" key in its stored content at all.
+    """
+    content = _minimal_valid_content()
+    assert "backgroundTheme" not in content
+    is_valid, error = validate_level_content(content)
+    assert is_valid is True
+    assert error is None
+
+
+def test_valid_background_theme_passes():
+    is_valid, error = validate_level_content(_minimal_valid_content(backgroundTheme="desert"))
+    assert is_valid is True
+    assert error is None
+
+
+def test_invalid_background_theme_is_rejected():
+    is_valid, error = validate_level_content(_minimal_valid_content(backgroundTheme="volcano"))
+    assert is_valid is False
+    assert "backgroundTheme" in error
+
+
 # --- placedObjects (ground tiles) ---
 
 

@@ -26,6 +26,12 @@ GROUND_TILE_STYLES = {"grass", "dirt", "sand", "snow", "stone", "purple"}
 PLAYER_COLORS = {"beige", "green", "pink", "purple", "yellow"}
 KEY_COLORS = {"blue", "green", "red", "yellow"}
 CAMERA_MODES = {"follow", "quadrant"}
+# Mirrors frontend/src/lib/game/backgrounds.ts's BACKGROUND_THEMES - only
+# the bottom (ground-level) row's art actually varies by theme; the
+# fade/sky rows above it are shared across every theme, same reasoning
+# as that file's own comment.
+BACKGROUND_THEMES = {"hills", "desert"}
+DEFAULT_BACKGROUND_THEME = "hills"
 # Mirrors frontend/src/lib/game/enemies.ts's ENEMY_TYPES - only the
 # spider exists so far, but kept as a set (not a single string check) for
 # the same reason the frontend does: a second enemy is already planned.
@@ -60,6 +66,7 @@ def default_level_content() -> dict:
         "spawnPosition": {"x": 400, "y": 1648},
         "cameraMode": "follow",
         "playerStartingColor": "green",
+        "backgroundTheme": DEFAULT_BACKGROUND_THEME,
         "placedObjects": [],
         "characterSwapObjects": [],
         "doorObjects": [],
@@ -232,6 +239,16 @@ def validate_level_content(content) -> tuple[bool, str | None]:
 
     if content.get("playerStartingColor") not in PLAYER_COLORS:
         return False, f"playerStartingColor must be one of: {', '.join(sorted(PLAYER_COLORS))}"
+
+    # Optional, unlike every other field above - backgroundTheme was
+    # added after real levels already existed, so a level saved before
+    # it shipped has no key for it at all in its stored draft_content.
+    # Rather than reject every pre-existing level the moment it's next
+    # saved or published, a missing value defaults to
+    # DEFAULT_BACKGROUND_THEME; a value that's present but not a real
+    # theme is still rejected same as any other invalid enum value.
+    if content.get("backgroundTheme", DEFAULT_BACKGROUND_THEME) not in BACKGROUND_THEMES:
+        return False, f"backgroundTheme must be one of: {', '.join(sorted(BACKGROUND_THEMES))}"
 
     for validator, key in (
         (_validate_placed_objects, "placedObjects"),

@@ -1,4 +1,9 @@
 import type Phaser from 'phaser';
+import {
+	BACKGROUND_THEME_REGISTRY_KEY,
+	DEFAULT_BACKGROUND_THEME,
+	type BackgroundTheme
+} from './backgrounds';
 import { CAMERA_MODE_REGISTRY_KEY, DEFAULT_CAMERA_MODE, type CameraMode } from './camera';
 import {
 	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
@@ -30,6 +35,7 @@ export interface LevelContent {
 	spawnPosition: PlayerPosition;
 	cameraMode: CameraMode;
 	playerStartingColor: PlayerColor;
+	backgroundTheme: BackgroundTheme;
 	placedObjects: PlacedObject[];
 	characterSwapObjects: CharacterSwapObject[];
 	doorObjects: DoorObject[];
@@ -55,6 +61,9 @@ export function serializeLevelContent(registry: Phaser.Data.DataManager): LevelC
 		playerStartingColor:
 			(registry.get(PLAYER_STARTING_COLOR_REGISTRY_KEY) as PlayerColor | undefined) ??
 			DEFAULT_PLAYER_COLOR,
+		backgroundTheme:
+			(registry.get(BACKGROUND_THEME_REGISTRY_KEY) as BackgroundTheme | undefined) ??
+			DEFAULT_BACKGROUND_THEME,
 		placedObjects: (registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [],
 		characterSwapObjects:
 			(registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as CharacterSwapObject[] | undefined) ??
@@ -80,6 +89,14 @@ export function deserializeLevelContent(
 	registry.set(EDITOR_PLAYER_POSITION_KEY, content.spawnPosition);
 	registry.set(CAMERA_MODE_REGISTRY_KEY, content.cameraMode);
 	registry.set(PLAYER_STARTING_COLOR_REGISTRY_KEY, content.playerStartingColor);
+	// Defensively defaulted, not trusted as always-present like the
+	// fields above - unlike them, backgroundTheme was added after real
+	// levels already existed, so content fetched for one saved before
+	// this field shipped genuinely has no backgroundTheme key at
+	// runtime, however the LevelContent type above claims it does (see
+	// the backend's own validate_level_content, which treats a missing
+	// backgroundTheme the same way for the same reason).
+	registry.set(BACKGROUND_THEME_REGISTRY_KEY, content.backgroundTheme ?? DEFAULT_BACKGROUND_THEME);
 	registry.set(PLACED_OBJECTS_REGISTRY_KEY, content.placedObjects);
 	registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, content.characterSwapObjects);
 	registry.set(DOOR_OBJECTS_REGISTRY_KEY, content.doorObjects);

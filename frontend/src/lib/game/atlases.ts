@@ -127,3 +127,23 @@ export function ensureEnemiesAtlas(scene: Phaser.Scene) {
 		'/assets/kenney/platformer-pack/Spritesheets/enemies.xml'
 	);
 }
+
+export const BACKGROUNDS_ATLAS_KEY = 'backgrounds';
+
+/**
+ * Queues the Kenney backgrounds spritesheet atlas for loading if it
+ * isn't already registered - the per-screen-row background art (see
+ * backgrounds.ts) lives in this one shared atlas. Same guarded pattern
+ * as the other ensure* loaders.
+ */
+export function ensureBackgroundsAtlas(scene: Phaser.Scene) {
+	if (scene.textures.exists(BACKGROUNDS_ATLAS_KEY)) {
+		return;
+	}
+
+	scene.load.atlasXML(
+		BACKGROUNDS_ATLAS_KEY,
+		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-backgrounds-default.png',
+		'/assets/kenney/platformer-pack/Spritesheets/spritesheet-backgrounds-default.xml'
+	);
+}

@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import {
+	BACKGROUNDS_ATLAS_KEY,
 	CHARACTERS_ATLAS_KEY,
+	ensureBackgroundsAtlas,
 	ensureCharacterAtlas,
 	ensureEnemiesAtlas,
 	ensureEraserIcon,
@@ -18,6 +20,14 @@ import {
 	TILES_ATLAS_KEY,
 	TOOLBAR_TOGGLE_ICON_KEY
 } from './atlases';
+import {
+	BACKGROUND_THEMES,
+	createScreenBackgrounds,
+	ensureBackgroundTheme,
+	getThemeSwatchFrame,
+	setBackgroundTheme,
+	type BackgroundTheme
+} from './backgrounds';
 import { SPIDER_DISPLAY_HEIGHT, SPIDER_DISPLAY_WIDTH, SPIDER_IDLE_FRAME } from './enemies';
 import {
 	ensureStartingPlayerColor,
@@ -385,6 +395,20 @@ export class LevelEditorScene extends Phaser.Scene {
 		border: Phaser.GameObjects.Rectangle;
 	}[] = [];
 
+	// Background-theme picker - same standalone-button pattern as the
+	// starting-character picker above (a level-wide value, not an
+	// EditorTool). backgroundSprites holds whatever createScreenBackgrounds
+	// most recently created, so selectBackgroundTheme can destroy and
+	// recreate the whole grid when the theme actually changes.
+	private backgroundSprites: Phaser.GameObjects.TileSprite[] = [];
+	private backgroundThemeButtonIcon!: Phaser.GameObjects.Image;
+	private isBackgroundThemePickerOpen = false;
+	private backgroundThemeSwatches: {
+		theme: BackgroundTheme;
+		image: Phaser.GameObjects.Image;
+		border: Phaser.GameObjects.Rectangle;
+	}[] = [];
+
 	// Win-condition placement tool - doors and keys share one toolbar
 	// since keys exist specifically to unlock key-required doors.
 	/** Same independence rationale as isCharacterSwapPickerOpen above. */
@@ -421,6 +445,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		ensureSelectCursorIcon(this);
 		ensureHazardAtlas(this);
 		ensureEnemiesAtlas(this);
+		ensureBackgroundsAtlas(this);
 		ensureToolbarToggleIcon(this);
 	}
 
@@ -434,6 +459,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 		this.cameras.main.setBackgroundColor(BACKGROUND_COLOR);
+		this.backgroundSprites = createScreenBackgrounds(this);
 		this.drawGrid();
 
 		this.createToolbarExpandToggle();
@@ -458,6 +484,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.createStyleToolbar();
 		this.createCharacterSwapToolbar();
 		this.createStartingCharacterToolbar();
+		this.createBackgroundThemeToolbar();
 		this.createWinConditionToolbar();
 		this.createDoorKeyColorPicker();
 
@@ -775,6 +802,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 		this.refreshCharacterSwapToolbarVisibility();
 		this.refreshStartingCharacterPickerVisibility();
+		this.refreshBackgroundThemePickerVisibility();
 		this.refreshWinConditionToolbarVisibility();
 		this.refreshDoorKeyColorPickerVisibility();
 		this.refreshStylePickerVisibility();
@@ -1001,6 +1029,27 @@ export class LevelEditorScene extends Phaser.Scene {
 			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
 		this.startingCharacterButtonIcon.on('pointerdown', () => this.toggleStartingCharacterPicker());
 
+		// Background-theme picker - same standalone-button pattern as the
+		// starting-character picker just above (a level-wide value, not an
+		// EditorTool); its icon reflects whichever theme is currently
+		// chosen instead of a fixed one.
+		const backgroundThemeX = startX + spacing * 7;
+		const backgroundThemeBorder = this.add
+			.rectangle(backgroundThemeX, y, borderSize.width, borderSize.height)
+			.setStrokeStyle(2, 0x666666)
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+		this.backgroundThemeButtonIcon = this.add
+			.image(
+				backgroundThemeX,
+				y,
+				BACKGROUNDS_ATLAS_KEY,
+				getThemeSwatchFrame(ensureBackgroundTheme(this))
+			)
+			.setDisplaySize(iconSize, iconSize)
+			.setInteractive({ useHandCursor: true })
+			.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+		this.backgroundThemeButtonIcon.on('pointerdown', () => this.toggleBackgroundThemePicker());
+
 		for (const button of this.toolButtons) {
 			this.persistentToolbarElements.push(
 				button.hitArea as Phaser.GameObjects.GameObject & Phaser.GameObjects.Components.Visible,
@@ -1008,6 +1057,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			);
 		}
 		this.persistentToolbarElements.push(startingCharBorder, this.startingCharacterButtonIcon);
+		this.persistentToolbarElements.push(backgroundThemeBorder, this.backgroundThemeButtonIcon);
 
 		this.refreshToolHighlight();
 	}
@@ -1295,28 +1345,27 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	/**
-	 * Shows the color swatches only while the picker is open. A color
-	 * already used by a placed swap object is dimmed and disabled - it
-	 * can't become the starting color without first freeing it up (by
-	 * erasing that object), since a level's starting color and its swap
-	 * objects' colors must always be distinct.
+	 * Shows the color swatches only while the picker is open. The
+	 * starting color is free to be any PLAYER_COLORS entry regardless of
+	 * what colors are already used by placed swap objects - a level's
+	 * starting color and its swap objects' colors are NOT required to be
+	 * distinct (touching a same-colored swap object is just a harmless
+	 * no-op swap), so nothing here is ever dimmed/disabled on that basis.
 	 */
 	private refreshStartingCharacterPickerVisibility() {
 		const isOpen = this.isStartingCharacterPickerOpen && this.isToolbarUiVisible();
 		const currentColor = ensureStartingPlayerColor(this);
-		const usedByObjects = new Set(this.getPlacedSwapObjects().map((object) => object.color));
 
 		for (const swatch of this.startingCharacterSwatches) {
 			swatch.image.setVisible(isOpen);
 			swatch.border.setVisible(isOpen);
 
-			const isTakenByObject = usedByObjects.has(swatch.color) && swatch.color !== currentColor;
-			if (isOpen && !isTakenByObject) {
+			if (isOpen) {
 				swatch.image.setInteractive({ useHandCursor: true });
 				swatch.image.setAlpha(1);
 			} else {
 				swatch.image.disableInteractive();
-				swatch.image.setAlpha(isOpen ? 0.3 : 1);
+				swatch.image.setAlpha(1);
 			}
 
 			swatch.border.setStrokeStyle(3, swatch.color === currentColor ? 0xffd23f : 0x666666);
@@ -1324,13 +1373,6 @@ export class LevelEditorScene extends Phaser.Scene {
 	}
 
 	private selectStartingCharacterColor(color: PlayerColor) {
-		const usedByObjects = new Set(this.getPlacedSwapObjects().map((object) => object.color));
-		if (usedByObjects.has(color) && color !== ensureStartingPlayerColor(this)) {
-			// Shouldn't be reachable (the swatch is disabled), but
-			// defensive against any state drift.
-			return;
-		}
-
 		setStartingPlayerColor(this, color);
 		this.isStartingCharacterPickerOpen = false;
 		this.refreshStartingCharacterPickerVisibility();
@@ -1339,6 +1381,87 @@ export class LevelEditorScene extends Phaser.Scene {
 		// The newly-chosen starting color must now be excluded from
 		// character-swap-object placement too.
 		this.refreshCharacterSwapToolbarVisibility();
+	}
+
+	// ── Background-theme picker ─────────────────────────────────────────
+
+	private createBackgroundThemeToolbar() {
+		const swatchSize = this.swatchSize;
+		const spacing = this.swatchSpacing;
+		const totalWidth =
+			BACKGROUND_THEMES.length * swatchSize + (BACKGROUND_THEMES.length - 1) * spacing;
+		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
+		const y = this.scale.height - 40;
+
+		this.backgroundThemeSwatches = BACKGROUND_THEMES.map((theme, index) => {
+			const x = startX + index * (swatchSize + spacing);
+
+			const border = this.add
+				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
+				.setStrokeStyle(3, 0x666666)
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+
+			const image = this.add
+				.image(x, y, BACKGROUNDS_ATLAS_KEY, getThemeSwatchFrame(theme))
+				.setDisplaySize(swatchSize, swatchSize)
+				.setInteractive({ useHandCursor: true })
+				.setScrollFactor(0).setDepth(TOOLBAR_DEPTH);
+
+			image.on('pointerdown', () => this.selectBackgroundTheme(theme));
+
+			return { theme, image, border };
+		});
+
+		this.refreshBackgroundThemePickerVisibility();
+	}
+
+	/** Shows the theme swatches only while the picker is open - same
+	 * open/closed visibility pattern as the starting-character picker,
+	 * minus that picker's "taken by another object" disabling (a
+	 * background theme has no analogous per-object conflict to guard
+	 * against). */
+	private refreshBackgroundThemePickerVisibility() {
+		const isOpen = this.isBackgroundThemePickerOpen && this.isToolbarUiVisible();
+		const currentTheme = ensureBackgroundTheme(this);
+
+		for (const swatch of this.backgroundThemeSwatches) {
+			swatch.image.setVisible(isOpen);
+			swatch.border.setVisible(isOpen);
+			swatch.border.setStrokeStyle(3, swatch.theme === currentTheme ? 0xffd23f : 0x666666);
+		}
+	}
+
+	private toggleBackgroundThemePicker() {
+		if (this.isBackgroundThemePickerOpen) {
+			this.isBackgroundThemePickerOpen = false;
+			this.refreshBackgroundThemePickerVisibility();
+			return;
+		}
+		// Same reasoning as toggleStartingCharacterPicker - switching to
+		// Select closes every other bottom-row picker first, before this
+		// one opens, so closeAllBottomRowPickers can't immediately clobber
+		// it back to false.
+		this.setEditorTool('select');
+		this.isBackgroundThemePickerOpen = true;
+		this.refreshBackgroundThemePickerVisibility();
+	}
+
+	private selectBackgroundTheme(theme: BackgroundTheme) {
+		setBackgroundTheme(this, theme);
+		this.isBackgroundThemePickerOpen = false;
+		this.refreshBackgroundThemePickerVisibility();
+		this.backgroundThemeButtonIcon.setTexture(BACKGROUNDS_ATLAS_KEY, getThemeSwatchFrame(theme));
+
+		// The whole grid was drawn for the PREVIOUS theme - unlike every
+		// other level-wide setting here (starting color, camera mode),
+		// changing this one has a visible effect that spans every screen
+		// at once, so the entire background has to be torn down and
+		// rebuilt against the new theme rather than just updating a
+		// single stored value.
+		for (const sprite of this.backgroundSprites) {
+			sprite.destroy();
+		}
+		this.backgroundSprites = createScreenBackgrounds(this);
 	}
 
 	// ── Win-condition placement tool ────────────────────────────────────
@@ -2079,13 +2202,16 @@ export class LevelEditorScene extends Phaser.Scene {
 			this.refreshWinConditionToolbarVisibility();
 			this.isStartingCharacterPickerOpen = false;
 			this.refreshStartingCharacterPickerVisibility();
+			this.isBackgroundThemePickerOpen = false;
+			this.refreshBackgroundThemePickerVisibility();
 		}
 	}
 
 	/**
 	 * Closes every bottom-row picker (style, character-swap,
-	 * starting-character, win-condition, door-key-color) - they all
-	 * share the same visual space. Tool switching already closes
+	 * starting-character, background-theme, win-condition,
+	 * door-key-color) - they all share the same visual space. Tool
+	 * switching already closes
 	 * whichever picker belonged to the previous tool (see
 	 * setEditorTool), but the door-key picker can now open from any
 	 * non-eraser tool without a tool switch happening at all, so it
@@ -2099,6 +2225,8 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.refreshCharacterSwapToolbarVisibility();
 		this.isStartingCharacterPickerOpen = false;
 		this.refreshStartingCharacterPickerVisibility();
+		this.isBackgroundThemePickerOpen = false;
+		this.refreshBackgroundThemePickerVisibility();
 		this.isWinConditionPickerOpen = false;
 		this.selectedWinConditionItem = null;
 		this.refreshWinConditionToolbarVisibility();

@@ -46,6 +46,7 @@ import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
 import {
 	CHARACTERS_ATLAS_KEY,
+	ensureBackgroundsAtlas,
 	ensureCharacterAtlas,
 	ensureEnemiesAtlas,
 	ensureHazardAtlas,
@@ -54,6 +55,7 @@ import {
 	HAZARD_ATLAS_KEY,
 	TILES_ATLAS_KEY
 } from './atlases';
+import { createScreenBackgrounds } from './backgrounds';
 import {
 	getNextPatrolDirection,
 	getPlatformBoundsForEnemy,
@@ -416,6 +418,7 @@ export class PlatformerScene extends Phaser.Scene {
 		ensureTilesAtlas(this);
 		ensureHazardAtlas(this);
 		ensureEnemiesAtlas(this);
+		ensureBackgroundsAtlas(this);
 		ensureSounds(this);
 	}
 
@@ -458,6 +461,7 @@ export class PlatformerScene extends Phaser.Scene {
 
 		this.physics.world.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 		this.cameras.main.setBounds(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+		createScreenBackgrounds(this);
 		this.cameraMode = ensureCameraMode(this);
 
 		const storedPosition = this.registry.get(EDITOR_PLAYER_POSITION_KEY) as

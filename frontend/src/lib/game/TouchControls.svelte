@@ -152,7 +152,7 @@
 	   and duck along the bottom - rather than a plain row, so dash/duck
 	   sit closer to the thumb's natural resting position below jump. */
 	display: grid;
-	grid-template-columns: repeat(2, 52px);
+	grid-template-columns: repeat(2, 65px);
 	grid-template-rows: repeat(2, 56px);
 }
 

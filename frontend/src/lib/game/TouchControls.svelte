@@ -142,7 +142,7 @@
 .cluster-left {
 	left: calc(12px + env(safe-area-inset-left, 0px));
 	display: grid;
-	grid-template-columns: repeat(2, 30px);
+	grid-template-columns: repeat(2, 40px);
 	grid-template-rows: repeat(2, 40px);	
 }
 

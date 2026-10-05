@@ -229,7 +229,7 @@ const WIN_DISPLAY_DURATION_MS = 2000;
 // slamming down the instant the door opens or the player falls off
 // screen. Applies to both triggerWin() and triggerDeath() so the two
 // endings feel consistent with each other.
-const RESULT_MODAL_DELAY_MS = 4000;
+const RESULT_MODAL_DELAY_MS = 2000;
 
 // Explicit render depths (Phaser defaults everything to 0 and draws by
 // creation order otherwise, which put doors - created after the player -

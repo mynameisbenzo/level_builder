@@ -26,7 +26,7 @@
 	{#if $currentMode === 'play'}
 		<div class="cluster cluster-left">
 			<button
-                class="btn btn-round"
+                class="btn btn-round btn-left"
                 aria-label="Move left"
                 onpointerdown={press(() => setTouchDirection('left', true))}
                 onpointerup={press(() => setTouchDirection('left', false))}
@@ -35,8 +35,18 @@
             >
                 ◀︎
             </button>
+			<button
+				class="btn btn-round btn-duck"
+				aria-label="Duck"
+				onpointerdown={press(() => setTouchDuck(true))}
+				onpointerup={press(() => setTouchDuck(false))}
+				onpointercancel={press(() => setTouchDuck(false))}
+				onpointerleave={press(() => setTouchDuck(false))}
+			>
+				▼
+			</button>
             <button
-                class="btn btn-round"
+                class="btn btn-round btn-right"
                 aria-label="Move right"
                 onpointerdown={press(() => setTouchDirection('right', true))}
                 onpointerup={press(() => setTouchDirection('right', false))}
@@ -67,16 +77,6 @@
 				onpointerleave={press(() => setTouchDash(false))}
 			>
 				»
-			</button>
-			<button
-				class="btn btn-round btn-duck"
-				aria-label="Duck"
-				onpointerdown={press(() => setTouchDuck(true))}
-				onpointerup={press(() => setTouchDuck(false))}
-				onpointercancel={press(() => setTouchDuck(false))}
-				onpointerleave={press(() => setTouchDuck(false))}
-			>
-				▼
 			</button>
 		</div>
 	{/if}
@@ -141,6 +141,9 @@
 
 .cluster-left {
 	left: calc(12px + env(safe-area-inset-left, 0px));
+	display: grid;
+	grid-template-columns: repeat(2, 25px);
+	grid-template-rows: repeat(2, 40px);	
 }
 
 .cluster-right {
@@ -149,18 +152,28 @@
 	   and duck along the bottom - rather than a plain row, so dash/duck
 	   sit closer to the thumb's natural resting position below jump. */
 	display: grid;
-	grid-template-columns: repeat(2, 56px);
+	grid-template-columns: repeat(2, 52px);
 	grid-template-rows: repeat(2, 56px);
 }
 
-.btn-jump {
-	grid-column: 2;
+.btn-left {
+	grid-column: 1;
 	grid-row: 1;
+}
+
+.btn-right {
+	grid-column: 3;
+	grid-row: 1;
+}
+
+.btn-jump {
+	grid-column: 1;
+	grid-row: 2;
 	background: rgba(255, 107, 107, 0.7);
 }
 
 .btn-dash {
-	grid-column: 1;
+	grid-column: 2;
 	grid-row: 2;
 	background: rgba(255, 210, 63, 0.7);
 }

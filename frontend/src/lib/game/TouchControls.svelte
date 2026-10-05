@@ -142,7 +142,7 @@
 .cluster-left {
 	left: calc(12px + env(safe-area-inset-left, 0px));
 	display: grid;
-	grid-template-columns: repeat(2, 25px);
+	grid-template-columns: repeat(2, 30px);
 	grid-template-rows: repeat(2, 40px);	
 }
 
@@ -152,7 +152,7 @@
 	   and duck along the bottom - rather than a plain row, so dash/duck
 	   sit closer to the thumb's natural resting position below jump. */
 	display: grid;
-	grid-template-columns: repeat(2, 65px);
+	grid-template-columns: repeat(2, 56px);
 	grid-template-rows: repeat(2, 56px);
 }
 
@@ -173,7 +173,7 @@
 }
 
 .btn-dash {
-	grid-column: 2;
+	grid-column: 3;
 	grid-row: 2;
 	background: rgba(255, 210, 63, 0.7);
 }

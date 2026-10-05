@@ -26,6 +26,12 @@
 		// On success, startNewLevel already navigated away - nothing
 		// left to do here.
 	}
+	function handleEndless() {
+		// Endless mode is accounts-only - present the option to everyone,
+		// and send anyone not logged in to sign up instead.
+		goto(auth.isLoggedIn ? '/endless' : '/signup');
+	}
+
 	onMount(async () => {
 		// The installed home-screen app's start_url is "/" (see
 		// manifest.json) - regular browser visits to "/" (the Navbar
@@ -78,9 +84,12 @@
 			Place platforms, swap who you're playing as mid-level, and set a goal to reach. No
 			install, no account - just open the editor and start building.
 		</p>
-		<button class="cta" onclick={handleBuildNow} disabled={buildNowStatus === 'creating'}>
-			{buildNowStatus === 'creating' ? 'Creating…' : 'Build Now'}
-		</button>
+		<div class="cta-row">
+			<button class="cta" onclick={handleBuildNow} disabled={buildNowStatus === 'creating'}>
+				{buildNowStatus === 'creating' ? 'Creating…' : 'Build Now'}
+			</button>
+			<button class="cta cta-secondary" onclick={handleEndless}>Endless Mode</button>
+		</div>
 		{#if buildNowStatus === 'error'}
 			<p class="build-now-error">{buildNowError}</p>
 		{/if}
@@ -169,11 +178,23 @@
 		border: 3px solid #142013;
 		box-shadow: 0 4px 0 #142013;
 		text-decoration: none;
-		margin-bottom: 56px;
 		cursor: pointer;
 		transition:
 			transform 0.15s ease,
 			box-shadow 0.15s ease;
+	}
+
+	.cta-row {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 16px;
+		margin-bottom: 56px;
+	}
+
+	.cta-secondary {
+		color: #1a1b3a;
+		background: #ffd23f;
 	}
 
 	.cta:disabled {

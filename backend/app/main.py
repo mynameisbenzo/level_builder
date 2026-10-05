@@ -46,6 +46,7 @@ def create_app(config_name: str = "development") -> Flask:
         return jsonify({"error": "token has expired"}), 401
 
     from app.models.email_verification import EmailVerificationToken  # noqa: F401
+    from app.models.endless import EndlessLifeLoss, EndlessRun, EndlessRunLevel  # noqa: F401
     from app.models.level import Level, LevelVersion  # noqa: F401
     from app.models.level_rating import LevelRating  # noqa: F401
     from app.models.login_link_request import LoginLinkRequest  # noqa: F401
@@ -55,12 +56,14 @@ def create_app(config_name: str = "development") -> Flask:
     from app.models.user import User  # noqa: F401
 
     from app.api.auth import auth_bp
+    from app.api.endless import endless_bp
     from app.api.levels import levels_bp
     from app.api.users import users_bp
 
     app.register_blueprint(users_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(levels_bp)
+    app.register_blueprint(endless_bp)
     
     @app.get("/")
     def landing_page():

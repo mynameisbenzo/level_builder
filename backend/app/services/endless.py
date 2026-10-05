@@ -1,0 +1,522 @@
+from datetime import datetime, timedelta
+
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
+
+from app.extensions import db
+from app.models.endless import (
+    EndlessLifeLoss,
+    EndlessLifeLossReason,
+    EndlessRun,
+    EndlessRunEndReason,
+    EndlessRunLevel,
+    EndlessRunLevelOutcome,
+)
+from app.models.level import Level, LevelVersion
+from app.models.user import User, UserRole
+
+# ── Rules ───────────────────────────────────────────────────────────────
+
+# Free accounts: a fixed number of lives per run, drawn from a daily pool.
+FREE_LIVES_PER_RUN = 10
+FREE_DAILY_POOL = 50
+
+# Paid accounts: no daily pool, just a per-run amount they can choose.
+PAID_DEFAULT_LIVES = 100
+PAID_MIN_LIVES = 1
+PAID_MAX_LIVES = 100
+
+# The daily pool resets every POOL_WINDOW, counted from the user's own
+# created_at (plain UTC arithmetic - see get_pool_window).
+POOL_WINDOW = timedelta(hours=24)
+
+# A run untouched for this long is lazily closed the next time anything
+# loads it. Matches POOL_WINDOW on purpose: an attempt abandoned that
+# long ago is necessarily in an earlier pool window, so it costs nothing.
+ENDLESS_RUN_IDLE_EXPIRY = timedelta(hours=24)
+
+# An attempt that was last seen alive less than this long after it began
+# isn't charged when it turns out to have been abandoned - covers an
+# accidental close or crash right after a level loads. Deliberately
+# short: a long one would let players quit just before dying and never
+# lose a life. See resolve_pending_attempt.
+ATTEMPT_GRACE_PERIOD = timedelta(seconds=30)
+
+# The difficulty labels a run can filter on, matched against
+# LevelVersion.difficulty_label_cached. NOTE: nothing populates that
+# column yet (the PlayAttempt model and auto-labeling are still open
+# tasks), so until they exist every category has zero levels and only
+# "any" (difficulty=None) is usable. The future labeler must write
+# exactly these strings.
+ENDLESS_DIFFICULTIES = ("easy", "normal", "hard", "very_hard", "tas")
+
+
+class EndlessError(Exception):
+    """
+    Raised for any rule violation. `code` is a stable machine-readable
+    string the frontend can branch on; `extra` is merged into the JSON
+    error body (e.g. the pool's reset time, or the existing active run).
+    """
+
+    def __init__(self, code: str, message: str, status: int, extra: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status = status
+        self.extra = extra or {}
+
+
+# ── Accounts & the daily pool ───────────────────────────────────────────
+
+
+def is_paid_account(user: User) -> bool:
+    """
+    Paid-tier check. The full tier derivation (see "Account tiers" in
+    OPEN_TASKS.md) isn't built yet - there is no User.is_paid column -
+    so for now only staff roles count as paid, which is the same first
+    rule that derivation will have. When is_paid lands, extend this one
+    function.
+    """
+    return user.role != UserRole.USER
+
+
+def get_pool_window(user: User, now: datetime) -> tuple[datetime, datetime]:
+    """
+    The current 24-hour pool window as (start, end), a rolling sequence
+    of windows anchored at the user's created_at. Plain UTC arithmetic,
+    so there is no per-user timezone handling anywhere.
+    """
+    anchor = user.created_at or now
+    elapsed = max(now - anchor, timedelta(0))
+    windows_elapsed = elapsed // POOL_WINDOW
+    start = anchor + windows_elapsed * POOL_WINDOW
+    return start, start + POOL_WINDOW
+
+
+def get_pool_state(user: User, now: datetime) -> dict | None:
+    """The user's daily-pool standing, or None for paid accounts (no pool)."""
+    if is_paid_account(user):
+        return None
+
+    start, end = get_pool_window(user, now)
+    used = (
+        EndlessLifeLoss.query.filter(EndlessLifeLoss.user_id == user.id)
+        .filter(EndlessLifeLoss.created_at >= start)
+        .filter(EndlessLifeLoss.created_at < end)
+        .count()
+    )
+    return {
+        "daily_limit": FREE_DAILY_POOL,
+        "remaining": max(0, FREE_DAILY_POOL - used),
+        "resets_at": end,
+    }
+
+
+def _starting_lives_for(user: User, requested, now: datetime) -> int:
+    if is_paid_account(user):
+        if requested is None:
+            return PAID_DEFAULT_LIVES
+        if isinstance(requested, bool) or not isinstance(requested, int):
+            raise EndlessError("invalid_lives", "starting_lives must be a whole number", 400)
+        if not PAID_MIN_LIVES <= requested <= PAID_MAX_LIVES:
+            raise EndlessError(
+                "invalid_lives",
+                f"starting_lives must be between {PAID_MIN_LIVES} and {PAID_MAX_LIVES}",
+                400,
+            )
+        return requested
+
+    if requested is not None:
+        raise EndlessError(
+            "paid_only", "choosing your starting lives is only available on paid accounts", 403
+        )
+
+    pool = get_pool_state(user, now)
+    if pool["remaining"] <= 0:
+        raise EndlessError(
+            "daily_pool_exhausted",
+            "you've used all your endless lives for today",
+            429,
+            {"pool": _serialize_pool(pool)},
+        )
+    return min(FREE_LIVES_PER_RUN, pool["remaining"])
+
+
+def _serialize_pool(pool: dict | None) -> dict | None:
+    if pool is None:
+        return None
+    return {
+        "daily_limit": pool["daily_limit"],
+        "remaining": pool["remaining"],
+        "resets_at": pool["resets_at"].isoformat(),
+    }
+
+
+def serialize_pool(user: User, now: datetime) -> dict | None:
+    return _serialize_pool(get_pool_state(user, now))
+
+
+# ── Picking levels ──────────────────────────────────────────────────────
+
+
+def _eligible_levels_query():
+    """Every live level: published, not deleted - paired with its current version."""
+    return (
+        db.session.query(Level, LevelVersion)
+        .join(LevelVersion, LevelVersion.id == Level.latest_published_version_id)
+        .filter(Level.is_deleted.is_(False))
+    )
+
+
+def count_eligible_levels() -> dict:
+    """
+    {"any": N, "easy": n, ...} - how many levels each difficulty choice
+    could serve. The picker greys out a choice whose count is 0.
+    """
+    counts = {"any": _eligible_levels_query().count()}
+    for difficulty in ENDLESS_DIFFICULTIES:
+        counts[difficulty] = (
+            _eligible_levels_query().filter(LevelVersion.difficulty_label_cached == difficulty).count()
+        )
+    return counts
+
+
+def _serve_next_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
+    """
+    Picks a random eligible level (repeats are allowed, and a user can be
+    served their own level) and records it as the run's new current
+    level. Returns None if nothing is eligible.
+    """
+    query = _eligible_levels_query()
+    if run.difficulty is not None:
+        query = query.filter(LevelVersion.difficulty_label_cached == run.difficulty)
+
+    picked = query.order_by(func.random()).first()
+    if picked is None:
+        return None
+    level, version = picked
+
+    last_position = (
+        db.session.query(func.max(EndlessRunLevel.position)).filter(EndlessRunLevel.run_id == run.id).scalar()
+    )
+    entry = EndlessRunLevel(
+        run_id=run.id,
+        level_id=level.id,
+        level_version_id=version.id,
+        position=(last_position or 0) + 1,
+        outcome=EndlessRunLevelOutcome.ACTIVE,
+        served_at=now,
+    )
+    db.session.add(entry)
+    db.session.flush()
+    return entry
+
+
+def current_entry(run: EndlessRun) -> EndlessRunLevel | None:
+    """The run's current level: the one still ACTIVE."""
+    return (
+        EndlessRunLevel.query.filter_by(run_id=run.id, outcome=EndlessRunLevelOutcome.ACTIVE)
+        .order_by(EndlessRunLevel.position.desc())
+        .first()
+    )
+
+
+# ── Ending runs & losing lives ──────────────────────────────────────────
+
+
+def _end_run(run: EndlessRun, reason: EndlessRunEndReason, now: datetime) -> None:
+    if not run.is_active:
+        return
+
+    entry = current_entry(run)
+    if entry is not None:
+        entry.outcome = (
+            EndlessRunLevelOutcome.FAILED
+            if reason == EndlessRunEndReason.OUT_OF_LIVES
+            else EndlessRunLevelOutcome.ABANDONED
+        )
+        entry.attempt_started_at = None
+        entry.attempt_last_seen_at = None
+        entry.resolved_at = now
+
+    run.is_active = False
+    run.end_reason = reason
+    run.ended_at = now
+    run.last_activity_at = now
+
+
+def _lose_life(run: EndlessRun, entry: EndlessRunLevel, reason: EndlessLifeLossReason, now: datetime) -> None:
+    """
+    Charges one life: against the run, and in the ledger the daily pool
+    is counted from. Ends the run if that was the last one.
+    """
+    run.lives_remaining -= 1
+    if reason == EndlessLifeLossReason.SKIP:
+        run.skips += 1
+    else:
+        run.deaths += 1
+        entry.deaths += 1
+
+    db.session.add(EndlessLifeLoss(user_id=run.user_id, run_id=run.id, reason=reason, created_at=now))
+    run.last_activity_at = now
+
+    if run.lives_remaining <= 0:
+        run.lives_remaining = 0
+        _end_run(run, EndlessRunEndReason.OUT_OF_LIVES, now)
+
+
+def resolve_pending_attempt(run: EndlessRun, user: User, now: datetime) -> bool:
+    """
+    If the run's current level has an attempt that began but was never
+    resolved (tab closed, crash, lost connection), settles it now as a
+    death - at the moment the player next comes back, so there is no
+    background job. Returns True if a life was charged.
+
+    Two exceptions, both free:
+    - Grace: the client heartbeats while a level is being played (see
+      record_heartbeat), so `attempt_last_seen_at` is roughly when the
+      player left. An attempt last seen under ATTEMPT_GRACE_PERIOD after
+      it began is treated as an accidental close. No heartbeat at all
+      does NOT qualify - otherwise a client that simply never sent any
+      could quit before every death for free.
+    - Earlier pool window (free accounts only): if the pool has already
+      reset since the attempt began, the missed death costs nothing, same
+      as any normal reset.
+    """
+    entry = current_entry(run)
+    if entry is None or entry.attempt_started_at is None:
+        return False
+
+    started = entry.attempt_started_at
+    last_seen = entry.attempt_last_seen_at
+    entry.attempt_started_at = None
+    entry.attempt_last_seen_at = None
+
+    if last_seen is not None and last_seen - started < ATTEMPT_GRACE_PERIOD:
+        return False
+
+    if not is_paid_account(user):
+        window_start, _ = get_pool_window(user, now)
+        if started < window_start:
+            return False
+
+    _lose_life(run, entry, EndlessLifeLossReason.ABANDONED, now)
+    return True
+
+
+def get_active_run(user: User, now: datetime, resolve_pending: bool = True) -> EndlessRun | None:
+    """
+    The user's active run, or None. Lazily does the bookkeeping that has
+    no other trigger, and commits it:
+    - a run idle past ENDLESS_RUN_IDLE_EXPIRY is closed as expired (and
+      reads as no run);
+    - unless resolve_pending is False, an abandoned in-progress attempt
+      is settled (see resolve_pending_attempt) - which can itself end the
+      run, in which case this also returns None.
+
+    resolve_pending must be False when the caller is about to report on
+    that very attempt (death / clear / skip), or it would be charged as
+    abandoned before the report is read.
+    """
+    run = EndlessRun.query.filter_by(user_id=user.id, is_active=True).first()
+    if run is None:
+        return None
+
+    if now - run.last_activity_at > ENDLESS_RUN_IDLE_EXPIRY:
+        _end_run(run, EndlessRunEndReason.EXPIRED, now)
+        db.session.commit()
+        return None
+
+    if resolve_pending:
+        resolve_pending_attempt(run, user, now)
+        db.session.commit()
+
+    return run if run.is_active else None
+
+
+# ── Run lifecycle ───────────────────────────────────────────────────────
+
+
+def start_run(
+    user: User,
+    difficulty: str | None,
+    requested_lives,
+    replace: bool,
+    now: datetime,
+) -> EndlessRun:
+    """
+    Starts a run and serves its first level. If the user already has an
+    active run, that is an error unless `replace` is true, in which case
+    the old run is forfeited first ("start over") - including charging
+    its abandoned attempt, so starting over can't dodge a life loss.
+    Either everything happens or nothing does: a failure after the old
+    run was forfeited (e.g. the daily pool turns out to be empty) rolls
+    the forfeit back too.
+    """
+    if difficulty is not None and difficulty not in ENDLESS_DIFFICULTIES:
+        raise EndlessError(
+            "invalid_difficulty",
+            f"difficulty must be one of: {', '.join(ENDLESS_DIFFICULTIES)} (or omitted for any)",
+            400,
+        )
+
+    query = _eligible_levels_query()
+    if difficulty is not None:
+        query = query.filter(LevelVersion.difficulty_label_cached == difficulty)
+    if query.first() is None:
+        raise EndlessError("no_levels_available", "there are no levels available for that choice", 409)
+
+    existing = get_active_run(user, now, resolve_pending=False)
+    if existing is not None and not replace:
+        raise EndlessError(
+            "active_run_exists",
+            "you already have an endless run in progress",
+            409,
+            {"active_run_exists": True},
+        )
+
+    try:
+        if existing is not None:
+            resolve_pending_attempt(existing, user, now)
+            _end_run(existing, EndlessRunEndReason.FORFEITED, now)
+            db.session.flush()
+
+        lives = _starting_lives_for(user, requested_lives, now)
+
+        run = EndlessRun(
+            user_id=user.id,
+            difficulty=difficulty,
+            starting_lives=lives,
+            lives_remaining=lives,
+            started_at=now,
+            last_activity_at=now,
+        )
+        db.session.add(run)
+        db.session.flush()
+
+        if _serve_next_level(run, now) is None:
+            raise EndlessError("no_levels_available", "there are no levels available for that choice", 409)
+
+        db.session.commit()
+    except EndlessError:
+        db.session.rollback()
+        raise
+    except IntegrityError:
+        # The partial unique index caught two simultaneous "start run"
+        # requests - same race handling as the other endpoints.
+        db.session.rollback()
+        raise EndlessError(
+            "active_run_exists", "you already have an endless run in progress", 409, {"active_run_exists": True}
+        )
+
+    return run
+
+
+def _count_play_for_level(level: Level, user: User) -> None:
+    """
+    Endless attempts count toward a level's play count like direct
+    plays do - including the same owner exclusion, so a creator being
+    served their own level doesn't inflate it. The separate per-endless
+    record lives on EndlessRunLevel.
+    """
+    if level.owner_id != user.id:
+        level.play_count += 1
+
+
+def _count_completion_for_level(level: Level, user: User) -> None:
+    if level.owner_id != user.id:
+        level.completion_count += 1
+
+
+def begin_attempt(run: EndlessRun, user: User, now: datetime) -> bool:
+    """
+    The client has actually loaded the level and play is starting (not
+    merely shown the interstitial). Returns False if settling a previous,
+    never-reported attempt just ended the run.
+    """
+    entry = current_entry(run)
+    if entry is None:
+        raise EndlessError("no_current_level", "this run has no level in progress", 409)
+
+    if entry.attempt_started_at is not None:
+        # A new attempt began without the last one ever being reported.
+        resolve_pending_attempt(run, user, now)
+        if not run.is_active:
+            return False
+
+    entry.attempts += 1
+    entry.attempt_started_at = now
+    entry.attempt_last_seen_at = None
+    run.last_activity_at = now
+    _count_play_for_level(entry.level, user)
+    return True
+
+
+def record_heartbeat(run: EndlessRun, now: datetime) -> None:
+    """
+    Sent every few seconds while a level is being played. The only way
+    the server can tell roughly when a player who vanished actually left
+    - see resolve_pending_attempt's grace rule.
+    """
+    entry = current_entry(run)
+    if entry is None or entry.attempt_started_at is None:
+        raise EndlessError("no_attempt_in_progress", "no attempt is in progress", 409)
+
+    entry.attempt_last_seen_at = now
+    run.last_activity_at = now
+
+
+def _require_pending_attempt(run: EndlessRun) -> EndlessRunLevel:
+    entry = current_entry(run)
+    if entry is None or entry.attempt_started_at is None:
+        raise EndlessError("no_attempt_in_progress", "no attempt is in progress", 409)
+    return entry
+
+
+def report_death(run: EndlessRun, now: datetime) -> None:
+    entry = _require_pending_attempt(run)
+    entry.attempt_started_at = None
+    entry.attempt_last_seen_at = None
+    _lose_life(run, entry, EndlessLifeLossReason.DEATH, now)
+
+
+def report_clear(run: EndlessRun, user: User, now: datetime) -> EndlessRunLevel | None:
+    """Records the clear and serves the next level (None if none is available)."""
+    entry = _require_pending_attempt(run)
+    entry.attempt_started_at = None
+    entry.attempt_last_seen_at = None
+    entry.outcome = EndlessRunLevelOutcome.CLEARED
+    entry.resolved_at = now
+    run.levels_cleared += 1
+    run.last_activity_at = now
+    _count_completion_for_level(entry.level, user)
+
+    return _serve_next_level(run, now)
+
+
+def skip_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
+    """
+    Skips the current level at the cost of a life. Allowed whether or
+    not an attempt is in progress; an in-progress one is simply replaced
+    by the skip (it is not additionally charged as a death). If that was
+    the last life the run ends and there is no next level.
+    """
+    entry = current_entry(run)
+    if entry is None:
+        raise EndlessError("no_current_level", "this run has no level in progress", 409)
+
+    entry.attempt_started_at = None
+    entry.attempt_last_seen_at = None
+    entry.outcome = EndlessRunLevelOutcome.SKIPPED
+    entry.resolved_at = now
+    _lose_life(run, entry, EndlessLifeLossReason.SKIP, now)
+
+    if not run.is_active:
+        return None
+    return _serve_next_level(run, now)
+
+
+def forfeit_run(run: EndlessRun, user: User, now: datetime) -> None:
+    """The player quit. An in-progress attempt is settled like any abandoned one."""
+    resolve_pending_attempt(run, user, now)
+    _end_run(run, EndlessRunEndReason.FORFEITED, now)

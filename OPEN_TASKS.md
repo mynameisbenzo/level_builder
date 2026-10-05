@@ -99,7 +99,7 @@ reach and which catalog content they can use.
 - [ ] `PlayAttempt` model — source of truth for clear rate; only
       registered users' real playthrough attempts count, anonymous
       plays don't
-- [ ] Difficulty auto-labeling from clear rate (Easy 50-100%, Medium
+- [ ] Difficulty auto-labeling from clear rate (Easy 50-100%, Normal
       25-50%, Hard 5-25%, Very Hard 1-5%, "TAS!?!?" under 1%),
       per-version
 - [ ] `Tag`/`LevelTag` models — dev/moderator-curated pool, two
@@ -244,20 +244,84 @@ already have a link to:
       levels by title, and searching for creators by username. No
       design work done yet on ranking/sorting (newest? most played?
       highest clear rate?) or what filters make sense.
-- [ ] **Endless mode** - serves a random published level, and on
-      finishing it (win or death, TBD) automatically advances to
-      another random level from a *different* creator, rather than the
-      player picking one link at a time. Likely wants its own, better
-      metrics tracking than the current per-level play/completion
-      counters, since a play started via endless mode isn't really the
-      same signal as someone following a direct link to that specific
-      level - exact shape (a distinct `source: 'endless' | 'direct'` on
-      play records? a separate attempt table entirely, once
-      `PlayAttempt` above exists?) not yet designed. No design work done
-      yet on level selection (fully random vs. weighted by rating/clear
-      rate), repeat-avoidance within a session, or how/whether it
-      interacts with the owner-exclusion logic already in place for
-      play counts.
+- [ ] **Endless mode** - a lives-based run: the player is served random
+      published levels one after another until they run out of lives.
+      Design settled (no code yet):
+      - **Accounts only.** Non-users see the option but are redirected
+        to sign up; the start-run endpoint also requires a JWT (the
+        redirect alone is only UX).
+      - **Lives per run.** Free accounts: fixed at 10. Paid accounts:
+        default 100, adjustable from 1 to 100 (capped server-side). A
+        death costs a life, and so does skipping a level.
+      - **Daily pool (free accounts only).** 50 lives per 24 hours, with
+        every life lost in a run (deaths, abandoned attempts, skips)
+        coming out of it. There is no carryover between runs: a new run
+        always starts with 10 lives, or whatever is left in the pool if
+        that is under 10 (e.g. pool 16: run 1 loses all 10, pool is 6;
+        run 2 starts with 6). Quitting a run early only costs the lives
+        actually lost, nothing is charged up front or refunded. The pool
+        resets every 24 hours counted from the user's `created_at`
+        (plain UTC arithmetic, no per-user timezone handling). Paid
+        accounts have no pool and are never locked out.
+      - **Selection.** Either truly random (any difficulty) or filtered
+        by one of the difficulty labels (Easy, Normal, Hard, Very Hard,
+        TAS!?!? - see Levels & versioning; these depend on `PlayAttempt`
+        and the auto-labeling existing first). A category with zero
+        matching levels is greyed out in the picker. Repeats are fine,
+        and a user can be served their own levels.
+      - **Server-authoritative runs.** One active run per user at a
+        time, owned by the backend so a refresh can't reset lives and the
+        client can't edit them. Starting a new run while one is active
+        asks "resume or start over"; start over ends the old run as
+        forfeited. A run records user, difficulty filter, starting and
+        remaining lives, levels cleared, deaths, skips, status and
+        timestamps; each level served within it records the level and
+        version, order, outcome (cleared / died / skipped) and deaths.
+      - **Resuming.** A saved run restores the run state, not the
+        in-level position: resuming restarts the current level from the
+        beginning. A run idle for 24 hours expires.
+      - **Abandoned attempts.** The client tells the server when an
+        attempt actually begins (level loaded), not when the interstitial
+        is shown. If an attempt is still unresolved when the player next
+        comes back (tab closed, crash, lost connection), the server
+        resolves it as a death at that point - no background job. An
+        attempt abandoned within 30 seconds of beginning is not counted
+        (grace period, for accidental closes and crashes - kept short on
+        purpose, since a long one would let players quit just before
+        dying and never lose a life). One abandoned in an earlier pool
+        window costs nothing, same as any normal reset.
+      - **Metrics.** Clear rate counts every try, same as direct play
+        (a level cleared on the 5th try is 5 attempts, 1 completion).
+        Endless plays and clears count toward a level's play/completion
+        counts, tracked separately from direct plays (a `source:
+        'endless' | 'direct'` on play records / the future `PlayAttempt`
+        table, plus the run tables above).
+      - **Interstitial screen** shown before every level (and again
+        after a death): a centered banner with the level name above the
+        creator's name; above that, the level's starting character with
+        "x {lives}" beside it. After a death the character plays a quick
+        death animation, pops back into place, and the counter ticks
+        down by one.
+      - **Game over.** When lives reach 0 the counter ticks down to zero
+        on the interstitial, then a "game over" banner falls in from
+        above and lands in the center. For a free user whose daily pool
+        is exhausted, it also shows that the 50 lives refresh and how
+        long until they do (they can't start another run until then). A
+        free user with pool left, or a paid user, can start another run.
+- [ ] **Endless mode: 1-ups (future)** - clearing a level can award 1-ups,
+      the only way a player gets lives back mid-run. Max 3 per level, only
+      granted on a clear, and shown in the UI. Not part of the first
+      version.
+- [ ] **Endless mode: "rejoining cost you a life" notice (future)** - when
+      a player returns to a run whose in-progress attempt was abandoned
+      (tab closed, crash, lost connection) and the server resolves it as
+      a death, tell them on the interstitial that rejoining cost a life,
+      so the lower count isn't a surprise.
+- [ ] **Endless mode: report abandons on page close (future)** - a
+      best-effort report to the server when the page is closed or hidden
+      (`navigator.sendBeacon`), so most abandoned attempts resolve right
+      away instead of only when the player next returns. Never relied on:
+      the lazy resolve-on-return path is still the source of truth.
 
 ## Future Considerations (way down the line)
 

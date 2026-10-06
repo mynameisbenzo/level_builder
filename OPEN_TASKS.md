@@ -350,12 +350,159 @@ already have a link to:
 ## Multiplayer (planned, after ghosts)
 
 - [ ] **Live race** - everyone plays the same published level at once
-      and sees each other as ghosts, no interaction. Each client simulates
-      only its own player and broadcasts position ~10-20x a second. Needs
-      a realtime transport (Flask-SocketIO with a Redis message queue, or
-      a separate websocket service), rooms/invite codes, a synchronized
-      start against a shared server clock, interpolated remote players,
-      and match/result storage. Reuses the ghost sample format.
+      and sees each other as ghosts, no interaction. Design settled in
+      conversation (no code yet).
+      - **Transport.** Flask-SocketIO inside the existing Render
+        backend: free, one codebase, no Redis (a free Render service is
+        a single instance, so room state lives in memory). Expected load
+        is a handful of races a day, mostly promoted on Twitch. Needs a
+        deploy change so the backend can serve WebSockets - a simple
+        threaded mode that avoids monkey-patching is preferred (check
+        Flask-SocketIO's deployment docs). Keep the race logic in its own
+        module behind a thin boundary (join, leave, position, finish) so
+        the transport could later move to something like Cloudflare
+        Durable Objects. Practical notes: the free service takes about a
+        minute to wake from idle (open the site before going live), and
+        a deploy or restart drops every live room, so don't deploy
+        mid-race.
+      - **Access.** Logged-in **paid** accounts only (the tier derivation
+        under "Account tiers & content restrictions" - staff roles count
+        as paid). `is_paid` doesn't exist yet and there is no payment
+        processor, so for now access is staff accounts plus accounts
+        granted `is_paid` by hand. Max 4 players per room. An empty or
+        idle room expires after about 10 minutes. Cap messages per
+        socket so nobody can flood a room.
+      - **Joining, leaving and hosting.**
+        - **Join mode**, set by the host and changeable from the lobby:
+          (1) **host invite only** - only the host can invite;
+          (2) **party invite** - any racer in the room can invite;
+          (3) **public** - anyone with the link can join. In modes 1
+          and 2 an invite is sent to a specific account (by username)
+          and the room link only admits someone on the invite list - a
+          copied link alone doesn't get a stranger in; in public mode
+          the link alone is enough. Everyone still needs a paid account
+          and a free slot.
+        - **Kicking.** The host can kick a player, and a kicked player
+          can't rejoin the room through the link.
+        - **Leaving.** A **Leave race** button works at any time, without
+          closing the window or app. Leaving mid-race is a DNF, placed
+          last, counted in the player's DNF total, and it breaks their
+          win streak. Their ghost fades out for everyone else.
+        - **Joining mid-race.** A new player can fill a freed slot but
+          can't enter a race already under way: they wait in the room
+          ("race in progress, you're in the next one") and are included
+          in the next vote. Joining a room that is only voting or
+          showing results is allowed. If more people want in than there
+          are free slots it is first come, first served.
+        - **Host leaving.** The host role passes to the longest-present
+          player, so the room survives.
+        - **Last racer left.** They can finish the level, but it only
+          counts as a win in the stats if at least 2 players were
+          present when the race started - so nobody can farm wins by
+          having a friend join and quit.
+        - **Spectating** a race in progress is not in the first version.
+      - **Room flow.** The host creates a room and gets an invite link
+        (`/race/<short code>`); up to 4 players join. The host picks a
+        difficulty category (the same choices as endless mode, including
+        Any), and the server draws **1-4 random levels** from it as the
+        candidates (fewer if the category doesn't have that many; no
+        duplicates). Every racer votes; the level with the **most
+        votes** wins, and a tie (including a four-way 1-1-1-1 split) is
+        broken by a selection animation that spins over the tied levels
+        and lands on one. Candidates can include levels owned by
+        anyone in the room (no restriction). The vote has a timer of
+        about 20 seconds, and if nobody votes the server picks at random.
+      - **Starting.** Every client loads the chosen level and tells the
+        server it is ready - phones load slower than laptops - and
+        anyone who doesn't within about 15 seconds is dropped. Then 
+        the server sends a "go at time T" against a shared
+        server clock (with a clock-offset estimate per client), with a
+        3-2-1 countdown and controls locked until go.
+      - **The race.** Each client simulates only its own player and
+        streams position about 20x a second (the ghost sample shape: x,
+        y, facing, pose). Opponents are drawn as translucent ghosts with
+        name tags, tinted by player slot, rendered ~100-150 ms behind
+        real time and interpolated between samples. Players don't
+        collide, and keys, swap objects and doors stay local to each
+        player. The existing scene has exactly one ghost, so this means
+        generalizing it to a set of live, network-fed opponents.
+      - **Death.** Respawn at the start and keep racing. Deaths show on
+        the results and break ties; they never eliminate anyone.
+      - **Winning.** The first finish message to reach the server wins,
+        and placements follow arrival order. Finish times are measured by
+        the server (they include a little network latency) - client-
+        reported times are deliberately not used.
+      - **Ending.** 30 seconds after the first player finishes, anyone
+        still running is marked DNF. Overall cap of **2 minutes** from
+        go: anyone still running when it expires is DNF, so a race where
+        nobody finishes still ends.
+      - **Disconnects.** About 15 seconds to reconnect, then a forfeit
+        (DNF). iOS will likely drop the socket when the app is
+        backgrounded - untested.
+      - **After the race.** The results screen shows placements, times
+        and deaths, with **Next Race / Leave**. Next Race sends everyone
+        still in the room back to a fresh candidate draw and vote once
+        all remaining players have clicked it. Anyone who hasn't clicked
+        after 30 seconds is treated as having left, so one idle player
+        can't stall the room. Leave lets the room continue as long as 2
+        or more players remain. The room also keeps a **running win count**
+        across its races, shown on the results screen; it lives only
+        while the room exists and is not saved.
+      - **Stored.** A race record plus one entry per player (placement,
+        finish time, deaths, status), written when the race ends. Live
+        room state stays in memory. Races stay out of `PlayAttempt`
+        (they don't move difficulty labels, source `'race'` if ever
+        recorded there) and out of ghost records; both can change later.
+        Race results appear on the public `/u/[username]` page and on
+        the player's own `/profile`: totals (races entered, wins, podium
+        finishes, DNFs), current and longest win streak, and a list of
+        recent races (level, placement, finish time, deaths, number of
+        racers). No best-time-per-level stat for now - race times
+        include network latency, so they aren't comparable to ghost
+        times.
+      - **Cheating.** Positions can't be proven honest. The cheap
+        defence is a speed limit and no-teleport check on the incoming
+        stream, reusing the ghost validator's logic; anything stricter
+        (server-side input replay) isn't realistic with the current
+        physics.
+      - **Known tradeoff:** because a racer's own level can be drawn,
+        its creator may race it with a big head start. Accepted for now;
+        revisit if it causes complaints.
+      - **Build stages.** Each stage is usable and testable on its own,
+        and everything stays behind the paid/staff gate, so it can ship
+        piece by piece. Race rules (vote tally and ties, finish order,
+        the 30-second and 2-minute endings, win-streak rules) belong in
+        Phaser-free modules with unit tests; the scene wiring is checked
+        manually in the browser, as elsewhere in this project.
+        1. **Transport and bare rooms.** Flask-SocketIO deployed on the
+           backend in its threaded mode (confirm WebSockets work on
+           Render without disturbing the REST API), JWT check on
+           connect, the paid/staff gate, create a room and invite link,
+           the three join modes with username invites, kick/ban, leave,
+           host handover, idle-room expiry, and the per-socket message
+           cap. Done when two paid accounts can open a room, see each
+           other join and leave, and hand off the host. Also the first
+           chance to check how iOS behaves when the app is backgrounded.
+        2. **Level choice and start.** Category pick, the 1-4 candidate
+           draw, the 20-second vote with the tie-breaking spin animation
+           and random fallback, the load-ready handshake (15-second
+           timeout), per-client clock offset, and the synchronized 3-2-1
+           countdown with controls locked until go. Done when every
+           client in a room reaches the same "go" on the same level.
+        3. **The race.** Position streaming at about 20 Hz, the single
+           ghost generalized into several interpolated live opponents
+           with name tags and slot tints, respawn-on-death with a death
+           count, finish messages and placements by arrival, the
+           30-second and 2-minute endings, DNF handling, leaving
+           mid-race, late joiners waiting for the next race, the
+           results screen with Next Race / Leave (30-second rule), the
+           in-room running win count, and the sanity checks on the
+           position stream. The largest stage.
+        4. **Storage and profiles.** The race and per-player entry
+           tables with a migration, written when a race ends (a win
+           counts only if at least 2 players were present at the start),
+           then the totals, win streaks and recent-races list on
+           `/u/[username]` and `/profile`.
 - [ ] **Co-op / competitive with interaction** - players collide and
       share keys, enemies and character swaps. Needs a server-
       authoritative simulation or deterministic lockstep; the heaviest

@@ -323,6 +323,24 @@ already have a link to:
       category). The data already exists: `EndlessRun.levels_cleared`
       plus `difficulty` and `starting_lives`. Needs a leaderboard
       query/endpoint and somewhere to show it (entry screen, profile).
+- [ ] **Scoreboard mode (future)** - a separate mode from the lives-based
+      endless mode above, built around a high-score leaderboard. Idea
+      only, no design work or code yet:
+      - Every run is **5 lives**, fixed.
+      - The same difficulty categories can be picked as in endless mode
+        (Any, Easy, Normal, Hard, Very Hard, TAS!?!?).
+      - A run's score is the **number of levels beaten**, with one
+        exception: in the **Any** category a level is worth more the
+        harder it is - +1 for Easy, +2 for Normal, +3 for Hard, and so
+        on up the labels (the values for Very Hard and TAS!?!? aren't
+        set yet; +4 and +5 would continue the pattern).
+      - A scoreboard to show the high scores, per category.
+      - Not yet decided: how it relates to the "longest runs" record
+        above (likely replaces or absorbs it); whether it shares endless
+        mode's daily lives pool and free/paid limits; whether skipping
+        still costs a life; how an unlabeled level (under 10 attempts)
+        scores in Any; and whether a score counts the same level more
+        than once.
 - [ ] **Endless mode: report abandons on page close (future)** - a
       best-effort report to the server when the page is closed or hidden
       (`navigator.sendBeacon`), so most abandoned attempts resolve right

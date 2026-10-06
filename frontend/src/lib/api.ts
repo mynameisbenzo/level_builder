@@ -730,6 +730,10 @@ export interface PlayLevelResult {
 	success: boolean;
 	title?: string;
 	content?: LevelContent;
+	/** Which published version this content is - sent back with a ghost
+	 * submission (see submitLevelGhost) so a run recorded against a
+	 * since-republished layout is rejected. */
+	version?: number;
 	/** Who published this level - the result modal's "Leave" action
 	 * (see /play/[slug]/+page.svelte) routes back to this person's
 	 * public profile. */
@@ -752,6 +756,7 @@ export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 			success: true,
 			title: data.title,
 			content: data.content,
+			version: data.version,
 			ownerUsername: data.owner_username
 		};
 	} catch {

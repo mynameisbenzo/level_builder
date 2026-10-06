@@ -85,11 +85,20 @@ import {
 	type PlayerColor
 } from './playerColor';
 import {
+	getPlayerFrameForPose,
 	getPlayerHitFrame,
 	getPlayerPoseConfig,
 	PLAYER_DISPLAY_SIZE,
 	setPlayerWalkAnimationColor
 } from './playerPose';
+import {
+	decodeGhostState,
+	encodeGhostState,
+	GHOST_REGISTRY_KEY,
+	GhostRecorder,
+	sampleGhost,
+	type GhostRun
+} from './ghost';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { 
@@ -350,6 +359,18 @@ export class PlatformerScene extends Phaser.Scene {
 	 * longest delay any currently-collected key could need. */
 	private playerPositionHistory: { x: number; y: number }[] = [];
 	private hasWon = false;
+	/** Time actually spent playing this attempt, in ms - the one clock
+	 * ghost runs are recorded and replayed against. Reset to 0 by every
+	 * create() and advanced only while update() is running normally, so it
+	 * excludes asset loading and the post-win modal delay. */
+	private runElapsedMs = 0;
+	private ghostRecorder = new GhostRecorder();
+	/** The fastest recorded clear of this level, if one was seeded into
+	 * the registry (see GHOST_REGISTRY_KEY) - replayed as a translucent
+	 * character alongside the real player. */
+	private ghostRun: GhostRun | null = null;
+	private ghostSprite: Phaser.GameObjects.Sprite | null = null;
+	private ghostLabel: Phaser.GameObjects.Text | null = null;
 	/** Only ever set in a public /play/[slug] session - see
 	 * LEVEL_DIED_EVENT. An owner testing in the editor bounces back to
 	 * Edit Mode on death instead and never sets this. */
@@ -434,6 +455,11 @@ export class PlatformerScene extends Phaser.Scene {
 		// movement, not even Tab - on every session after the first win.
 		this.hasWon = false;
 		this.hasDied = false;
+		this.runElapsedMs = 0;
+		this.ghostRecorder.reset();
+		this.ghostRun = null;
+		this.ghostSprite = null;
+		this.ghostLabel = null;
 		this.isDying = false;
 		this.isFallingThroughLevel = false;
 		this.wasPadJumpButtonDown = false;
@@ -514,6 +540,7 @@ export class PlatformerScene extends Phaser.Scene {
 		// color than this session's starting color. See
 		// setPlayerWalkAnimationColor's own comment for the full story.
 		setPlayerWalkAnimationColor(this, playerColor);
+		this.createGhost(spawnPosition.x, spawnPosition.y);
 
 		if (this.cameraMode === 'follow') {
 			// A little smoothing (lerp < 1) reads as more polished than an
@@ -1040,6 +1067,76 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
+	 * Adds the ghost - the fastest recorded clear of this level - as a
+	 * translucent, tinted character with its owner's name above it, if
+	 * one was seeded into the registry. Public play only: the editor's own
+	 * test-play has no record to race.
+	 */
+	private createGhost(spawnX: number, spawnY: number) {
+		if (this.scene.get('LevelEditorScene')) {
+			return;
+		}
+
+		const ghost = this.registry.get(GHOST_REGISTRY_KEY) as GhostRun | undefined;
+		if (!ghost || ghost.frames.length === 0) {
+			return;
+		}
+
+		this.ghostRun = ghost;
+		const first = decodeGhostState(ghost.frames[0][2]);
+		this.ghostSprite = this.add
+			.sprite(spawnX, spawnY, CHARACTERS_ATLAS_KEY, getPlayerFrameForPose(first.color, first.pose, 0))
+			.setDepth(PLAYER_DEPTH - 0.5)
+			.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
+			.setAlpha(0.45)
+			.setTint(0x9ad0ff);
+		this.ghostLabel = this.add
+			.text(spawnX, spawnY - PLAYER_DISPLAY_SIZE / 2 - 4, ghost.username, {
+				font: '12px monospace',
+				color: '#cfe6ff'
+			})
+			.setOrigin(0.5, 1)
+			.setAlpha(0.7)
+			.setDepth(PLAYER_DEPTH - 0.5);
+	}
+
+	/**
+	 * Moves the ghost to where its run was at this attempt's current time.
+	 * Once the run has played through it lingers briefly at the finish,
+	 * then disappears - it shouldn't sit on top of the goal for a slower
+	 * player's whole attempt.
+	 */
+	private updateGhost() {
+		if (!this.ghostRun || !this.ghostSprite || !this.ghostLabel) {
+			return;
+		}
+
+		const sample = sampleGhost(
+			this.ghostRun.frames,
+			this.ghostRun.sampleIntervalMs,
+			this.runElapsedMs
+		);
+		if (!sample) {
+			return;
+		}
+
+		if (sample.finished && this.runElapsedMs > this.ghostRun.durationMs + 400) {
+			this.ghostSprite.setVisible(false);
+			this.ghostLabel.setVisible(false);
+			return;
+		}
+
+		const state = decodeGhostState(sample.state);
+		this.ghostSprite.setPosition(sample.x, sample.y);
+		this.ghostSprite.setTexture(
+			CHARACTERS_ATLAS_KEY,
+			getPlayerFrameForPose(state.color, state.pose, this.runElapsedMs)
+		);
+		this.ghostSprite.setFlipX(state.facingLeft);
+		this.ghostLabel.setPosition(sample.x, sample.y - PLAYER_DISPLAY_SIZE / 2 - 4);
+	}
+
+	/**
 	 * Freezes the player, shows a brief "Level Cleared!" message, and
 	 * returns to the Editor after a short delay. update() checks hasWon
 	 * first thing and returns early once true, so nothing else (movement,
@@ -1073,12 +1170,13 @@ export class PlatformerScene extends Phaser.Scene {
 		// beat and isn't shown anything timed off this event, so it keeps
 		// firing immediately rather than waiting on a delay that exists
 		// for the result modal's sake.
+		const clearedRun = this.ghostRecorder.finish(this.runElapsedMs);
 		const editorScene = this.scene.get('LevelEditorScene');
 		if (editorScene) {
-			this.game.events.emit(LEVEL_BEATEN_EVENT);
+			this.game.events.emit(LEVEL_BEATEN_EVENT, clearedRun);
 		} else {
 			this.time.delayedCall(RESULT_MODAL_DELAY_MS, () => {
-				this.game.events.emit(LEVEL_BEATEN_EVENT);
+				this.game.events.emit(LEVEL_BEATEN_EVENT, clearedRun);
 			});
 		}
 
@@ -1543,6 +1641,17 @@ export class PlatformerScene extends Phaser.Scene {
 		if (velocityX !== 0) {
 			this.player.setFlipX(velocityX < 0);
 		}
+
+		// Ghost recording and playback share the run clock: this frame's
+		// state is sampled first, then the clock advances.
+		this.ghostRecorder.record(
+			this.runElapsedMs,
+			this.player.x,
+			this.player.y,
+			encodeGhostState(currentPlayerColor ?? 'green', pose, this.player.flipX)
+		);
+		this.updateGhost();
+		this.runElapsedMs += delta;
 
 		// Gamepad and touch buttons don't have Phaser's keyboard-style
 		// JustDown() helper, so we track each source's previous-frame state

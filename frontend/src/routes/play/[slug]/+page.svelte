@@ -3,8 +3,16 @@
 	import Phaser from 'phaser';
 	import { getLevelForPlay, recordLevelCompletion, recordLevelPlay } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { withSession } from '$lib/endlessSession';
 	import { createGameConfig } from '$lib/game/gameConfig';
+	import {
+		GHOST_REGISTRY_KEY,
+		GHOST_SAMPLE_INTERVAL_MS,
+		type GhostRun,
+		type RecordedRun
+	} from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
+	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
 	import LevelResultModal from './LevelResultModal.svelte';
@@ -26,8 +34,62 @@
 	// showing, i.e. the game is still in progress.
 	let resultOutcome: 'won' | 'died' | null = $state(null);
 
-	function handleLevelBeaten() {
+	// Ghost: the fastest recorded clear of this level's current version,
+	// replayed alongside the player. Updated in place when a clear beats
+	// it, so "Replay" races the new record straight away.
+	let levelVersion = 0;
+	let ghost: GhostRun | null = null;
+	// What the result modal shows for a win: this attempt's time and the
+	// standing record (isNew when this very run just set it).
+	let runTimeMs: number | null = $state(null);
+	let recordInfo: { username: string; durationMs: number; isNew: boolean } | null = $state(null);
+
+	async function handleGhostRun(run: RecordedRun) {
+		runTimeMs = run.durationMs;
+		// Until (or unless) this run is submitted, the standing record is
+		// whichever ghost was loaded.
+		recordInfo = ghost
+			? { username: ghost.username, durationMs: ghost.durationMs, isNew: false }
+			: null;
+
+		// Only an account can hold a record - an anonymous win just
+		// shows the time against the existing one.
+		if (!auth.accessToken) return;
+
+		const result = await withSession((token) =>
+			submitLevelGhost(slug, token, {
+				version: levelVersion,
+				durationMs: run.durationMs,
+				frames: run.frames
+			})
+		);
+		if (!result?.success || !result.record) return;
+
+		recordInfo = {
+			username: result.record.username,
+			durationMs: result.record.durationMs,
+			isNew: result.isRecord === true
+		};
+
+		if (result.isRecord && auth.user) {
+			ghost = {
+				username: auth.user.username,
+				durationMs: run.durationMs,
+				sampleIntervalMs: GHOST_SAMPLE_INTERVAL_MS,
+				version: levelVersion,
+				frames: run.frames
+			};
+		} else {
+			// Not a record - but someone may have set a newer one than the
+			// ghost loaded at page load, so pick up whatever stands now.
+			const fresh = await getLevelGhost(slug);
+			if (fresh.success) ghost = fresh.ghost ?? null;
+		}
+	}
+
+	function handleLevelBeaten(run?: RecordedRun) {
 		resultOutcome = 'won';
+		if (run) void handleGhostRun(run);
 		// Best-effort, fire-and-forget - a metrics call failing shouldn't
 		// block or interrupt the win screen the player is already looking
 		// at (see recordLevelCompletion's own comment). Passing the access
@@ -42,6 +104,14 @@
 
 	function handleReplay() {
 		resultOutcome = null;
+		runTimeMs = null;
+		recordInfo = null;
+		// Seeded before the restart so create() sees the current record.
+		if (ghost) {
+			game?.registry.set(GHOST_REGISTRY_KEY, ghost);
+		} else {
+			game?.registry.remove(GHOST_REGISTRY_KEY);
+		}
 		// create() resets every runtime field (hasWon, hasDied, position,
 		// collected keys, ...) on every (re)start, same as the editor's
 		// own "test my level" flow already relied on - restarting is
@@ -55,13 +125,22 @@
 	}
 
 	onMount(async () => {
-		const result = await getLevelForPlay(slug);
+		const [result, ghostResult] = await Promise.all([getLevelForPlay(slug), getLevelGhost(slug)]);
 
 		if (!result.success || !result.content) {
 			loadStatus = 'error';
 			loadError = result.error ?? 'This level could not be found.';
 			return;
 		}
+
+		levelVersion = result.version ?? 0;
+		// A ghost recorded against a different version than the one just
+		// loaded (republished between the two requests) would run through
+		// walls - better none than that.
+		ghost =
+			ghostResult.success && ghostResult.ghost && ghostResult.ghost.version === result.version
+				? ghostResult.ghost
+				: null;
 
 		title = result.title ?? '';
 		ownerUsername = result.ownerUsername ?? '';
@@ -80,7 +159,11 @@
 		// someone else's level, since it's simply never loaded into this
 		// game instance at all.
 		game = new Phaser.Game(
-			createGameConfig(gameContainer, { startMode: 'play', content: result.content })
+			createGameConfig(gameContainer, {
+				startMode: 'play',
+				content: result.content,
+				ghost: ghost ?? undefined
+			})
 		);
 		game.events.on(LEVEL_BEATEN_EVENT, handleLevelBeaten);
 		game.events.on(LEVEL_DIED_EVENT, handleLevelDied);
@@ -122,6 +205,8 @@
 					{slug}
 					{ownerUsername}
 					onReplay={handleReplay}
+					timeMs={runTimeMs}
+					record={recordInfo}
 				/>
 			{/if}
 		</div>

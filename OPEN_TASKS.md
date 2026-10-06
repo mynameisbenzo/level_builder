@@ -117,6 +117,28 @@ reach and which catalog content they can use.
       `PlayAttempt` model above is actually for (clear-rate tracking,
       registered users only), rather than a quick counter bolted onto
       the result modal work.
+- [x] **Ghost run** - one ghost per published level *version*: the
+      fastest recorded clear, replayed as a translucent, tinted character
+      with its owner's name above it (in `/play/[slug]` and endless). A
+      strictly faster clear by a logged-in player replaces it; a tie
+      keeps the old one; a new version starts with none. Recorded
+      client-side every 50ms (position, facing, pose, character color)
+      against a run clock that only counts time actually playing, and
+      checked server-side for shape, sane duration, a start near the
+      spawn, and no teleports between samples (`app/services/ghosts.py`).
+      The result modal shows your time and the record ("New record!").
+- [ ] **Ghost: stronger run verification (future)** - the server can't
+      prove a run was really played, only that it's plausible; a
+      determined cheater can craft a believable path. Real verification
+      needs deterministic server-side replay of recorded inputs, which
+      the current Arcade-physics loop isn't built for.
+- [ ] **Ghost: owner/staff reset (future)** - remove a ghost that
+      slipped through (owner of the level, moderators).
+- [ ] **Ghost: show the record on level cards (future)** - best time and
+      holder next to likes/clear rate on `/u/[username]` and Discover.
+- [ ] **Ghost: carry a ghost across a republish (future)** - currently
+      every new version starts with none; a cosmetic-only edit could
+      keep the old one.
 
 ### Marketing site & blog
 
@@ -322,6 +344,21 @@ already have a link to:
       (`navigator.sendBeacon`), so most abandoned attempts resolve right
       away instead of only when the player next returns. Never relied on:
       the lazy resolve-on-return path is still the source of truth.
+
+## Multiplayer (planned, after ghosts)
+
+- [ ] **Live race** - everyone plays the same published version at once
+      and sees each other as ghosts, no interaction. Each client simulates
+      only its own player and broadcasts position ~10-20x a second. Needs
+      a realtime transport (Flask-SocketIO with a Redis message queue, or
+      a separate websocket service), rooms/invite codes, a synchronized
+      start against a shared server clock, interpolated remote players,
+      and match/result storage. Reuses the ghost sample format.
+- [ ] **Co-op / competitive with interaction** - players collide and
+      share keys, enemies and character swaps. Needs a server-
+      authoritative simulation or deterministic lockstep; the heaviest
+      option and likely a game-loop rewrite. Decide only after the live
+      race exists.
 
 ## Future Considerations (way down the line)
 

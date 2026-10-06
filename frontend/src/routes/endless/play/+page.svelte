@@ -21,7 +21,9 @@
 	} from '$lib/endlessApi';
 	import { withSession } from '$lib/endlessSession';
 	import { createGameConfig } from '$lib/game/gameConfig';
+	import type { GhostRun, RecordedRun } from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
+	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 
@@ -49,6 +51,12 @@
 	let hit = $state(false);
 	let errorMessage = $state('');
 	let retryAction = $state<(() => void) | null>(null);
+
+	// The level currently being played - what a cleared run's ghost
+	// submission is filed under - and the ghost (fastest clear) it races.
+	let currentSlug = '';
+	let currentVersion = 0;
+	let currentGhost: GhostRun | null = null;
 
 	let gameContainer: HTMLDivElement | undefined = $state();
 	let game: Phaser.Game | undefined;
@@ -135,7 +143,10 @@
 
 		const myGeneration = ++generation;
 
-		const content = await getLevelForPlay(level.slug);
+		const [content, ghostResult] = await Promise.all([
+			getLevelForPlay(level.slug),
+			getLevelGhost(level.slug)
+		]);
 		if (destroyed || generation !== myGeneration) return;
 		if (!content.success || !content.content) {
 			fail(content.error ?? 'This level could not be loaded.', () => void startLevel());
@@ -152,6 +163,15 @@
 			return;
 		}
 
+		currentSlug = level.slug;
+		currentVersion = content.version ?? 0;
+		// A ghost recorded against a different version than the one just
+		// loaded would run through walls - better none than that.
+		currentGhost =
+			ghostResult.success && ghostResult.ghost && ghostResult.ghost.version === content.version
+				? ghostResult.ghost
+				: null;
+
 		adoptRun(begun.data);
 		if (!begun.data.is_active) {
 			// Settling an earlier abandoned attempt just used the last life.
@@ -166,7 +186,11 @@
 		if (destroyed || generation !== myGeneration || !gameContainer) return;
 
 		game = new Phaser.Game(
-			createGameConfig(gameContainer, { startMode: 'play', content: content.content })
+			createGameConfig(gameContainer, {
+				startMode: 'play',
+				content: content.content,
+				ghost: currentGhost ?? undefined
+			})
 		);
 		game.events.on(LEVEL_BEATEN_EVENT, handleBeaten);
 		game.events.on(LEVEL_DIED_EVENT, handleDied);
@@ -187,11 +211,24 @@
 		await withSession((token) => sendEndlessHeartbeat(token));
 	}
 
-	async function handleBeaten() {
+	/** Best-effort: offers a cleared run as the level's ghost; the backend keeps it only if it's the fastest. */
+	function submitGhost(run: RecordedRun) {
+		const slug = currentSlug;
+		const version = currentVersion;
+		void withSession((token) =>
+			submitLevelGhost(slug, token, { version, durationMs: run.durationMs, frames: run.frames })
+		);
+	}
+
+	async function handleBeaten(run?: RecordedRun) {
 		if (phase !== 'playing') return;
 		const myGeneration = ++generation;
 		teardownGame();
 		phase = 'interstitial';
+		// Only the first report carries the run - a retry of a failed
+		// clear report (see handleBeatenRetry) has none, and was already
+		// submitted the first time.
+		if (run) submitGhost(run);
 
 		const result = await api(reportEndlessClear);
 		if (destroyed || generation !== myGeneration || result === null) return;

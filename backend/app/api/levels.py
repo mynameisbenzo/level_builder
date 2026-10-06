@@ -568,6 +568,10 @@ def get_level_for_play(slug):
                 "id": level.slug,
                 "title": level.title,
                 "content": version.content,
+                # Which version this content is - sent back with a
+                # ghost submission (POST .../ghost) so a run recorded
+                # against a since-republished layout is rejected.
+                "version": version.version_number,
                 # The result modal's "Leave" action (see
                 # /play/[slug]/+page.svelte) routes back to the owner's
                 # public profile - it needs this to build that link, and

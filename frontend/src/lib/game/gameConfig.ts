@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { PlatformerScene } from './PlatformerScene';
 import { LevelEditorScene } from './LevelEditorScene';
 import { deserializeLevelContent, type LevelContent } from './levelContent';
+import { GHOST_REGISTRY_KEY, type GhostRun } from './ghost';
 
 export interface CreateGameConfigOptions {
 	/**
@@ -18,6 +19,10 @@ export interface CreateGameConfigOptions {
 	/** The level's content to seed the game with, if resuming/loading
 	 * an existing level rather than starting a brand-new, empty one. */
 	content?: LevelContent;
+	/** The level's fastest recorded clear, replayed as a ghost in 'play'
+	 * mode. Can also be (re)seeded later via game.registry.set(
+	 * GHOST_REGISTRY_KEY, ghost) before a restart. */
+	ghost?: GhostRun;
 }
 
 export function createGameConfig(
@@ -76,6 +81,9 @@ export function createGameConfig(
 			postBoot: (game) => {
 				if (options.content) {
 					deserializeLevelContent(game.registry, options.content);
+				}
+				if (options.ghost) {
+					game.registry.set(GHOST_REGISTRY_KEY, options.ghost);
 				}
 			}
 		}

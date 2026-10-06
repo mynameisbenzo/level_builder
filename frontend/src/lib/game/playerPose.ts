@@ -108,3 +108,24 @@ export function getPlayerPoseConfig(color: PlayerColor): Record<PlayerPose, Play
 		idle: { frame: playerFrameName(color, 'idle'), hitbox: PLAYER_SPRITE_CONTENT_BOUNDS }
 	};
 }
+
+
+/** One frame of the walk cycle lasts this long - matches the 8fps frameRate of the animation setPlayerWalkAnimationColor builds. */
+export const PLAYER_WALK_FRAME_DURATION_MS = 125;
+
+/**
+ * The static frame to show for a pose at a given moment. Unlike
+ * getPlayerPoseConfig (which hands the live player an Animation for
+ * walking), this resolves a single concrete frame - walking alternates
+ * its two frames by time - so something that isn't a physics sprite,
+ * like the ghost replay, can pick frames itself without registering or
+ * playing animations.
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getPlayerFrameForPose(color: PlayerColor, pose: PlayerPose, timeMs: number): string {
+	if (pose === 'walk') {
+		const step = Math.floor(Math.max(timeMs, 0) / PLAYER_WALK_FRAME_DURATION_MS) % 2;
+		return playerFrameName(color, step === 0 ? 'walk_a' : 'walk_b');
+	}
+	return getPlayerPoseConfig(color)[pose].frame;
+}

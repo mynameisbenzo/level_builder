@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { getLevelRating, rateLevel } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { formatRunTime } from '$lib/game/ghost';
 
 	/**
 	 * Shown over the game canvas whenever a public playthrough ends,
@@ -16,12 +17,18 @@
 		outcome,
 		slug,
 		ownerUsername,
-		onReplay
+		onReplay,
+		timeMs = null,
+		record = null
 	}: {
 		outcome: 'won' | 'died';
 		slug: string;
 		ownerUsername: string;
 		onReplay: () => void;
+		/** This attempt's clear time - only passed for a win. */
+		timeMs?: number | null;
+		/** The level's standing record (isNew when this run just set it). */
+		record?: { username: string; durationMs: number; isNew: boolean } | null;
 	} = $props();
 
 	// null until a rating is known one way or the other - either loaded
@@ -113,6 +120,15 @@
 		<div class="modal-card">
 			<h2>{outcome === 'won' ? 'Level Cleared!' : 'You Died'}</h2>
 
+			{#if outcome === 'won' && timeMs !== null}
+				<p class="time">Your time: <strong>{formatRunTime(timeMs)}</strong></p>
+				{#if record?.isNew}
+					<p class="record record-new">New record!</p>
+				{:else if record}
+					<p class="record">Record: {formatRunTime(record.durationMs)} by {record.username}</p>
+				{/if}
+			{/if}
+
 			{#if auth.isLoggedIn}
 				{#if ratingStatus === 'error'}
 					<p class="error">{ratingError}</p>
@@ -174,6 +190,24 @@
 		font-size: 1.4rem;
 		margin: 0 0 20px;
 		color: #ffd23f;
+	}
+
+	.time {
+		margin: 0 0 6px;
+		font-size: 1rem;
+	}
+
+	.record {
+		margin: 0 0 18px;
+		font-size: 0.85rem;
+		color: #c7cbef;
+	}
+
+	.record-new {
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 1.05rem;
+		color: #4ecb71;
 	}
 
 	.error {

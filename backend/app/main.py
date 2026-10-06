@@ -47,11 +47,12 @@ def create_app(config_name: str = "development") -> Flask:
 
     from app.models.email_verification import EmailVerificationToken  # noqa: F401
     from app.models.endless import EndlessLifeLoss, EndlessRun, EndlessRunLevel  # noqa: F401
-    from app.models.level import Level, LevelVersion  # noqa: F401
+    from app.models.level import Level  # noqa: F401
     from app.models.level_ghost import LevelGhost  # noqa: F401
     from app.models.level_rating import LevelRating  # noqa: F401
     from app.models.login_link_request import LoginLinkRequest  # noqa: F401
     from app.models.login_token import LoginToken  # noqa: F401
+    from app.models.play_attempt import PlayAttempt  # noqa: F401
     from app.models.refresh_token import RefreshToken  # noqa: F401
     from app.models.twitch_signup_token import TwitchSignupToken  # noqa: F401
     from app.models.user import User  # noqa: F401

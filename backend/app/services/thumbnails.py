@@ -64,19 +64,16 @@ def _s3_client():
     return boto3.client("s3", **kwargs)
 
 
-def upload_level_thumbnail(data_url: str, *, level_id: int, version_number: int) -> str:
+def upload_level_thumbnail(data_url: str, *, level_id: int) -> str:
     """
     Decodes a `data:image/png;base64,...` string and uploads it to
     whichever S3-compatible bucket THUMBNAIL_S3_BUCKET names, returning
     the public URL it's now reachable at.
 
-    One object per level VERSION, not per level - version_number is
-    part of the key, so republishing a level never overwrites an
-    older, still-referenced version's thumbnail (LevelVersion rows are
-    immutable once created; this keeps that true for their thumbnails
-    too). A random suffix on top of that guards against two publishes
-    of the same version number racing (there's no lock around this
-    call) ever colliding on the same key mid-upload.
+    One object per level. A published level is final, so there is only
+    ever one publish (and so one upload) per level; the random suffix
+    just guards against two racing requests ever colliding on the same
+    key mid-upload (there's no lock around this call).
 
     Raises ThumbnailError on any failure. The target bucket is assumed
     to already be configured for public read access (a bucket policy,
@@ -91,7 +88,7 @@ def upload_level_thumbnail(data_url: str, *, level_id: int, version_number: int)
 
     image_bytes = _decode_data_url(data_url)
 
-    key = f"level-thumbnails/{level_id}/v{version_number}-{uuid.uuid4().hex}.png"
+    key = f"level-thumbnails/{level_id}/{uuid.uuid4().hex}.png"
 
     try:
         client = _s3_client()

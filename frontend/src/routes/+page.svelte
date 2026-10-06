@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { checkBackendHealth } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
+	import { consumeLaunchRedirect } from '$lib/appLaunch';
 	import { startNewLevel } from '$lib/startNewLevel';
 	import LevelPreviewHero from '$lib/LevelPreviewHero.svelte';
 	import Navbar from '$lib/Navbar.svelte';
@@ -47,7 +48,10 @@
 			window.matchMedia('(display-mode: standalone)').matches ||
 			(window.navigator as Navigator & { standalone?: boolean }).standalone === true;
 
-		if (isStandalone && auth.isLoggedIn) {
+		// Only the app's first look at "/" counts as a launch - without
+		// that, the navbar wordmark inside the installed app would bounce
+		// straight back to /profile every time.
+		if (consumeLaunchRedirect(isStandalone, auth.isLoggedIn)) {
 			goto('/profile');
 			return;
 		}

@@ -22,7 +22,6 @@ describe('getLevelGhost', () => {
 				username: 'speedy',
 				duration_ms: 2000,
 				sample_interval_ms: 50,
-				version: 3,
 				frames: [[1, 2, 0]]
 			}
 		});
@@ -34,7 +33,6 @@ describe('getLevelGhost', () => {
 				username: 'speedy',
 				durationMs: 2000,
 				sampleIntervalMs: 50,
-				version: 3,
 				frames: [[1, 2, 0]]
 			}
 		});
@@ -59,7 +57,7 @@ describe('getLevelGhost', () => {
 });
 
 describe('submitLevelGhost', () => {
-	const run = { version: 2, durationMs: 1500, frames: [[1, 2, 0]] as [number, number, number][] };
+	const run = { durationMs: 1500, frames: [[1, 2, 0]] as [number, number, number][] };
 
 	it('sends the run as snake_case with the bearer token', async () => {
 		const fetchMock = mockFetch(200, { is_record: true, record: { username: 'me', duration_ms: 1500 } });
@@ -70,7 +68,7 @@ describe('submitLevelGhost', () => {
 		expect(url).toMatch(/\/api\/levels\/abc\/ghost$/);
 		expect(init.method).toBe('POST');
 		expect(init.headers.Authorization).toBe('Bearer tok');
-		expect(JSON.parse(init.body)).toEqual({ version: 2, duration_ms: 1500, frames: [[1, 2, 0]] });
+		expect(JSON.parse(init.body)).toEqual({ duration_ms: 1500, frames: [[1, 2, 0]] });
 		expect(result).toEqual({
 			success: true,
 			isRecord: true,
@@ -85,11 +83,11 @@ describe('submitLevelGhost', () => {
 		expect(result.record).toEqual({ username: 'speedy', durationMs: 900 });
 	});
 
-	it('surfaces the error code for a stale version', async () => {
-		mockFetch(409, { error: 'updated', code: 'stale_version' });
+	it('surfaces the error code for a rejected run', async () => {
+		mockFetch(400, { error: 'the run moves faster than the game allows', code: 'invalid_ghost' });
 		const result = await submitLevelGhost('abc', 'tok', run);
 		expect(result.success).toBe(false);
-		expect(result.code).toBe('stale_version');
+		expect(result.code).toBe('invalid_ghost');
 	});
 
 	it('flags an expired session on a 401', async () => {

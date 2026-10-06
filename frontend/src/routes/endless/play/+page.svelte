@@ -55,7 +55,6 @@
 	// The level currently being played - what a cleared run's ghost
 	// submission is filed under - and the ghost (fastest clear) it races.
 	let currentSlug = '';
-	let currentVersion = 0;
 	let currentGhost: GhostRun | null = null;
 
 	let gameContainer: HTMLDivElement | undefined = $state();
@@ -164,13 +163,7 @@
 		}
 
 		currentSlug = level.slug;
-		currentVersion = content.version ?? 0;
-		// A ghost recorded against a different version than the one just
-		// loaded would run through walls - better none than that.
-		currentGhost =
-			ghostResult.success && ghostResult.ghost && ghostResult.ghost.version === content.version
-				? ghostResult.ghost
-				: null;
+		currentGhost = ghostResult.success ? (ghostResult.ghost ?? null) : null;
 
 		adoptRun(begun.data);
 		if (!begun.data.is_active) {
@@ -214,9 +207,8 @@
 	/** Best-effort: offers a cleared run as the level's ghost; the backend keeps it only if it's the fastest. */
 	function submitGhost(run: RecordedRun) {
 		const slug = currentSlug;
-		const version = currentVersion;
 		void withSession((token) =>
-			submitLevelGhost(slug, token, { version, durationMs: run.durationMs, frames: run.frames })
+			submitLevelGhost(slug, token, { durationMs: run.durationMs, frames: run.frames })
 		);
 	}
 

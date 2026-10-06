@@ -233,22 +233,23 @@ by any dev; manages user-generated content and regular user accounts,
 but can't touch Developer/Owner accounts or blog posts), and
 **registered user**.
 
-## Levels & versioning
+## Levels (publishing is final)
 
 No more "Screens" — that composable-sub-unit idea from an earlier plan
-is superseded by a simpler model: a `Level` is the persistent,
-slug-addressable identity (what a share link points at); a
-`LevelVersion` is an immutable content snapshot. Three-state lifecycle
-per level - `draft` (private) → `testing` (private) → `published`
-(public; gated on the creator personally beating their own level via a
-real playthrough, not a recorded/replayed one). Editing a published
-level demotes it to `testing` while the last published version stays
-live for everyone else; a new version is only created once re-beaten
-and re-published. A separate direct-unpublish action also exists,
-clearing public visibility immediately without editing. Anyone can fork
-a published level into a new one they own, crediting the exact version
-copied from (not a generic "came from this level" pointer) — this forms
-a remix tree, not a chain, with both ancestry and descendant views.
+is superseded by a simpler model: a `Level` is one slug-addressable
+level (what a share link points at), content included. There are no
+versions. A level is a `draft` (private, freely editable) until the
+creator beats it personally via a real playthrough (not a
+recorded/replayed one) and publishes it - and **publishing is final**:
+afterwards its content, name and thumbnail never change, and it can't
+be published again. (`published_at` is set once and never cleared; the
+only way to take a published level down is the owner's soft delete.)
+Because a published level never changes, everything measured against
+it - plays, completions, ratings, its ghost, its difficulty - is about
+exactly one layout. Anyone can remix a published level into a new,
+separate level they own (`remixed_from_level_id`; no endpoint yet) —
+this forms a remix tree, not a chain, with both ancestry and descendant
+views.
 
 ## Public playthrough experience (`/play/[slug]`)
 
@@ -329,43 +330,27 @@ budgets rather than one shared pool:
 - **Drafts (never-published levels): capped at 5**
   (`MAX_DRAFT_LEVELS` in `app/api/levels.py`). Enforced on
   `POST /api/levels` - refused once the caller already owns 5 levels
-  with no published version. Cheap to create and abandon, so this is
+  that aren't published yet. Cheap to create and abandon, so this is
   kept tight: "how many works-in-progress can you juggle at once," not
   a lifetime count. Publishing a draft moves it out of this bucket
   entirely, freeing the slot for a new one.
 
-- **Published levels + all their versions: capped at 100**
-  (`MAX_PUBLISHED_TOTAL`). Enforced on `POST /api/levels/<slug>/publish`
-  - a level and every one of its `LevelVersion` rows each count as 1,
-  additively (a level published once contributes 1 + 1 = 2; republished
-  three times total, 1 + 3 = 4). Counting versions, not just levels, is
-  what actually makes this a cap: editing a published level and
-  republishing it creates a new `LevelVersion` rather than overwriting
-  the old one (by design - see the per-version difficulty-label system
-  in [OPEN_TASKS.md](OPEN_TASKS.md)), so without counting those too,
-  "publish, tweak, republish" would be an unlimited supply of
-  effectively new levels through one never-refilled slot.
-
-- **A publish whose content is identical to what's already live is
-  rejected unconditionally**, cap or not - a redundant identical
-  version is never worth keeping as permanent history. This matters
-  more than it might seem: publishing now always saves the draft first
-  (see the Publish flow above), and an unchanged save is itself a
-  no-op that leaves an existing beat confirmation intact - so an
-  unedited, already-published level's Publish button stays a live,
-  one-click action with no dialog. Without this check, that single
-  click could be pressed repeatedly (by habit, or by accident) to burn
-  through the 100-item budget for zero actual difference.
+- **Published levels: capped at 100** (`MAX_PUBLISHED_TOTAL`). Enforced
+  on `POST /api/levels/<slug>/publish` - every level the user has ever
+  published counts as 1, soft-deleted ones included (deleting doesn't
+  refund the slot). Publishing is final - a published level can't be
+  edited or published again - so there's no way to get extra levels out
+  of one slot.
 
 Still open, deliberately not decided: whether a soft-deleted or
-moderated level (and its versions) should keep counting toward either
+moderated level should keep counting toward either
 cap once moderation exists (see [OPEN_TASKS.md](OPEN_TASKS.md)) -
 nothing like that is built yet, so there's nothing to decide about it
 today.
 
 ## Discover / browsing levels
 
-Not started - `/play/[slug]` (see [Levels & versioning](#levels--versioning)
+Not started - `/play/[slug]` (see [Levels](#levels-publishing-is-final)
 above) goes straight to one specific, already-known level. Nothing yet
 lets someone find a level they don't already have a link to - see
 [OPEN_TASKS.md](OPEN_TASKS.md) and [CLOSED_TASKS.md](CLOSED_TASKS.md)

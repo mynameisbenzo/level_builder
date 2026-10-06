@@ -144,4 +144,10 @@ describe('formatRunTime', () => {
 	it('does not print 60.00s at the minute boundary', () => {
 		expect(formatRunTime(59996)).toBe('1:00.00');
 	});
+
+	it('never prints NaN for a missing or invalid value', () => {
+		expect(formatRunTime(undefined as unknown as number)).toBe('--');
+		expect(formatRunTime(NaN)).toBe('--');
+		expect(formatRunTime(Infinity)).toBe('--');
+	});
 });

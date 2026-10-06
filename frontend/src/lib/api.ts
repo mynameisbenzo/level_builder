@@ -487,9 +487,9 @@ export interface LevelSummary {
 	id: string;
 	title: string;
 	visibility_state: 'draft' | 'testing' | 'published' | 'unpublished';
-	/** False until a level's first publish - which is also the one moment
-	 * it gets named (see publishLevel). True from then on, even if a
-	 * later edit demotes visibility_state back to 'testing'. */
+	/** False until a level's publish - which is also the one moment it
+	 * gets named (see publishLevel). True from then on: publishing is
+	 * final, so a published level can't be edited or published again. */
 	has_been_published: boolean;
 	/** Set only by deleteLevel, and only for a level that had already
 	 * been published (a never-published draft is hard-deleted instead,
@@ -497,15 +497,17 @@ export interface LevelSummary {
 	 * action exists. visibility_state moves to 'unpublished' at the same
 	 * time this becomes true. */
 	is_deleted: boolean;
+	/** The level's content - the editable draft before publishing, and
+	 * the frozen, published content after. (The name predates publishing
+	 * becoming final.) */
 	draft_content: LevelContent | null;
 	draft_beaten_at: string | null;
 	created_at: string | null;
-	/** A screenshot of this level's latest published version's initial
+	/** A screenshot of this level's initial
 	 * state in play mode, captured client-side at publish time (see
-	 * captureLevelThumbnail.ts). Null until a level's first successful
-	 * publish with a thumbnail - capture and upload are both
-	 * best-effort, so this can stay null indefinitely even for a
-	 * published level. */
+	 * captureLevelThumbnail.ts). Null until a level's publish succeeds
+	 * with a thumbnail - capture and upload are both best-effort, so
+	 * this can stay null indefinitely even for a published level. */
 	thumbnail_url: string | null;
 }
 
@@ -568,7 +570,8 @@ export async function getLevel(slug: string, accessToken: string): Promise<Level
 }
 
 /** Calls PATCH /api/levels/<slug> - saves the editor's current
- * in-progress content. title is optional; content is always sent. */
+ * in-progress content. title is optional; content is always sent.
+ * The backend refuses (409) once a level is published. */
 export async function saveLevel(
 	slug: string,
 	content: LevelContent,
@@ -633,11 +636,10 @@ export async function beatLevel(slug: string, accessToken: string): Promise<Leve
 
 /** Calls POST /api/levels/<slug>/publish - requires the level to have
  * been beaten since its last save; turns the draft into a real,
- * permanent LevelVersion.
+ * permanent, FINAL level (it can't be edited or published again).
  *
- * title is required for a level's FIRST publish (this is the one place
- * it gets named) and must be omitted for every later one - a published
- * level's name can't be changed. The backend applies it in the same
+ * title is required (this is the one place a level gets named, and the
+ * name is locked from then on). The backend applies it in the same
  * transaction as the publish itself, so a rejected publish never names
  * anything.
  *
@@ -730,10 +732,6 @@ export interface PlayLevelResult {
 	success: boolean;
 	title?: string;
 	content?: LevelContent;
-	/** Which published version this content is - sent back with a ghost
-	 * submission (see submitLevelGhost) so a run recorded against a
-	 * since-republished layout is rejected. */
-	version?: number;
 	/** Who published this level - the result modal's "Leave" action
 	 * (see /play/[slug]/+page.svelte) routes back to this person's
 	 * public profile. */
@@ -742,7 +740,7 @@ export interface PlayLevelResult {
 }
 
 /** Calls GET /api/levels/<slug>/play - public, no auth. What
- * /play/[slug] loads: a published level's frozen, live content. */
+ * /play/[slug] loads: a published level's frozen content. */
 export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/levels/${slug}/play`);
@@ -756,7 +754,6 @@ export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 			success: true,
 			title: data.title,
 			content: data.content,
-			version: data.version,
 			ownerUsername: data.owner_username
 		};
 	} catch {
@@ -944,6 +941,9 @@ export interface LevelListItem {
 	dislike_count: number;
 	/** Same as LevelSummary's own field above - see its doc comment. */
 	thumbnail_url: string | null;
+	/** The fastest recorded clear of the level, in ms - null if nobody
+	 * has cleared it yet. */
+	best_time_ms: number | null;
 }
 
 export interface ListLevelsResult {
@@ -953,8 +953,8 @@ export interface ListLevelsResult {
 	sessionExpired?: boolean;
 }
 
-/** Calls GET /api/levels - every level the caller owns, drafts and
- * testing included. Owner-only. */
+/** Calls GET /api/levels - every level the caller owns, drafts
+ * included. Owner-only. */
 export async function listMyLevels(accessToken: string): Promise<ListLevelsResult> {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/levels`, {
@@ -984,7 +984,7 @@ export interface ListLevelsByUserResult {
 }
 
 /** Calls GET /api/levels/by-user/<username> - public, no auth. Only
- * that creator's genuinely published levels, never drafts/testing. */
+ * that creator's genuinely published levels, never drafts. */
 export async function listLevelsByUser(username: string): Promise<ListLevelsByUserResult> {
 	try {
 		const response = await fetch(`${API_BASE_URL}/api/levels/by-user/${username}`);

@@ -3,8 +3,13 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import IosInstallBanner from '$lib/IosInstallBanner.svelte';
 	import StaleInstallBanner from '$lib/StaleInstallBanner.svelte';
+	import { captureLaunchPath } from '$lib/appLaunch';
 
 	let { children } = $props();
+
+	// Remember which page the app opened on (first call only), so the
+	// homepage can tell a real launch of "/" from a later navigation to it.
+	captureLaunchPath();
 </script>
 
 <svelte:head>

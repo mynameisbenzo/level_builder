@@ -12,7 +12,9 @@ from app.models.endless import (
     EndlessRunLevel,
     EndlessRunLevelOutcome,
 )
-from app.models.level import Level, LevelVersion
+from app.models.level import Level
+from app.models.play_attempt import PLAY_ATTEMPT_SOURCE_ENDLESS
+from app.services.difficulty import record_attempt_completion, record_attempt_start
 from app.models.user import User, UserRole
 
 # ── Rules ───────────────────────────────────────────────────────────────
@@ -43,11 +45,11 @@ ENDLESS_RUN_IDLE_EXPIRY = timedelta(hours=24)
 ATTEMPT_GRACE_PERIOD = timedelta(seconds=30)
 
 # The difficulty labels a run can filter on, matched against
-# LevelVersion.difficulty_label_cached. NOTE: nothing populates that
-# column yet (the PlayAttempt model and auto-labeling are still open
-# tasks), so until they exist every category has zero levels and only
-# "any" (difficulty=None) is usable. The future labeler must write
-# exactly these strings.
+# Level.difficulty_label_cached. NOTE: nothing populates that column yet
+# (the PlayAttempt model and auto-labeling are still open tasks), so
+# until they exist every category has zero levels and only "any"
+# (difficulty=None) is usable. The future labeler must write exactly
+# these strings.
 ENDLESS_DIFFICULTIES = ("easy", "normal", "hard", "very_hard", "tas")
 
 
@@ -160,12 +162,8 @@ def serialize_pool(user: User, now: datetime) -> dict | None:
 
 
 def _eligible_levels_query():
-    """Every live level: published, not deleted - paired with its current version."""
-    return (
-        db.session.query(Level, LevelVersion)
-        .join(LevelVersion, LevelVersion.id == Level.latest_published_version_id)
-        .filter(Level.is_deleted.is_(False))
-    )
+    """Every live level: published and not deleted."""
+    return Level.query.filter(Level.published_at.isnot(None)).filter(Level.is_deleted.is_(False))
 
 
 def count_eligible_levels() -> dict:
@@ -176,7 +174,7 @@ def count_eligible_levels() -> dict:
     counts = {"any": _eligible_levels_query().count()}
     for difficulty in ENDLESS_DIFFICULTIES:
         counts[difficulty] = (
-            _eligible_levels_query().filter(LevelVersion.difficulty_label_cached == difficulty).count()
+            _eligible_levels_query().filter(Level.difficulty_label_cached == difficulty).count()
         )
     return counts
 
@@ -189,12 +187,11 @@ def _serve_next_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
     """
     query = _eligible_levels_query()
     if run.difficulty is not None:
-        query = query.filter(LevelVersion.difficulty_label_cached == run.difficulty)
+        query = query.filter(Level.difficulty_label_cached == run.difficulty)
 
-    picked = query.order_by(func.random()).first()
-    if picked is None:
+    level = query.order_by(func.random()).first()
+    if level is None:
         return None
-    level, version = picked
 
     last_position = (
         db.session.query(func.max(EndlessRunLevel.position)).filter(EndlessRunLevel.run_id == run.id).scalar()
@@ -202,7 +199,6 @@ def _serve_next_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
     entry = EndlessRunLevel(
         run_id=run.id,
         level_id=level.id,
-        level_version_id=version.id,
         position=(last_position or 0) + 1,
         outcome=EndlessRunLevelOutcome.ACTIVE,
         served_at=now,
@@ -362,7 +358,7 @@ def start_run(
 
     query = _eligible_levels_query()
     if difficulty is not None:
-        query = query.filter(LevelVersion.difficulty_label_cached == difficulty)
+        query = query.filter(Level.difficulty_label_cached == difficulty)
     if query.first() is None:
         raise EndlessError("no_levels_available", "there are no levels available for that choice", 409)
 
@@ -421,11 +417,15 @@ def _count_play_for_level(level: Level, user: User) -> None:
     """
     if level.owner_id != user.id:
         level.play_count += 1
+        # Every endless try is a registered player's attempt, so it feeds
+        # the level's clear rate / difficulty label too.
+        record_attempt_start(level, user, PLAY_ATTEMPT_SOURCE_ENDLESS)
 
 
 def _count_completion_for_level(level: Level, user: User) -> None:
     if level.owner_id != user.id:
         level.completion_count += 1
+        record_attempt_completion(level, user, PLAY_ATTEMPT_SOURCE_ENDLESS)
 
 
 def begin_attempt(run: EndlessRun, user: User, now: datetime) -> bool:

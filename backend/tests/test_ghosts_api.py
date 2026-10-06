@@ -3,9 +3,10 @@ from flask import current_app
 
 from app.extensions import db
 from app.main import create_app
-from app.models.level import Level, LevelVersion, LevelVisibilityState
+from app.models.level import Level, LevelVisibilityState
 from app.models.level_ghost import LevelGhost
 from app.models.user import User, UserRole
+from app.utils.time import utc_now
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +34,13 @@ def _signup_and_login(app, client, username, email) -> str:
     return login_response.get_json()["access_token"]
 
 
+def _login_existing(app, client, username) -> str:
+    app.config["DEBUG"] = True
+    request_response = client.post("/api/auth/request-login-link", json={"identifier": username})
+    login_token = request_response.get_json()["dev_login_token"]
+    return client.post("/api/auth/login", json={"token": login_token}).get_json()["access_token"]
+
+
 def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
@@ -46,22 +54,19 @@ def _player(app, client, username, email):
 
 
 def _live_level(owner: User, spawn=(48, 48)) -> Level:
-    level = Level(owner_id=owner.id, title="L", visibility_state=LevelVisibilityState.PUBLISHED)
-    db.session.add(level)
-    db.session.flush()
-    version = LevelVersion(
-        level_id=level.id,
-        version_number=1,
-        content={
+    level = Level(
+        owner_id=owner.id,
+        title="L",
+        visibility_state=LevelVisibilityState.PUBLISHED,
+        published_at=utc_now(),
+        draft_content={
             "spawnPosition": {"x": spawn[0], "y": spawn[1]},
             "cameraMode": "follow",
             "playerStartingColor": "green",
             "placedObjects": [],
         },
     )
-    db.session.add(version)
-    db.session.flush()
-    level.latest_published_version_id = version.id
+    db.session.add(level)
     db.session.commit()
     return level
 
@@ -70,7 +75,6 @@ def _run(duration_ms=2000, start=(48, 48), step=10, state=0):
     """A valid, gently moving run: a sample every 50ms plus the final one."""
     count = duration_ms // 50 + 1
     return {
-        "version": 1,
         "duration_ms": duration_ms,
         "frames": [[start[0] + i * step, start[1], state] for i in range(count)],
     }
@@ -109,7 +113,7 @@ def test_first_clear_becomes_the_ghost_and_is_public():
     assert fetched["username"] == "runner"
     assert fetched["duration_ms"] == 2000
     assert fetched["sample_interval_ms"] == 50
-    assert fetched["version"] == 1
+    assert "version" not in fetched
     assert len(fetched["frames"]) == 41
 
 
@@ -199,37 +203,15 @@ def test_deleted_level_is_404():
     assert _submit(client, token, level.slug, _run()).status_code == 404
 
 
-def test_run_for_an_old_version_is_rejected():
+def test_a_stray_version_field_from_an_older_client_is_ignored():
     _app, client, token, level = _world()
     body = _run()
     body["version"] = 7
 
     response = _submit(client, token, level.slug, body)
-    assert response.status_code == 409
-    assert response.get_json()["code"] == "stale_version"
-    assert LevelGhost.query.count() == 0
 
-
-def test_republishing_starts_a_level_with_no_ghost():
-    _app, client, token, level = _world()
-    _submit(client, token, level.slug, _run())
-
-    new_version = LevelVersion(
-        level_id=level.id,
-        version_number=2,
-        content=level.latest_published_version.content,
-    )
-    db.session.add(new_version)
-    db.session.flush()
-    level.latest_published_version_id = new_version.id
-    db.session.commit()
-
-    assert client.get(f"/api/levels/{level.slug}/ghost").get_json() == {"ghost": None}
-    # ...and a clear of the new version becomes its ghost, leaving v1's row alone.
-    body = _run()
-    body["version"] = 2
-    assert _submit(client, token, level.slug, body).get_json()["is_record"] is True
-    assert LevelGhost.query.count() == 2
+    assert response.status_code == 200
+    assert response.get_json()["is_record"] is True
 
 
 def test_deleted_holder_does_not_block_a_new_record():
@@ -245,11 +227,6 @@ def test_deleted_holder_does_not_block_a_new_record():
     response = _submit(client, other_token, level.slug, _run(4000))
     assert response.get_json()["is_record"] is True
     assert response.get_json()["record"]["username"] == "newcomer"
-
-
-def test_play_response_carries_the_version_number():
-    _app, client, _token, level = _world()
-    assert client.get(f"/api/levels/{level.slug}/play").get_json()["version"] == 1
 
 
 # ── Validation ──────────────────────────────────────────────────────────
@@ -303,3 +280,60 @@ def test_non_json_body_is_a_400_not_a_crash():
         f"/api/levels/{level.slug}/ghost", data="not json", headers=_headers(token)
     )
     assert response.status_code == 400
+
+
+# ── Best time on level lists ────────────────────────────────────────────
+
+
+def _creator_levels(client):
+    return client.get("/api/levels/by-user/creator").get_json()
+
+
+def test_public_level_list_carries_the_best_time():
+    _app, client, token, level = _world()
+
+    assert _creator_levels(client)[0]["best_time_ms"] is None
+
+    _submit(client, token, level.slug, _run(2000))
+    assert _creator_levels(client)[0]["best_time_ms"] == 2000
+
+
+def test_best_time_follows_a_faster_clear():
+    app, client, token, level = _world()
+    other_token, _ = _player(app, client, "speedy", "s@example.com")
+
+    _submit(client, token, level.slug, _run(3000))
+    _submit(client, other_token, level.slug, _run(1500))
+
+    assert _creator_levels(client)[0]["best_time_ms"] == 1500
+
+
+def test_best_time_ignores_a_deleted_holder():
+    _app, client, token, level = _world()
+    _submit(client, token, level.slug, _run(2000))
+    runner = User.query.filter_by(username="runner").first()
+    runner.is_deleted = True
+    db.session.commit()
+
+    assert _creator_levels(client)[0]["best_time_ms"] is None
+
+
+def test_best_time_is_per_level_in_a_list():
+    _app, client, token, level = _world()
+    creator = User.query.filter_by(username="creator").first()
+    other_level = _live_level(creator)
+    _submit(client, token, level.slug, _run(2000))
+
+    by_slug = {item["id"]: item["best_time_ms"] for item in _creator_levels(client)}
+    assert by_slug[level.slug] == 2000
+    assert by_slug[other_level.slug] is None
+
+
+def test_owner_list_carries_the_best_time_too():
+    app, client, token, level = _world()
+    _submit(client, token, level.slug, _run(2000))
+    creator_token = _login_existing(app, client, "creator")
+
+    response = client.get("/api/levels", headers=_headers(creator_token))
+    assert response.status_code == 200
+    assert response.get_json()[0]["best_time_ms"] == 2000

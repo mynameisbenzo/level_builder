@@ -7,7 +7,8 @@ from sqlalchemy.exc import IntegrityError
 from app.extensions import db
 from app.main import create_app
 from app.models.endless import EndlessLifeLoss, EndlessLifeLossReason, EndlessRun
-from app.models.level import Level, LevelVersion, LevelVisibilityState
+from app.models.level import Level, LevelVisibilityState
+from app.models.play_attempt import PlayAttempt
 from app.models.user import User, UserRole
 from app.services.endless import FREE_DAILY_POOL, get_pool_window
 from app.utils.time import utc_now
@@ -93,19 +94,12 @@ def _live_level(owner: User, title="A Level", difficulty=None, deleted=False) ->
         owner_id=owner.id,
         title=title,
         visibility_state=LevelVisibilityState.PUBLISHED,
+        published_at=utc_now(),
+        draft_content=_valid_content(),
+        difficulty_label_cached=difficulty,
         is_deleted=deleted,
     )
     db.session.add(level)
-    db.session.flush()
-    version = LevelVersion(
-        level_id=level.id,
-        version_number=1,
-        content=_valid_content(),
-        difficulty_label_cached=difficulty,
-    )
-    db.session.add(version)
-    db.session.flush()
-    level.latest_published_version_id = version.id
     db.session.commit()
     return level
 
@@ -696,3 +690,37 @@ def test_a_run_idle_for_24_hours_expires_without_charging_anything(clock):
         assert expired.end_reason.value == "expired"
         # Free to start a fresh run straight away.
         assert _start(client, token).status_code == 201
+        
+# --- clear rate / difficulty ---
+
+
+def test_endless_tries_and_clears_feed_the_levels_attempts(clock):
+    app, client = _client()
+    with app.app_context():
+        token, player, creator = _setup_free_world(app, client, clock)
+        level = Level.query.filter_by(owner_id=creator.id).first()
+        _start(client, token)
+
+        # A death: one attempt, never completed.
+        _die_once(client, token)
+        # The retry is cleared: a second attempt, now completed.
+        _post(client, token, "/runs/current/begin")
+        _post(client, token, "/runs/current/clear")
+
+        attempts = PlayAttempt.query.filter_by(level_id=level.id).order_by(PlayAttempt.id).all()
+        assert [attempt.source for attempt in attempts] == ["endless", "endless"]
+        assert [attempt.completed_at is not None for attempt in attempts] == [False, True]
+        assert all(attempt.user_id == player.id for attempt in attempts)
+
+
+def test_a_creators_own_endless_plays_are_not_attempts(clock):
+    app, client = _client()
+    with app.app_context():
+        token, player = _player(app, client, clock)
+        own = _live_level(player, title="Mine")
+        _start(client, token)
+
+        _post(client, token, "/runs/current/begin")
+        _post(client, token, "/runs/current/clear")
+
+        assert PlayAttempt.query.filter_by(level_id=own.id).count() == 0

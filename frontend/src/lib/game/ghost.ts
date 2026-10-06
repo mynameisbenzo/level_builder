@@ -31,7 +31,6 @@ export interface GhostRun {
 	username: string;
 	durationMs: number;
 	sampleIntervalMs: number;
-	version: number;
 	frames: GhostFrame[];
 }
 
@@ -134,6 +133,12 @@ export function sampleGhost(
 
 /** "12.34s" under a minute, "1:05.20" from a minute up. */
 export function formatRunTime(durationMs: number): string {
+	// Never print "NaN" - a missing or garbage value (e.g. a field an
+	// older backend doesn't send yet) reads as an obvious placeholder.
+	if (!Number.isFinite(durationMs)) {
+		return '--';
+	}
+
 	const totalCentiseconds = Math.max(0, Math.round(durationMs / 10));
 	const minutes = Math.floor(totalCentiseconds / 6000);
 	const seconds = (totalCentiseconds % 6000) / 100;

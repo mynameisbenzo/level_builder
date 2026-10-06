@@ -1,8 +1,9 @@
 from app.api.levels import MAX_DRAFT_LEVELS, MAX_PUBLISHED_TOTAL, MAX_TITLE_LENGTH
 from app.extensions import db
 from app.main import create_app
-from app.models.level import Level, LevelVersion
+from app.models.level import Level, LevelVisibilityState
 from app.models.level_rating import LevelRating
+from app.models.user import User
 from app.utils.time import utc_now
 
 
@@ -188,7 +189,8 @@ def test_save_clears_a_previous_beat_confirmation():
         assert response.get_json()["draft_beaten_at"] is None
 
 
-def test_save_demotes_a_published_level_to_testing():
+def test_save_rejects_a_published_level():
+    """Publishing is final - a published level can't be edited at all."""
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
@@ -197,9 +199,15 @@ def test_save_demotes_a_published_level_to_testing():
         _publish(client, token, level['id'])
 
         response = client.patch(
-            f"/api/levels/{level['id']}", json={"content": _valid_content()}, headers=_auth_headers(token)
+            f"/api/levels/{level['id']}",
+            json={"content": _valid_content(spawnPosition={"x": 208, "y": 208})},
+            headers=_auth_headers(token),
         )
-        assert response.get_json()["visibility_state"] == "testing"
+        assert response.status_code == 409
+
+        db_level = Level.query.filter_by(slug=level["id"]).first()
+        assert db_level.visibility_state.value == "published"
+        assert db_level.draft_content["spawnPosition"] != {"x": 208, "y": 208}
 
 
 def test_save_requires_ownership():
@@ -255,63 +263,40 @@ def test_publish_requires_beaten_first():
         assert response.status_code == 409
 
 
-def test_publish_creates_a_level_version_and_publishes():
+def test_publish_publishes_the_level():
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
         level = _create_level(client, token)
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        content_before = Level.query.filter_by(slug=level["id"]).first().draft_content
 
         response = _publish(client, token, level['id'])
 
         assert response.status_code == 200
         body = response.get_json()
         assert body["visibility_state"] == "published"
+        assert body["has_been_published"] is True
 
         db_level = Level.query.filter_by(slug=level["id"]).first()
-        assert db_level.latest_published_version_id is not None
-
-        version = db.session.get(LevelVersion, db_level.latest_published_version_id)
-        assert version.version_number == 1
-        assert version.beaten_at is not None
-        assert version.content == db_level.draft_content
+        assert db_level.published_at is not None
+        assert db_level.draft_beaten_at is not None
+        assert db_level.draft_content == content_before
 
 
-def test_publish_increments_version_number_on_a_later_republish():
+def test_a_published_level_cannot_be_published_again():
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
         level = _create_level(client, token)
-
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 48, "y": 48})},
-            headers=_auth_headers(token),
-        )
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
         _publish(client, token, level['id'])
+        first_published_at = Level.query.filter_by(slug=level["id"]).first().published_at
 
-        # Edit, re-beat, publish again.
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 144, "y": 144})},
-            headers=_auth_headers(token),
-        )
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        second_publish = client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
+        second = _publish(client, token, level['id'])
 
-        assert second_publish.status_code == 200
-
-        db_level = Level.query.filter_by(slug=level["id"]).first()
-        latest_version = db.session.get(LevelVersion, db_level.latest_published_version_id)
-        assert latest_version.version_number == 2
-        assert latest_version.content["spawnPosition"] == {"x": 144, "y": 144}
-
-        # And the first version is still there, untouched - immutable,
-        # not overwritten by the second publish.
-        first_version = LevelVersion.query.filter_by(level_id=db_level.id, version_number=1).first()
-        assert first_version is not None
-        assert first_version.content["spawnPosition"] == {"x": 48, "y": 48}
+        assert second.status_code == 409
+        assert Level.query.filter_by(slug=level["id"]).first().published_at == first_published_at
 
 
 def test_publish_requires_ownership():
@@ -395,12 +380,10 @@ def test_play_endpoint_returns_404_for_an_unknown_slug():
         assert response.status_code == 404
 
 
-def test_play_endpoint_still_serves_the_last_published_version_after_a_demoting_edit():
+def test_play_endpoint_content_is_frozen_after_an_attempted_edit():
     """
-    A level demoted back to 'testing' by a post-publish edit (see
-    save_level) should still serve its last published version publicly
-    - the whole point of that demotion is that the old version keeps
-    working for everyone else while a replacement is worked on.
+    A published level can't be edited, so an attempt to change it must
+    leave what /play serves exactly as published.
     """
     app, client = _client()
     with app.app_context():
@@ -408,19 +391,18 @@ def test_play_endpoint_still_serves_the_last_published_version_after_a_demoting_
         level = _create_level(client, token)
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
         _publish(client, token, level['id'])
+        before = client.get(f"/api/levels/{level['id']}/play").get_json()["content"]
 
-        # An edit after publishing - demotes visibility_state, but
-        # shouldn't affect what /play serves.
-        client.patch(
+        edit = client.patch(
             f"/api/levels/{level['id']}",
             json={"content": _valid_content(spawnPosition={"x": 208, "y": 208})},
             headers=_auth_headers(token),
         )
+        assert edit.status_code == 409
 
         response = client.get(f"/api/levels/{level['id']}/play")
         assert response.status_code == 200
-        # Still the originally-published content, not the in-progress edit.
-        assert response.get_json()["content"]["spawnPosition"] != {"x": 208, "y": 208}
+        assert response.get_json()["content"] == before
 
 
 def test_record_play_counts_an_anonymous_request():
@@ -606,28 +588,6 @@ def test_list_levels_by_user_returns_empty_list_for_unknown_username():
         assert response.get_json() == []
 
 
-def test_list_levels_by_user_still_shows_a_level_demoted_to_testing_after_publishing():
-    """Same reasoning as /play - a level demoted back to testing by a
-    post-publish edit should still appear here, since its last
-    published version is still live for everyone."""
-    app, client = _client()
-    with app.app_context():
-        token = _signup_and_login(app, client, "demotelister", "demotelister@example.com")
-        level = _create_level(client, token, title="Demoted but still live")
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, level['id'])
-
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content()},
-            headers=_auth_headers(token),
-        )
-
-        response = client.get("/api/levels/by-user/demotelister")
-        titles = [item["title"] for item in response.get_json()]
-        assert titles == ["Demoted but still live"]
-
-
 def test_list_levels_by_user_excludes_another_users_levels():
     app, client = _client()
     with app.app_context():
@@ -656,7 +616,6 @@ def test_list_levels_by_user_omits_draft_content():
 
         response = client.get("/api/levels/by-user/leanpublic")
         assert "draft_content" not in response.get_json()[0]
-        
 
 
 # --- naming: set once at first publish, then locked ---
@@ -696,7 +655,7 @@ def test_first_publish_requires_a_name():
 
         db_level = Level.query.filter_by(slug=level["id"]).first()
         assert db_level.visibility_state.value == "draft"
-        assert db_level.latest_published_version_id is None
+        assert db_level.published_at is None
 
 
 def test_first_publish_with_an_empty_title_is_rejected_and_publishes_nothing():
@@ -711,7 +670,7 @@ def test_first_publish_with_an_empty_title_is_rejected_and_publishes_nothing():
 
         db_level = Level.query.filter_by(slug=level["id"]).first()
         assert db_level.visibility_state.value == "draft"
-        assert db_level.latest_published_version_id is None
+        assert db_level.published_at is None
 
 
 def test_publish_title_length_limit_is_enforced_at_exactly_the_boundary():
@@ -753,43 +712,17 @@ def test_a_published_levels_name_cannot_be_changed():
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
         _publish(client, token, level["id"], title="Sky Castle")
 
-        # Edit, re-beat, then try to publish again under a different name.
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 144, "y": 144})},
-            headers=_auth_headers(token),
-        )
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        # Neither publishing again under a new name nor a save with one
+        # can rename it.
         response = _publish(client, token, level["id"], title="A Different Name")
         assert response.status_code == 409
+        rename = client.patch(
+            f"/api/levels/{level['id']}", json={"title": "Sneaky"}, headers=_auth_headers(token)
+        )
+        assert rename.status_code == 400
 
         db_level = Level.query.filter_by(slug=level["id"]).first()
         assert db_level.title == "Sky Castle"
-        # And the rejected attempt published nothing new.
-        assert LevelVersion.query.filter_by(level_id=db_level.id).count() == 1
-
-
-def test_republishing_without_a_title_keeps_the_name():
-    app, client = _client()
-    with app.app_context():
-        token = _signup_and_login(app, client)
-        level = _create_level(client, token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, level["id"], title="Sky Castle")
-
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 144, "y": 144})},
-            headers=_auth_headers(token),
-        )
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        response = client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
-
-        assert response.status_code == 200
-        assert response.get_json()["title"] == "Sky Castle"
-
-        db_level = Level.query.filter_by(slug=level["id"]).first()
-        assert LevelVersion.query.filter_by(level_id=db_level.id).count() == 2
 
 
 def test_save_rejects_a_title_and_nothing_in_that_request_takes_effect():
@@ -824,9 +757,8 @@ def test_create_level_with_a_too_long_title_is_rejected():
 
 
 def test_level_reports_whether_it_has_been_published():
-    """What tells the editor whether a level still needs its one-time
-    name - and it stays true for a level demoted back to testing by a
-    post-publish edit, since its name is locked either way."""
+    """What tells the editor whether a level is still a draft that needs
+    its one-time name."""
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
@@ -840,19 +772,9 @@ def test_level_reports_whether_it_has_been_published():
         after = client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token)).get_json()
         assert after["has_been_published"] is True
 
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content()},
-            headers=_auth_headers(token),
-        )
-        demoted = client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token)).get_json()
-        assert demoted["visibility_state"] == "testing"
-        assert demoted["has_been_published"] is True
-
         # The list view carries it too.
         listed = client.get("/api/levels", headers=_auth_headers(token)).get_json()
         assert listed[0]["has_been_published"] is True
-        
 
 
 # --- saving identical content is a no-op ---
@@ -878,7 +800,7 @@ def test_save_with_identical_content_keeps_the_beat_confirmation():
         assert response.get_json()["draft_beaten_at"] is not None
 
 
-def test_save_with_identical_content_does_not_demote_a_published_level():
+def test_saving_a_published_level_is_rejected_even_with_identical_content():
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
@@ -893,8 +815,26 @@ def test_save_with_identical_content_does_not_demote_a_published_level():
             headers=_auth_headers(token),
         )
 
-        assert response.status_code == 200
-        assert response.get_json()["visibility_state"] == "published"
+        assert response.status_code == 409
+        assert (
+            client.get(f"/api/levels/{level['id']}", headers=_auth_headers(token)).get_json()[
+                "visibility_state"
+            ]
+            == "published"
+        )
+
+
+def test_beating_a_published_level_is_rejected():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client)
+        level = _create_level(client, token)
+        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+        _publish(client, token, level["id"], title="Sky Castle")
+
+        response = client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
+
+        assert response.status_code == 409
 
 
 def test_save_with_genuinely_different_content_still_clears_the_beat():
@@ -914,7 +854,6 @@ def test_save_with_genuinely_different_content_still_clears_the_beat():
 
         assert response.status_code == 200
         assert response.get_json()["draft_beaten_at"] is None
-        
 
 
 # --- draft cap ---
@@ -956,64 +895,25 @@ def test_publishing_a_draft_frees_a_slot_for_a_new_one():
         assert now_allowed.status_code == 201
 
 
-# --- publishing identical content is always rejected ---
+# --- published-total cap (every level ever published, deleted ones included) ---
 
 
-def test_republishing_identical_content_is_rejected_as_a_no_op():
-    app, client = _client()
+def _pad_published_levels_to(app, owner_username, target_count):
+    """Directly inserts published Level rows (bypassing the API) so a cap
+    boundary test doesn't need a hundred slow, real HTTP publishes just
+    to set up its starting state."""
     with app.app_context():
-        token = _signup_and_login(app, client)
-        level = _create_level(client, token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, level["id"], title="Sky Castle")
-
-        # No edit in between - beat again, same content, try to publish.
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        response = client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
-
-        assert response.status_code == 409
-        db_level = Level.query.filter_by(slug=level["id"]).first()
-        assert LevelVersion.query.filter_by(level_id=db_level.id).count() == 1
-
-
-def test_republishing_genuinely_different_content_is_still_allowed():
-    app, client = _client()
-    with app.app_context():
-        token = _signup_and_login(app, client)
-        level = _create_level(client, token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, level["id"], title="Sky Castle")
-
-        client.patch(
-            f"/api/levels/{level['id']}",
-            json={"content": _valid_content(spawnPosition={"x": 208, "y": 208})},
-            headers=_auth_headers(token),
-        )
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        response = client.post(f"/api/levels/{level['id']}/publish", headers=_auth_headers(token))
-
-        assert response.status_code == 200
-        db_level = Level.query.filter_by(slug=level["id"]).first()
-        assert LevelVersion.query.filter_by(level_id=db_level.id).count() == 2
-
-
-# --- published-total cap (levels + all their versions) ---
-
-
-def _pad_version_count_to(app, level_slug, target_count):
-    """Directly inserts LevelVersion rows (bypassing the API) so a cap
-    boundary test doesn't need hundreds of slow, real HTTP publishes
-    just to set up its starting state."""
-    with app.app_context():
-        level = Level.query.filter_by(slug=level_slug).first()
-        existing = LevelVersion.query.filter_by(level_id=level.id).count()
+        owner = User.query.filter_by(username=owner_username).first()
+        existing = Level.query.filter_by(owner_id=owner.id).filter(Level.published_at.isnot(None)).count()
         for i in range(existing, target_count):
             db.session.add(
-                LevelVersion(
-                    level_id=level.id,
-                    version_number=i + 1,
-                    content=_valid_content(spawnPosition={"x": 48 + (i % 400) * 32, "y": 48}),
-                    beaten_at=utc_now(),
+                Level(
+                    owner_id=owner.id,
+                    title=f"Padding {i}",
+                    visibility_state=LevelVisibilityState.PUBLISHED,
+                    draft_content=_valid_content(),
+                    draft_beaten_at=utc_now(),
+                    published_at=utc_now(),
                 )
             )
         db.session.commit()
@@ -1023,13 +923,7 @@ def test_publish_is_refused_when_it_would_exceed_the_published_total_cap():
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
-
-        padding_level = _create_level(client, token, title="Padding")
-        client.post(f"/api/levels/{padding_level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, padding_level["id"], title="Padding")
-        # 1 (padding level itself) + V versions + 1 (new level, first
-        # publish) + 1 (its new version) must come out to 101.
-        _pad_version_count_to(app, padding_level["id"], MAX_PUBLISHED_TOTAL - 2)
+        _pad_published_levels_to(app, "creator", MAX_PUBLISHED_TOTAL)
 
         new_level = _create_level(client, token, title="One too many")
         client.post(f"/api/levels/{new_level['id']}/beat", headers=_auth_headers(token))
@@ -1037,19 +931,14 @@ def test_publish_is_refused_when_it_would_exceed_the_published_total_cap():
 
         assert response.status_code == 409
         db_level = Level.query.filter_by(slug=new_level["id"]).first()
-        assert db_level.latest_published_version_id is None
+        assert db_level.published_at is None
 
 
 def test_publish_succeeds_at_exactly_the_published_total_cap_boundary():
     app, client = _client()
     with app.app_context():
         token = _signup_and_login(app, client)
-
-        padding_level = _create_level(client, token, title="Padding")
-        client.post(f"/api/levels/{padding_level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, padding_level["id"], title="Padding")
-        # Same arithmetic as above, one less - lands exactly at 100.
-        _pad_version_count_to(app, padding_level["id"], MAX_PUBLISHED_TOTAL - 3)
+        _pad_published_levels_to(app, "creator", MAX_PUBLISHED_TOTAL - 1)
 
         new_level = _create_level(client, token, title="Exactly at the limit")
         client.post(f"/api/levels/{new_level['id']}/beat", headers=_auth_headers(token))
@@ -1061,11 +950,8 @@ def test_publish_succeeds_at_exactly_the_published_total_cap_boundary():
 def test_published_total_cap_does_not_count_another_users_levels():
     app, client = _client()
     with app.app_context():
-        token_a = _signup_and_login(app, client, "capuser_a", "capuser_a@example.com")
-        padding_level = _create_level(client, token_a, title="A's padding")
-        client.post(f"/api/levels/{padding_level['id']}/beat", headers=_auth_headers(token_a))
-        _publish(client, token_a, padding_level["id"], title="A's padding")
-        _pad_version_count_to(app, padding_level["id"], MAX_PUBLISHED_TOTAL)
+        _signup_and_login(app, client, "capuser_a", "capuser_a@example.com")
+        _pad_published_levels_to(app, "capuser_a", MAX_PUBLISHED_TOTAL)
 
         token_b = _signup_and_login(app, client, "capuser_b", "capuser_b@example.com")
         level_b = _create_level(client, token_b, title="B's first level")
@@ -1073,6 +959,7 @@ def test_published_total_cap_does_not_count_another_users_levels():
         response = _publish(client, token_b, level_b["id"], title="B's first level")
 
         assert response.status_code == 200
+
 
 # --- delete: a never-published draft is hard-deleted ---
 
@@ -1187,9 +1074,8 @@ def test_deleting_a_published_level_does_not_free_its_published_cap_slot():
         level = _create_level(client, token, title="Uses a slot")
         client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
         _publish(client, token, level["id"], title="Uses a slot")
-        # This level (1) + its one version (1) = 2 toward the cap so far.
-        _pad_version_count_to(app, level["id"], MAX_PUBLISHED_TOTAL - 2)
-        # Now exactly at the cap: 1 level + (MAX_PUBLISHED_TOTAL - 1) versions = MAX_PUBLISHED_TOTAL.
+        # Exactly at the cap: this level plus MAX_PUBLISHED_TOTAL - 1 more.
+        _pad_published_levels_to(app, "creator", MAX_PUBLISHED_TOTAL)
 
         client.delete(f"/api/levels/{level['id']}", headers=_auth_headers(token))
 
@@ -1386,34 +1272,6 @@ def test_rating_a_deleted_level_returns_404():
         )
 
         assert response.status_code == 404
-
-
-def test_getting_own_rating_requires_authentication():
-    app, client = _client()
-    with app.app_context():
-        owner_token = _signup_and_login(app, client, "owner6", "owner6@example.com")
-        level = _create_level(client, owner_token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
-        _publish(client, owner_token, level["id"])
-
-        response = client.get(f"/api/levels/{level['id']}/rating")
-
-        assert response.status_code == 401
-
-
-def test_getting_own_rating_before_rating_returns_null():
-    app, client = _client()
-    with app.app_context():
-        owner_token = _signup_and_login(app, client, "owner7", "owner7@example.com")
-        level = _create_level(client, owner_token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(owner_token))
-        _publish(client, owner_token, level["id"])
-
-        rater_token = _signup_and_login(app, client, "rater4", "rater4@example.com")
-        response = client.get(f"/api/levels/{level['id']}/rating", headers=_auth_headers(rater_token))
-
-        assert response.status_code == 200
-        assert response.get_json()["is_like"] is None
 
 
 def _internal_level_id(slug: str) -> int:

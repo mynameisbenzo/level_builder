@@ -177,6 +177,21 @@ implements.)
 (See [PROJECT.md](PROJECT.md#levels--versioning) for the settled
 lifecycle design this work implements.)
 
+- [x] `PlayAttempt` model — source of truth for clear rate; only
+      registered, non-owner users' real playthrough attempts count,
+      anonymous plays don't (they still bump the play/completion
+      counts shown on level cards). One row per try, with `source`
+      `'direct'` or `'endless'`; `completed_at` is null for a death,
+      quit or abandon.
+- [x] Difficulty auto-labeling from clear rate (Easy 50-100%, Normal
+      25-50%, Hard 5-25%, Very Hard 1-5%, "TAS!?!?" under 1%),
+      per-level (a published level never changes). A level needs 10
+      attempts before it gets a label; a boundary belongs to the
+      easier label. Cached on `Level.difficulty_label_cached` and
+      recomputed on every attempt start/completion
+      (`app/services/difficulty.py`). No backfill, so older levels
+      start unlabeled.
+
 - [x] `Level` model — slug (short/random, lives on the level not a
       version, so share links survive re-publishes), visibility state
       enum, the `latest_published_version_id` pointer that
@@ -224,6 +239,21 @@ lifecycle design this work implements.)
 (See [PROJECT.md](PROJECT.md#public-playthrough-experience-playslug)
 for what this covers and why it's separate from the Editor's own
 test-play flow.)
+
+- [x] Every play counted as a "playthrough attempt" - done via the
+      `PlayAttempt` model (clear-rate tracking, registered non-owner
+      users only). Deaths aren't reported individually: an attempt that
+      never completes simply stays open.
+- [x] **Ghost run** - one ghost per published level: the
+      fastest recorded clear, replayed as a translucent, tinted character
+      with its owner's name above it (in `/play/[slug]` and endless). A
+      strictly faster clear by a logged-in player replaces it; a tie
+      keeps the old one. Recorded
+      client-side every 50ms (position, facing, pose, character color)
+      against a run clock that only counts time actually playing, and
+      checked server-side for shape, sane duration, a start near the
+      spawn, and no teleports between samples (`app/services/ghosts.py`).
+      The result modal shows your time and the record ("New record!").
 
 - [x] Dying restarts the level from the beginning (`scene.restart()`,
       which `create()` already resets every piece of runtime state for

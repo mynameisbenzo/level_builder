@@ -91,9 +91,8 @@ class EndlessRun(db.Model):
 
 class EndlessRunLevel(db.Model):
     """
-    One level served within a run. Records the exact version served (a
-    level can be republished later), the order, how it ended, and how
-    many tries it took - this is the per-level endless metric, kept
+    One level served within a run. Records the order, how it ended, and
+    how many tries it took - this is the per-level endless metric, kept
     separate from the level's own direct-play counters.
     """
 
@@ -105,7 +104,6 @@ class EndlessRunLevel(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     run_id = db.Column(db.Integer, db.ForeignKey("endless_runs.id"), nullable=False, index=True)
     level_id = db.Column(db.Integer, db.ForeignKey("levels.id"), nullable=False, index=True)
-    level_version_id = db.Column(db.Integer, db.ForeignKey("level_versions.id"), nullable=False)
     # 1-based order within the run.
     position = db.Column(db.Integer, nullable=False)
 
@@ -135,7 +133,6 @@ class EndlessRunLevel(db.Model):
 
     run = db.relationship("EndlessRun", back_populates="levels")
     level = db.relationship("Level", foreign_keys=[level_id])
-    level_version = db.relationship("LevelVersion", foreign_keys=[level_version_id])
 
 
 class EndlessLifeLoss(db.Model):

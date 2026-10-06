@@ -1,6 +1,6 @@
 """
-Ghost runs: the fastest clear of each published level version, replayed
-as a translucent character for everyone who plays it afterwards.
+Ghost runs: the fastest clear of each published level, replayed as a
+translucent character for everyone who plays it afterwards.
 
 FRAME FORMAT (shared with frontend/src/lib/game/ghost.ts - keep in sync):
 a run is a list of samples, one every SAMPLE_INTERVAL_MS from the start
@@ -22,7 +22,7 @@ verification would need deterministic server-side replay.
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
-from app.models.level import Level, LevelVersion
+from app.models.level import Level
 from app.models.level_ghost import LevelGhost
 from app.models.user import User
 from app.services.level_content import WORLD_HEIGHT, WORLD_WIDTH
@@ -109,24 +109,43 @@ def validate_run(content: dict, duration_ms, frames) -> None:
             bad("the run doesn't start at the level's spawn point")
 
 
-def get_ghost(version_id: int) -> LevelGhost | None:
+def get_ghost(level_id: int) -> LevelGhost | None:
     """
-    The ghost for a version, or None. A ghost whose holder has since
+    The ghost for a level, or None. A ghost whose holder has since
     deleted their account is treated as absent - the next clear then
     simply becomes the new ghost.
     """
-    ghost = LevelGhost.query.filter_by(level_version_id=version_id).first()
+    ghost = LevelGhost.query.filter_by(level_id=level_id).first()
     if ghost is None or ghost.user.is_deleted:
         return None
     return ghost
 
 
-def ghost_to_dict(ghost: LevelGhost, version: LevelVersion) -> dict:
+def best_times_for_levels(level_ids: list[int]) -> dict[int, int]:
+    """
+    {level_id: fastest clear in ms} for every level in a list response,
+    in one query rather than one per level. A level nobody has cleared
+    (or whose ghost holder deleted their account, matching get_ghost)
+    simply isn't a key.
+    """
+    if not level_ids:
+        return {}
+
+    rows = (
+        db.session.query(LevelGhost.level_id, LevelGhost.duration_ms)
+        .join(User, User.id == LevelGhost.user_id)
+        .filter(LevelGhost.level_id.in_(level_ids))
+        .filter(User.is_deleted.is_(False))
+        .all()
+    )
+    return {level_id: duration_ms for level_id, duration_ms in rows}
+
+
+def ghost_to_dict(ghost: LevelGhost) -> dict:
     return {
         "username": ghost.user.username,
         "duration_ms": ghost.duration_ms,
         "sample_interval_ms": SAMPLE_INTERVAL_MS,
-        "version": version.version_number,
         "frames": ghost.frames,
     }
 
@@ -136,32 +155,18 @@ def record_summary(ghost: LevelGhost) -> dict:
     return {"username": ghost.user.username, "duration_ms": ghost.duration_ms}
 
 
-def submit_run(
-    user: User, level: Level, version_number, duration_ms, frames
-) -> tuple[bool, LevelGhost]:
+def submit_run(user: User, level: Level, duration_ms, frames) -> tuple[bool, LevelGhost]:
     """
     Offers a clear to be the level's ghost. Returns (is_record, ghost):
     `ghost` is whichever ghost stands afterwards (the new one if it was a
     record, otherwise the existing, faster-or-equal one). A tie keeps the
     existing ghost - the record only changes hands for a strictly faster time.
     """
-    version = db.session.get(LevelVersion, level.latest_published_version_id)
-
-    if not _is_whole_number(version_number):
-        raise GhostError("invalid_ghost", "version must be a whole number")
-
-    if version_number != version.version_number:
-        # The level was republished while this person was playing the old
-        # version - their run was recorded against a layout that's gone.
-        raise GhostError(
-            "stale_version", "this level was updated while you were playing it", 409
-        )
-
-    validate_run(version.content, duration_ms, frames)
+    validate_run(level.draft_content, duration_ms, frames)
 
     for _attempt in range(2):
         existing = (
-            LevelGhost.query.filter_by(level_version_id=version.id).with_for_update().first()
+            LevelGhost.query.filter_by(level_id=level.id).with_for_update().first()
         )
 
         if existing is not None and not existing.user.is_deleted and existing.duration_ms <= duration_ms:
@@ -169,7 +174,7 @@ def submit_run(
 
         if existing is None:
             ghost = LevelGhost(
-                level_version_id=version.id,
+                level_id=level.id,
                 user_id=user.id,
                 duration_ms=duration_ms,
                 frames=frames,
@@ -191,5 +196,5 @@ def submit_run(
             continue
         return True, ghost
 
-    existing = LevelGhost.query.filter_by(level_version_id=version.id).first()
+    existing = LevelGhost.query.filter_by(level_id=level.id).first()
     return False, existing

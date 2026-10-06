@@ -1,11 +1,10 @@
 def level_to_dict(level) -> dict:
     """
-    has_been_published is what tells the editor whether a level still
-    needs its one-time name (see publish_level in app/api/levels.py) -
-    derived from latest_published_version_id, which assumes nothing
-    ever clears that pointer. An explicit "unpublish" action doesn't
-    exist yet; if one is added, it must not be allowed to make a named
-    level look unnamed again.
+    has_been_published is what tells the editor whether a level is
+    still a draft that needs its one-time name (see publish_level in
+    app/api/levels.py) - derived from published_at, which is set once
+    at publish and never cleared. A published level is final: its
+    content, title and thumbnail can't change.
 
     Every field here is only ever shown to the level's own owner right
     now - every /api/levels endpoint in this first pass is an
@@ -18,7 +17,7 @@ def level_to_dict(level) -> dict:
         "id": level.slug,
         "title": level.title,
         "visibility_state": level.visibility_state.value,
-        "has_been_published": level.latest_published_version_id is not None,
+        "has_been_published": level.is_published,
         "is_deleted": level.is_deleted,
         "draft_content": level.draft_content,
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
@@ -27,7 +26,9 @@ def level_to_dict(level) -> dict:
     }
 
 
-def level_to_summary_dict(level, rating_counts: dict | None = None) -> dict:
+def level_to_summary_dict(
+    level, rating_counts: dict | None = None, best_times: dict | None = None
+) -> dict:
     """
     A lighter-weight serialization for list views - deliberately omits
     draft_content entirely, since a list of many levels (an owner's own
@@ -47,6 +48,11 @@ def level_to_summary_dict(level, rating_counts: dict | None = None) -> dict:
     and doing that per-level here would mean N extra queries for a list
     of N levels. Missing from the map (a level nobody has rated yet)
     defaults to (0, 0).
+
+    best_times is the same idea for the fastest recorded clear: an
+    optional {level_id: duration_ms} map (see
+    ghosts.best_times_for_levels) built once per list. A level nobody
+    has cleared is simply absent, and gets null.
     """
     likes, dislikes = (rating_counts or {}).get(level.id, (0, 0))
 
@@ -54,7 +60,7 @@ def level_to_summary_dict(level, rating_counts: dict | None = None) -> dict:
         "id": level.slug,
         "title": level.title,
         "visibility_state": level.visibility_state.value,
-        "has_been_published": level.latest_published_version_id is not None,
+        "has_been_published": level.is_published,
         "is_deleted": level.is_deleted,
         "draft_beaten_at": level.draft_beaten_at.isoformat() if level.draft_beaten_at else None,
         "created_at": level.created_at.isoformat() if level.created_at else None,
@@ -68,4 +74,7 @@ def level_to_summary_dict(level, rating_counts: dict | None = None) -> dict:
         "like_count": likes,
         "dislike_count": dislikes,
         "thumbnail_url": level.thumbnail_url,
+        # The fastest recorded clear of the level, in ms - null if it's
+        # never been cleared (or isn't published).
+        "best_time_ms": (best_times or {}).get(level.id),
     }

@@ -94,14 +94,10 @@ reach and which catalog content they can use.
       below) - nothing in this design is blocked on that; the gating
       logic just needs the boolean to exist.
 
-### Levels & versioning
+### Levels (publishing is final: no versions)
 
-- [ ] `PlayAttempt` model — source of truth for clear rate; only
-      registered users' real playthrough attempts count, anonymous
-      plays don't
-- [ ] Difficulty auto-labeling from clear rate (Easy 50-100%, Normal
-      25-50%, Hard 5-25%, Very Hard 1-5%, "TAS!?!?" under 1%),
-      per-version
+- [ ] Show the difficulty label in the UI (level cards, `/play/[slug]`,
+      Discover) - nothing displays it yet
 - [ ] `Tag`/`LevelTag` models — dev/moderator-curated pool, two
       user-suggested tags auto-applied per level, one "Other" free-text
       slot requiring moderation
@@ -112,21 +108,6 @@ reach and which catalog content they can use.
 
 ### Public playthrough experience (`/play/[slug]`)
 
-- [ ] Every death or play counted as a "playthrough attempt" -
-      deliberately deferred; this is what the not-yet-built
-      `PlayAttempt` model above is actually for (clear-rate tracking,
-      registered users only), rather than a quick counter bolted onto
-      the result modal work.
-- [x] **Ghost run** - one ghost per published level *version*: the
-      fastest recorded clear, replayed as a translucent, tinted character
-      with its owner's name above it (in `/play/[slug]` and endless). A
-      strictly faster clear by a logged-in player replaces it; a tie
-      keeps the old one; a new version starts with none. Recorded
-      client-side every 50ms (position, facing, pose, character color)
-      against a run clock that only counts time actually playing, and
-      checked server-side for shape, sane duration, a start near the
-      spawn, and no teleports between samples (`app/services/ghosts.py`).
-      The result modal shows your time and the record ("New record!").
 - [ ] **Ghost: stronger run verification (future)** - the server can't
       prove a run was really played, only that it's plausible; a
       determined cheater can craft a believable path. Real verification
@@ -136,9 +117,6 @@ reach and which catalog content they can use.
       slipped through (owner of the level, moderators).
 - [ ] **Ghost: show the record on level cards (future)** - best time and
       holder next to likes/clear rate on `/u/[username]` and Discover.
-- [ ] **Ghost: carry a ghost across a republish (future)** - currently
-      every new version starts with none; a cosmetic-only edit could
-      keep the old one.
 
 ### Marketing site & blog
 
@@ -254,7 +232,7 @@ Still genuinely unbuilt and not yet designed in detail:
       user-facing flagging mechanism
 - [ ] System-flagged review — e.g. a level with real play attempts but
       a nose-diving clear rate getting automatically surfaced for
-      review, building on the difficulty-label data once it exists
+      review, building on the difficulty-label data (`PlayAttempt`)
 
 ## Discover / browsing levels
 
@@ -287,8 +265,9 @@ already have a link to:
         accounts have no pool and are never locked out.
       - **Selection.** Either truly random (any difficulty) or filtered
         by one of the difficulty labels (Easy, Normal, Hard, Very Hard,
-        TAS!?!? - see Levels & versioning; these depend on `PlayAttempt`
-        and the auto-labeling existing first). A category with zero
+        TAS!?!? - see Levels (publishing is final); these come from
+        `Level.difficulty_label_cached`, which is unset until a level
+        has 10 attempts). A category with zero
         matching levels is greyed out in the picker. Repeats are fine,
         and a user can be served their own levels.
       - **Server-authoritative runs.** One active run per user at a
@@ -297,8 +276,8 @@ already have a link to:
         asks "resume or start over"; start over ends the old run as
         forfeited. A run records user, difficulty filter, starting and
         remaining lives, levels cleared, deaths, skips, status and
-        timestamps; each level served within it records the level and
-        version, order, outcome (cleared / died / skipped) and deaths.
+        timestamps; each level served within it records the level,
+        order, outcome (cleared / died / skipped) and deaths.
       - **Resuming.** A saved run restores the run state, not the
         in-level position: resuming restarts the current level from the
         beginning. A run idle for 24 hours expires.
@@ -316,8 +295,8 @@ already have a link to:
         (a level cleared on the 5th try is 5 attempts, 1 completion).
         Endless plays and clears count toward a level's play/completion
         counts, tracked separately from direct plays (a `source:
-        'endless' | 'direct'` on play records / the future `PlayAttempt`
-        table, plus the run tables above).
+        'endless' | 'direct'` on `PlayAttempt`, plus the run
+        tables above).
       - **Interstitial screen** shown before every level (and again
         after a death): a centered banner with the level name above the
         creator's name; above that, the level's starting character with
@@ -339,6 +318,11 @@ already have a link to:
       (tab closed, crash, lost connection) and the server resolves it as
       a death, tell them on the interstitial that rejoining cost a life,
       so the lower count isn't a surprise.
+- [ ] **Endless mode: longest runs (future)** - a record of the longest
+      endless runs (most levels cleared in one run, by difficulty
+      category). The data already exists: `EndlessRun.levels_cleared`
+      plus `difficulty` and `starting_lives`. Needs a leaderboard
+      query/endpoint and somewhere to show it (entry screen, profile).
 - [ ] **Endless mode: report abandons on page close (future)** - a
       best-effort report to the server when the page is closed or hidden
       (`navigator.sendBeacon`), so most abandoned attempts resolve right
@@ -347,7 +331,7 @@ already have a link to:
 
 ## Multiplayer (planned, after ghosts)
 
-- [ ] **Live race** - everyone plays the same published version at once
+- [ ] **Live race** - everyone plays the same published level at once
       and sees each other as ghosts, no interaction. Each client simulates
       only its own player and broadcasts position ~10-20x a second. Needs
       a realtime transport (Flask-SocketIO with a Redis message queue, or

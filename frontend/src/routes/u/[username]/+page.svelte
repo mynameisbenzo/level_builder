@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { getUserByUsername, listLevelsByUser, type LevelListItem, type PublicUser } from '$lib/api';
 	import Navbar from '$lib/Navbar.svelte';
+	import { formatRunTime } from '$lib/game/ghost';
 	import type { PageProps } from './$types';
 
 	let { params }: PageProps = $props();
@@ -138,7 +139,7 @@
 				{:else}
 					<ul class="levels-list">
 						{#each levels as level (level.id)}
-							<li>
+							<li class="level-card">
 								<div class="level-item">
 									{#if level.thumbnail_url}
 										<img class="level-thumbnail" src={level.thumbnail_url} alt="" loading="lazy" />
@@ -147,6 +148,9 @@
 									{/if}
 									<div class="level-main">
 										<div class="level-row">
+											<!-- The link's ::after stretches over the whole card (see
+											     .level-title::after), so tapping anywhere on it plays the
+											     level - the Share button sits above that layer. -->
 											<a class="level-title" href="/play/{level.id}">{level.title}</a>
 											<button
 												class="share-level-button"
@@ -163,20 +167,16 @@
 											</button>
 										</div>
 										<div class="level-metrics">
-											<span class="metric"
-												>{level.play_count} {level.play_count === 1 ? 'play' : 'plays'}</span
-											>
-											<span class="metric"
-												>{level.completion_count}
-												{level.completion_count === 1 ? 'completion' : 'completions'}</span
-											>
 											<span class="metric">
 												{level.completion_rate === null
-													? 'no completion rate yet'
-													: `${Math.round(level.completion_rate * 100)}% completion rate`}
+													? 'No plays yet'
+													: `${Math.round(level.completion_rate * 100)}% complete`}
 											</span>
-											<span class="metric metric-likes">👍 {level.like_count}</span>
-											<span class="metric metric-dislikes">👎 {level.dislike_count}</span>
+											{#if typeof level.best_time_ms === 'number'}
+												<span class="metric metric-time">⏱ {formatRunTime(level.best_time_ms)}</span>
+											{:else}
+												<span class="metric metric-uncleared">UNCLEARED!</span>
+											{/if}
 										</div>
 									</div>
 								</div>
@@ -286,6 +286,19 @@
 		border-radius: 6px;
 	}
 
+	/* The whole card is the link: positioned so the title's stretched
+	   ::after (below) covers exactly this box. */
+	.level-card {
+		position: relative;
+		cursor: pointer;
+		transition: border-color 0.15s ease;
+	}
+
+	.level-card:hover,
+	.level-card:focus-within {
+		border-color: #6b6f9e;
+	}
+
 	.level-item {
 		display: flex;
 		gap: 12px;
@@ -338,11 +351,30 @@
 		white-space: nowrap;
 	}
 
-	.level-title:hover {
+	.level-title::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+	}
+
+	.level-card:hover .level-title {
 		color: #4ecb71;
 	}
 
+	.level-title:focus-visible {
+		outline: none;
+	}
+
+	.level-card:has(.level-title:focus-visible) {
+		outline: 3px solid #ffd23f;
+		outline-offset: 2px;
+	}
+
 	.share-level-button {
+		/* Above the title's stretched link layer, so Share stays its own
+		   target rather than being swallowed by the card-wide link. */
+		position: relative;
+		z-index: 1;
 		flex-shrink: 0;
 		font-family: 'Baloo 2', sans-serif;
 		font-weight: 700;
@@ -374,11 +406,14 @@
 		color: #9498d1;
 	}
 
-	.metric-likes {
-		color: #4ecb71;
+	.metric-time {
+		color: #ffd23f;
+		font-weight: 700;
 	}
 
-	.metric-dislikes {
+	.metric-uncleared {
 		color: #ff8a7a;
+		font-weight: 800;
+		letter-spacing: 0.04em;
 	}
 </style>

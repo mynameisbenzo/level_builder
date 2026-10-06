@@ -34,10 +34,9 @@
 	// showing, i.e. the game is still in progress.
 	let resultOutcome: 'won' | 'died' | null = $state(null);
 
-	// Ghost: the fastest recorded clear of this level's current version,
-	// replayed alongside the player. Updated in place when a clear beats
-	// it, so "Replay" races the new record straight away.
-	let levelVersion = 0;
+	// Ghost: the fastest recorded clear of this level, replayed alongside
+	// the player. Updated in place when a clear beats it, so "Replay"
+	// races the new record straight away.
 	let ghost: GhostRun | null = null;
 	// What the result modal shows for a win: this attempt's time and the
 	// standing record (isNew when this very run just set it).
@@ -58,7 +57,6 @@
 
 		const result = await withSession((token) =>
 			submitLevelGhost(slug, token, {
-				version: levelVersion,
 				durationMs: run.durationMs,
 				frames: run.frames
 			})
@@ -76,7 +74,6 @@
 				username: auth.user.username,
 				durationMs: run.durationMs,
 				sampleIntervalMs: GHOST_SAMPLE_INTERVAL_MS,
-				version: levelVersion,
 				frames: run.frames
 			};
 		} else {
@@ -133,14 +130,7 @@
 			return;
 		}
 
-		levelVersion = result.version ?? 0;
-		// A ghost recorded against a different version than the one just
-		// loaded (republished between the two requests) would run through
-		// walls - better none than that.
-		ghost =
-			ghostResult.success && ghostResult.ghost && ghostResult.ghost.version === result.version
-				? ghostResult.ghost
-				: null;
+		ghost = ghostResult.success ? (ghostResult.ghost ?? null) : null;
 
 		title = result.title ?? '';
 		ownerUsername = result.ownerUsername ?? '';

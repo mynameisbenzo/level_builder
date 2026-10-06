@@ -2,7 +2,7 @@ from app.models.endless import EndlessRun
 from app.services.endless import current_entry
 
 # What the editor's own default starting character is (see
-# default_level_content) - used only if a published version's content
+# default_level_content) - used only if a published level's content
 # somehow lacks the field.
 _FALLBACK_PLAYER_COLOR = "green"
 
@@ -17,7 +17,7 @@ def current_level_to_dict(entry) -> dict | None:
     if entry is None:
         return None
 
-    content = entry.level_version.content or {}
+    content = entry.level.draft_content or {}
     return {
         "slug": entry.level.slug,
         "title": entry.level.title,

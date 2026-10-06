@@ -32,11 +32,9 @@
 	let levels: LevelListItem[] = $state([]);
 
 	// Split for the Published/Drafts tabs - a level is published the
-	// moment it's been published at least once (has_been_published),
-	// regardless of its current visibility_state (still true while
-	// 'testing', i.e. edited since the last publish but not
-	// republished yet) - matches the same has_been_published check
-	// already used for the Share button and metrics below. A deleted
+	// moment it's been published (has_been_published), and stays so for
+	// good: publishing is final. Matches the same has_been_published
+	// check already used for the Share button and metrics below. A deleted
 	// draft (never published) is hard-deleted server-side and never
 	// shows up here at all (see DELETE /api/levels/<slug>), so every
 	// is_deleted row in this list already has has_been_published true
@@ -408,13 +406,15 @@
 							<div class="level-row">
 								{#if level.is_deleted}
 									<span class="level-title deleted">{level.title}</span>
+								{:else if level.has_been_published}
+									<!-- Published levels are final - there's nothing to edit, so
+									     the title opens the level to play instead. -->
+									<a class="level-title" href="/play/{level.id}">{level.title}</a>
 								{:else}
 									<a class="level-title" href="/edit/{level.id}">{level.title}</a>
 								{/if}
-								{#if level.is_deleted || level.visibility_state === 'testing'}
-									<span class="visibility-badge" class:deleted={level.is_deleted}>
-										{level.is_deleted ? 'deleted' : 'testing'}
-									</span>
+								{#if level.is_deleted}
+									<span class="visibility-badge deleted">deleted</span>
 								{/if}
 							</div>
 

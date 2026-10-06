@@ -30,9 +30,10 @@
 	// ever changed by the publish dialog below - naming a level happens
 	// at publish time, not as a free-floating field while editing.
 	let title = $state('');
-	// A level is named exactly once, at its first publish, and locked
-	// from then on - so this decides whether Publish asks for a name
-	// (first time) or just publishes (every time after).
+	// A level is named exactly once, at its publish, and locked from then
+	// on. Publishing is final, so a level that has been published never
+	// loads in this editor at all (see onMount) - this stays false for
+	// every level that's actually being edited.
 	let hasBeenPublished = $state(false);
 	let visibilityState: 'draft' | 'testing' | 'published' | 'unpublished' = $state('draft');
 	let hasBeenBeaten = $state(false);
@@ -247,6 +248,14 @@
 			return;
 		}
 
+		// Publishing is final - a published level is frozen, so there is
+		// nothing to edit. (To make a variation, remix it.)
+		if (result.level.has_been_published) {
+			loadStatus = 'error';
+			loadError = 'This level has been published, so it can no longer be edited.';
+			return;
+		}
+
 		title = result.level.title;
 		hasBeenPublished = result.level.has_been_published;
 		visibilityState = result.level.visibility_state;
@@ -278,7 +287,7 @@
 	/**
 	 * Copies the level's public /play link to the clipboard. Only shown
 	 * once hasBeenPublished is true (see the button markup below) - a
-	 * level that's never been published has no live LevelVersion yet, so
+	 * level that's never been published isn't playable yet, so
 	 * /play/<slug> would just 404 for anyone who followed the link (see
 	 * get_level_for_play's own docstring in the backend).
 	 */
@@ -367,12 +376,7 @@
 	}
 
 	function handlePublishClick() {
-		if (hasBeenPublished) {
-			// Already named, and the name is locked - nothing to ask.
-			void runPublish();
-		} else {
-			openPublishDialog();
-		}
+		openPublishDialog();
 	}
 
 	function openPublishDialog() {
@@ -406,11 +410,11 @@
 
 	/**
 	 * Does the actual publish call and applies its result to the page.
-	 * newTitle is only passed for a level's first publish - a published
-	 * level's name is locked, so the server rejects one on any later
-	 * publish. Returns whether it succeeded.
+	 * Publishing is final, so this only ever runs once per level - the
+	 * name is required and locked from then on. Returns whether it
+	 * succeeded.
 	 */
-	async function runPublish(newTitle?: string): Promise<boolean> {
+	async function runPublish(newTitle: string): Promise<boolean> {
 		const token = auth.accessToken;
 		if (!token || !game) {
 			goto('/login');
@@ -509,6 +513,9 @@
 		const published = await runPublish(newTitle);
 		if (published || publishStatus !== 'error') {
 			publishDialog.close();
+			// The level is final now - there is nothing left to do in
+			// the editor, so send the creator to where it lives.
+			if (published) void goto('/profile');
 		} else {
 			publishTitleInput.focus();
 		}
@@ -602,7 +609,8 @@
 		<form onsubmit={handlePublishSubmit}>
 			<h2 id="publish-dialog-heading">Name your level</h2>
 			<p class="dialog-note">
-				Choose carefully - once a level is published, its name can't be changed.
+				Choose carefully - once a level is published, it's final: its name and its layout can't
+				be changed.
 			</p>
 
 			<input

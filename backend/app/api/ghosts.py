@@ -3,7 +3,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.api.levels import _verification_gate
 from app.extensions import db
-from app.models.level import Level, LevelVersion
+from app.models.level import Level
 from app.models.user import User
 from app.services import ghosts as ghost_service
 from app.services.ghosts import GhostError
@@ -21,7 +21,7 @@ def handle_ghost_error(error: GhostError):
 
 def _live_level_or_404(slug: str) -> Level:
     level = Level.query.filter_by(slug=slug).first()
-    if level is None or level.latest_published_version_id is None or level.is_deleted:
+    if level is None or not level.is_published or level.is_deleted:
         raise GhostError("level_not_found", "level not found", 404)
     return level
 
@@ -30,25 +30,23 @@ def _live_level_or_404(slug: str) -> Level:
 def get_level_ghost(slug):
     """
     Public, unauthenticated - fetched alongside a level when it's played.
-    `ghost` is null when the current version has no recorded clear yet.
+    `ghost` is null when the level has no recorded clear yet.
     """
     level = _live_level_or_404(slug)
-    version = db.session.get(LevelVersion, level.latest_published_version_id)
 
-    ghost = ghost_service.get_ghost(version.id)
+    ghost = ghost_service.get_ghost(level.id)
     if ghost is None:
         return jsonify({"ghost": None}), 200
 
-    return jsonify({"ghost": ghost_service.ghost_to_dict(ghost, version)}), 200
+    return jsonify({"ghost": ghost_service.ghost_to_dict(ghost)}), 200
 
 
 @ghosts_bp.post("/<string:slug>/ghost")
 @jwt_required()
 def submit_level_ghost(slug):
     """
-    Offers a just-cleared run as the level's ghost. Body: `version` (the
-    version number the player was playing, from GET .../play),
-    `duration_ms`, and `frames` (see app/services/ghosts.py). Always 200
+    Offers a just-cleared run as the level's ghost. Body: `duration_ms`
+    and `frames` (see app/services/ghosts.py). Always 200
     on a valid run: `is_record` says whether it became the ghost, and
     `record` is whoever holds the record afterwards - what the result
     modal compares the player's time against.
@@ -68,7 +66,6 @@ def submit_level_ghost(slug):
     is_record, ghost = ghost_service.submit_run(
         user,
         level,
-        payload.get("version"),
         payload.get("duration_ms"),
         payload.get("frames"),
     )

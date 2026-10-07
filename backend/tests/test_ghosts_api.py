@@ -96,7 +96,10 @@ def test_no_ghost_until_someone_clears_it():
     _app, client, _token, level = _world()
     response = client.get(f"/api/levels/{level.slug}/ghost")
     assert response.status_code == 200
-    assert response.get_json() == {"ghost": None}
+    assert response.get_json() == {
+        "ghost": None,
+        "ghosts": {"full": None, "before": None, "after": None},
+    }
 
 
 def test_first_clear_becomes_the_ghost_and_is_public():
@@ -114,6 +117,7 @@ def test_first_clear_becomes_the_ghost_and_is_public():
     assert fetched["duration_ms"] == 2000
     assert fetched["sample_interval_ms"] == 50
     assert "version" not in fetched
+    assert fetched["kind"] == "full"
     assert len(fetched["frames"]) == 41
 
 
@@ -223,7 +227,7 @@ def test_deleted_holder_does_not_block_a_new_record():
     runner.is_deleted = True
     db.session.commit()
 
-    assert client.get(f"/api/levels/{level.slug}/ghost").get_json() == {"ghost": None}
+    assert client.get(f"/api/levels/{level.slug}/ghost").get_json()["ghost"] is None
     response = _submit(client, other_token, level.slug, _run(4000))
     assert response.get_json()["is_record"] is True
     assert response.get_json()["record"]["username"] == "newcomer"
@@ -337,3 +341,183 @@ def test_owner_list_carries_the_best_time_too():
     response = client.get("/api/levels", headers=_headers(creator_token))
     assert response.status_code == 200
     assert response.get_json()[0]["best_time_ms"] == 2000
+    
+
+
+# ── Checkpoint ghosts (full / before / after) ───────────────────────────
+
+CHECKPOINT = (1200, 48)
+
+
+def _checkpoint_level(owner: User) -> Level:
+    level = _live_level(owner)
+    level.draft_content = {
+        **level.draft_content,
+        "checkpointObjects": [{"x": CHECKPOINT[0], "y": CHECKPOINT[1]}],
+    }
+    db.session.commit()
+    return level
+
+
+def _before_run(duration_ms=2000):
+    """Spawn (48, 48) to the checkpoint: 40 steps of 28px ends at x=1168."""
+    count = duration_ms // 50 + 1
+    step = (CHECKPOINT[0] - 48) // (count - 1)
+    return {
+        "duration_ms": duration_ms,
+        "kind": "before",
+        "frames": [[48 + i * step, 48, 0] for i in range(count)],
+    }
+
+
+def _after_run(duration_ms=2000):
+    count = duration_ms // 50 + 1
+    return {
+        "duration_ms": duration_ms,
+        "kind": "after",
+        "frames": [[CHECKPOINT[0] + i * 10, CHECKPOINT[1], 0] for i in range(count)],
+    }
+
+
+def _checkpoint_world():
+    app, client = _client()
+    token, _ = _player(app, client, "runner", "r@example.com")
+    _creator_token, creator = _player(app, client, "creator", "c@example.com")
+    return app, client, token, _checkpoint_level(creator)
+
+
+def test_before_and_after_ghosts_are_stored_separately_from_full():
+    _app, client, token, level = _checkpoint_world()
+
+    assert _submit(client, token, level.slug, _before_run(2000)).get_json()["is_record"] is True
+    assert _submit(client, token, level.slug, _after_run(3000)).get_json()["is_record"] is True
+    assert _submit(client, token, level.slug, _run(9000)).get_json()["is_record"] is True
+
+    assert LevelGhost.query.count() == 3
+    ghosts = client.get(f"/api/levels/{level.slug}/ghost").get_json()["ghosts"]
+    assert ghosts["before"]["duration_ms"] == 2000
+    assert ghosts["after"]["duration_ms"] == 3000
+    assert ghosts["full"]["duration_ms"] == 9000
+    assert {key: ghosts[key]["kind"] for key in ghosts} == {
+        "full": "full",
+        "before": "before",
+        "after": "after",
+    }
+    # The legacy `ghost` key still carries the full ghost.
+    assert client.get(f"/api/levels/{level.slug}/ghost").get_json()["ghost"]["duration_ms"] == 9000
+
+
+def test_each_kind_has_its_own_holder_and_fastest_time():
+    app, client, token, level = _checkpoint_world()
+    other_token, _ = _player(app, client, "speedy", "s@example.com")
+
+    _submit(client, token, level.slug, _before_run(2000))
+    _submit(client, token, level.slug, _after_run(3000))
+    # speedy is faster after the checkpoint, slower before it.
+    slow_before = _submit(client, other_token, level.slug, _before_run(2500)).get_json()
+    fast_after = _submit(client, other_token, level.slug, _after_run(2000)).get_json()
+
+    assert slow_before["is_record"] is False
+    assert fast_after["is_record"] is True
+    ghosts = client.get(f"/api/levels/{level.slug}/ghost").get_json()["ghosts"]
+    assert ghosts["before"]["username"] == "runner"
+    assert ghosts["after"]["username"] == "speedy"
+
+
+def test_the_record_is_the_fastest_route():
+    app, client, token, level = _checkpoint_world()
+    other_token, _ = _player(app, client, "speedy", "s@example.com")
+
+    _submit(client, token, level.slug, _before_run(2000))
+    after = _submit(client, token, level.slug, _after_run(3000)).get_json()
+    # Pair: runner + runner = 5000ms.
+    assert after["record"] == {"username": "runner", "duration_ms": 5000}
+
+    # A slower full run does not beat the pair...
+    slow_full = _submit(client, other_token, level.slug, _run(8000)).get_json()
+    assert slow_full["record"] == {"username": "runner", "duration_ms": 5000}
+
+    # ...a faster one does.
+    fast_full = _submit(client, other_token, level.slug, _run(4000)).get_json()
+    assert fast_full["record"] == {"username": "speedy", "duration_ms": 4000}
+
+
+def test_a_pair_from_two_holders_is_credited_to_both():
+    app, client, token, level = _checkpoint_world()
+    other_token, _ = _player(app, client, "speedy", "s@example.com")
+
+    _submit(client, token, level.slug, _before_run(2000))
+    response = _submit(client, other_token, level.slug, _after_run(1000)).get_json()
+
+    assert response["record"] == {"username": "runner & speedy", "duration_ms": 3000}
+
+
+def test_a_lone_before_ghost_falls_back_to_its_own_summary():
+    _app, client, token, level = _checkpoint_world()
+
+    response = _submit(client, token, level.slug, _before_run(2000)).get_json()
+
+    assert response["record"] == {"username": "runner", "duration_ms": 2000}
+
+
+def test_best_time_on_a_level_card_needs_a_complete_route():
+    _app, client, token, level = _checkpoint_world()
+
+    # Only one half so far: no complete route, so no best time yet.
+    _submit(client, token, level.slug, _before_run(2000))
+    assert _creator_levels(client)[0]["best_time_ms"] is None
+
+    # Both halves: the route time is their sum.
+    _submit(client, token, level.slug, _after_run(3000))
+    assert _creator_levels(client)[0]["best_time_ms"] == 5000
+
+    # A faster full run takes over.
+    _submit(client, token, level.slug, _run(4000))
+    assert _creator_levels(client)[0]["best_time_ms"] == 4000
+
+
+def test_before_and_after_are_rejected_on_a_level_without_a_checkpoint():
+    _app, client, token, level = _world()
+
+    for body in (_before_run(), _after_run()):
+        response = _submit(client, token, level.slug, body)
+        assert response.status_code == 400
+        assert response.get_json()["code"] == "invalid_ghost"
+    assert LevelGhost.query.count() == 0
+
+
+def test_an_unknown_kind_is_rejected():
+    _app, client, token, level = _checkpoint_world()
+    body = _run()
+    body["kind"] = "middle"
+
+    response = _submit(client, token, level.slug, body)
+
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "invalid_ghost"
+
+
+def test_an_after_run_must_start_at_the_checkpoint_not_the_spawn():
+    _app, client, token, level = _checkpoint_world()
+    body = _after_run()
+    body["frames"] = [[48 + i * 10, 48, 0] for i in range(41)]
+
+    assert _submit(client, token, level.slug, body).status_code == 400
+
+
+def test_a_before_run_must_start_at_the_spawn_and_end_at_the_checkpoint():
+    _app, client, token, level = _checkpoint_world()
+
+    wrong_start = _before_run()
+    wrong_start["frames"] = [[CHECKPOINT[0] + i * 10, 48, 0] for i in range(41)]
+    assert _submit(client, token, level.slug, wrong_start).status_code == 400
+
+    wrong_end = _before_run()
+    wrong_end["frames"] = [[48 + i * 10, 48, 0] for i in range(41)]  # stops at x=448
+    assert _submit(client, token, level.slug, wrong_end).status_code == 400
+
+
+def test_a_full_run_is_still_accepted_on_a_checkpoint_level():
+    _app, client, token, level = _checkpoint_world()
+
+    assert _submit(client, token, level.slug, _run(2000)).status_code == 200

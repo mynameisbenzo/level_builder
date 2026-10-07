@@ -45,6 +45,16 @@ actually work and the design decisions behind them, and
       toggle for panning around the larger world. Not originally on this
       roadmap - added mid-session as a deliberate scope expansion (see
       [PROJECT.md](PROJECT.md#world-size-and-the-camera)).
+- [x] **Checkpoints (single player).** One per level, placed in the
+      editor's win-condition picker (the flag), available to every
+      account type and limited to one by the save/publish validator.
+      Touching it captures the player's color, held keys and swap-object
+      colors; dying afterwards respawns there with all of that restored
+      and no result modal. Every respawn still counts as a new attempt.
+      A level with a checkpoint keeps up to three ghosts - full, before
+      and after - each with its own holder, and the level record is the
+      fastest route (see [PROJECT.md](PROJECT.md#checkpoints)). Endless
+      mode carries the checkpoint across the new game each death boots.
 
 ## Phase 3 — Level creation, accounts & persistence
 

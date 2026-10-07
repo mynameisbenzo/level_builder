@@ -61,6 +61,16 @@ MAX_GROUND_TILES = 4000
 MAX_CHARACTER_SWAP_OBJECTS = 40
 MAX_DOORS = 4
 MAX_KEYS = 16
+# A level has at most one checkpoint, for every account type.
+MAX_CHECKPOINTS = 1
+
+
+def get_checkpoint(content) -> dict | None:
+    """The level's one checkpoint as {x, y}, or None. Safe on any content shape."""
+    objects = (content or {}).get("checkpointObjects")
+    if isinstance(objects, list) and objects and isinstance(objects[0], dict):
+        return objects[0]
+    return None
 
 
 def default_level_content() -> dict:
@@ -84,6 +94,7 @@ def default_level_content() -> dict:
         "characterSwapObjects": [],
         "doorObjects": [],
         "keyObjects": [],
+        "checkpointObjects": [],
     }
 
 
@@ -233,6 +244,25 @@ def _validate_key_objects(value) -> str | None:
 
     return None
 
+def _validate_checkpoint_objects(value) -> str | None:
+    if not isinstance(value, list):
+        return "checkpointObjects must be a list"
+    if len(value) > MAX_CHECKPOINTS:
+        return f"a level can have at most {MAX_CHECKPOINTS} checkpoint"
+
+    for i, obj in enumerate(value):
+        if not isinstance(obj, dict):
+            return f"checkpointObjects[{i}] must be an object"
+
+        error = _validate_xy(obj, f"checkpointObjects[{i}]")
+        if error:
+            return error
+
+        extra_keys = set(obj.keys()) - {"x", "y"}
+        if extra_keys:
+            return f"checkpointObjects[{i}] must not have: {', '.join(sorted(extra_keys))}"
+
+    return None
 
 def validate_level_content(content) -> tuple[bool, str | None]:
     """
@@ -272,5 +302,12 @@ def validate_level_content(content) -> tuple[bool, str | None]:
         error = validator(content.get(key))
         if error:
             return False, error
+
+    # Optional like backgroundTheme: checkpoints shipped after levels
+    # already existed, so a level saved before then has no key at all and
+    # simply has no checkpoint. A key that is present is fully validated.
+    error = _validate_checkpoint_objects(content.get("checkpointObjects", []))
+    if error:
+        return False, error
 
     return True, None

@@ -55,6 +55,15 @@ import {
 	type DoorObject
 } from './winConditions';
 import {
+	canPlaceCheckpointAt,
+	CHECKPOINT_INACTIVE_FRAME,
+	CHECKPOINT_OBJECTS_REGISTRY_KEY,
+	clearCheckpointProgress,
+	placeCheckpoint,
+	removeCheckpointAt,
+	type CheckpointObject
+} from './checkpoints';
+import {
 	canPlaceKeyAt,
 	getKeyFrame,
 	KEY_COLORS,
@@ -167,10 +176,12 @@ function createGroupId(): string {
 }
 
 // What's currently armed for placement via the win-condition toolbar -
-// either flavor of door, or one of the four key colors.
+// either flavor of door, one of the four key colors, or the level's
+// (single) checkpoint.
 type PlaceableWinConditionItem =
 	| { kind: 'door'; requiresKey: boolean }
-	| { kind: 'key'; color: KeyColor };
+	| { kind: 'key'; color: KeyColor }
+	| { kind: 'checkpoint' };
 
 /**
  * The two top-level interaction modes, mutually exclusive by design so
@@ -421,6 +432,7 @@ export class LevelEditorScene extends Phaser.Scene {
 	}[] = [];
 	private placedDoorImages: Phaser.GameObjects.Image[] = [];
 	private placedKeyImages: Phaser.GameObjects.Image[] = [];
+	private placedCheckpointImages: Phaser.GameObjects.Image[] = [];
 
 	// Door key-color picker - opened by clicking a placed key-required
 	// door from any non-eraser tool, to choose which key color unlocks
@@ -498,6 +510,10 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.refreshSwapObjectImages();
 		this.refreshDoorImages();
 		this.refreshKeyImages();
+		this.refreshCheckpointImages();
+		// Coming back to the editor ends any test-play, so a checkpoint
+		// reached in it doesn't carry into the next one.
+		clearCheckpointProgress(this.registry);
 
 		const placedObjects =
 			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
@@ -1474,7 +1490,8 @@ export class LevelEditorScene extends Phaser.Scene {
 		const items: PlaceableWinConditionItem[] = [
 			{ kind: 'door', requiresKey: false },
 			{ kind: 'door', requiresKey: true },
-			...KEY_COLORS.map((color): PlaceableWinConditionItem => ({ kind: 'key', color }))
+			...KEY_COLORS.map((color): PlaceableWinConditionItem => ({ kind: 'key', color })),
+			{ kind: 'checkpoint' }
 		];
 		const totalWidth = items.length * swatchSize + (items.length - 1) * spacing;
 		const startX = this.scale.width / 2 - totalWidth / 2 + swatchSize / 2;
@@ -1482,7 +1499,11 @@ export class LevelEditorScene extends Phaser.Scene {
 		this.winConditionSwatches = items.map((item, index) => {
 			const x = startX + index * (swatchSize + spacing);
 			const frame =
-				item.kind === 'door' ? getDoorClosedFrame(item.requiresKey) : getKeyFrame(item.color);
+				item.kind === 'door'
+					? getDoorClosedFrame(item.requiresKey)
+					: item.kind === 'key'
+						? getKeyFrame(item.color)
+						: CHECKPOINT_INACTIVE_FRAME;
 
 			const border = this.add
 				.rectangle(x, y, swatchSize + 6, swatchSize + 6)
@@ -1514,7 +1535,8 @@ export class LevelEditorScene extends Phaser.Scene {
 		if (a.kind === 'key' && b.kind === 'key') {
 			return a.color === b.color;
 		}
-		return false;
+		// There is only one checkpoint "flavor".
+		return a.kind === 'checkpoint' && b.kind === 'checkpoint';
 	}
 
 	private refreshWinConditionToolbarVisibility() {
@@ -1549,6 +1571,12 @@ export class LevelEditorScene extends Phaser.Scene {
 		return (this.registry.get(KEY_OBJECTS_REGISTRY_KEY) as KeyObject[] | undefined) ?? [];
 	}
 
+	private getPlacedCheckpoints(): CheckpointObject[] {
+		return (
+			(this.registry.get(CHECKPOINT_OBJECTS_REGISTRY_KEY) as CheckpointObject[] | undefined) ?? []
+		);
+	}
+
 	/**
 	 * Every grid position currently occupied by anything - ground tiles,
 	 * swap objects, doors, and keys - used to check whether a new door
@@ -1574,6 +1602,9 @@ export class LevelEditorScene extends Phaser.Scene {
 		for (const key of this.getPlacedKeys()) {
 			keys.add(tileKey(key.x, key.y));
 		}
+		for (const checkpoint of this.getPlacedCheckpoints()) {
+			keys.add(tileKey(checkpoint.x, checkpoint.y));
+		}
 		return keys;
 	}
 
@@ -1584,9 +1615,68 @@ export class LevelEditorScene extends Phaser.Scene {
 
 		if (this.selectedWinConditionItem.kind === 'door') {
 			this.placeDoorAtPointer(pointer, this.selectedWinConditionItem.requiresKey);
-		} else {
+		} else if (this.selectedWinConditionItem.kind === 'key') {
 			this.placeKeyAtPointer(pointer, this.selectedWinConditionItem.color);
+		} else {
+			this.placeCheckpointAtPointer(pointer);
 		}
+	}
+
+	/**
+	 * A level has at most one checkpoint, so placing one when there's
+	 * already one moves it to the new cell instead of adding a second (the
+	 * backend's validate_level_content rejects more than one).
+	 */
+	private placeCheckpointAtPointer(pointer: Phaser.Input.Pointer) {
+		const x = snapToGrid(pointer.worldX, GRID_SIZE);
+		const y = snapToGrid(pointer.worldY, GRID_SIZE);
+
+		if (!canPlaceCheckpointAt(x, y, this.getOccupiedPositionKeys())) {
+			return;
+		}
+
+		this.registry.set(CHECKPOINT_OBJECTS_REGISTRY_KEY, placeCheckpoint(x, y));
+
+		this.selectedWinConditionItem = null;
+		this.refreshCheckpointImages();
+		this.refreshWinConditionToolbarVisibility();
+	}
+
+	/**
+	 * Destroys and re-renders the placed checkpoint - a single static,
+	 * inactive flag. Touching it and respawning at it are Play-mode,
+	 * runtime concepts (see PlatformerScene).
+	 */
+	private refreshCheckpointImages() {
+		for (const image of this.placedCheckpointImages) {
+			image.destroy();
+		}
+
+		this.placedCheckpointImages = this.getPlacedCheckpoints().map((checkpoint) => {
+			const image = this.add
+				.image(checkpoint.x, checkpoint.y, TILES_ATLAS_KEY, CHECKPOINT_INACTIVE_FRAME)
+				.setDisplaySize(GRID_SIZE, GRID_SIZE)
+				.setInteractive();
+
+			image.on('pointerdown', () => {
+				if (this.getEditorTool() === 'eraser') {
+					this.eraseCheckpointAt(checkpoint.x, checkpoint.y);
+				}
+			});
+
+			return image;
+		});
+	}
+
+	private eraseCheckpointAt(x: number, y: number) {
+		const existing = this.getPlacedCheckpoints();
+		const updated = removeCheckpointAt(existing, x, y);
+		if (updated.length === existing.length) {
+			return;
+		}
+		this.registry.set(CHECKPOINT_OBJECTS_REGISTRY_KEY, updated);
+		this.refreshCheckpointImages();
+		this.refreshWinConditionToolbarVisibility();
 	}
 
 	private placeDoorAtPointer(pointer: Phaser.Input.Pointer, requiresKey: boolean) {

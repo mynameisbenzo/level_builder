@@ -1,11 +1,14 @@
 from app.services.level_content import (
     GRID_SIZE,
     MAX_CHARACTER_SWAP_OBJECTS,
+    MAX_CHECKPOINTS,
     MAX_DOORS,
     MAX_GROUND_TILES,
     MAX_KEYS,
     WORLD_HEIGHT,
     WORLD_WIDTH,
+    default_level_content,
+    get_checkpoint,
     validate_level_content,
 )
 
@@ -348,3 +351,73 @@ def test_a_bare_multiple_of_grid_size_is_rejected_not_accepted():
     is_valid, error = validate_level_content(_minimal_valid_content(placedObjects=[tile]))
     assert is_valid is False
     assert "grid" in error
+    
+
+
+# ── Checkpoints ─────────────────────────────────────────────────────────
+
+
+def _checkpoint(index_x: int = 5, index_y: int = 5) -> dict:
+    return {"x": _cell_center(index_x), "y": _cell_center(index_y)}
+
+
+def test_content_without_a_checkpoint_key_still_passes():
+    # Levels saved before checkpoints existed have no checkpointObjects.
+    content = _minimal_valid_content()
+    assert "checkpointObjects" not in content
+    assert validate_level_content(content) == (True, None)
+
+
+def test_default_level_content_has_no_checkpoint_and_is_valid():
+    content = default_level_content()
+    assert content["checkpointObjects"] == []
+    assert validate_level_content(content) == (True, None)
+
+
+def test_one_checkpoint_passes():
+    content = _minimal_valid_content(checkpointObjects=[_checkpoint()])
+    assert validate_level_content(content) == (True, None)
+    assert MAX_CHECKPOINTS == 1
+
+
+def test_a_second_checkpoint_is_rejected():
+    content = _minimal_valid_content(checkpointObjects=[_checkpoint(5), _checkpoint(8)])
+    is_valid, error = validate_level_content(content)
+    assert is_valid is False
+    assert "at most 1 checkpoint" in error
+
+
+def test_checkpoint_objects_must_be_a_list():
+    is_valid, error = validate_level_content(_minimal_valid_content(checkpointObjects={"x": 16, "y": 16}))
+    assert is_valid is False
+    assert "checkpointObjects must be a list" in error
+
+
+def test_checkpoint_off_the_grid_is_rejected():
+    is_valid, error = validate_level_content(
+        _minimal_valid_content(checkpointObjects=[{"x": 64, "y": 48}])
+    )
+    assert is_valid is False
+    assert "checkpointObjects[0]" in error
+
+
+def test_checkpoint_outside_the_world_is_rejected():
+    is_valid, error = validate_level_content(
+        _minimal_valid_content(checkpointObjects=[{"x": WORLD_WIDTH + 16, "y": 48}])
+    )
+    assert is_valid is False
+
+
+def test_checkpoint_with_extra_fields_is_rejected():
+    is_valid, error = validate_level_content(
+        _minimal_valid_content(checkpointObjects=[{**_checkpoint(), "color": "red"}])
+    )
+    assert is_valid is False
+    assert "must not have" in error
+
+
+def test_get_checkpoint_reads_the_one_checkpoint_or_none():
+    assert get_checkpoint({"checkpointObjects": [{"x": 16, "y": 16}]}) == {"x": 16, "y": 16}
+    assert get_checkpoint({"checkpointObjects": []}) is None
+    assert get_checkpoint({}) is None
+    assert get_checkpoint(None) is None

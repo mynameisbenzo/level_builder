@@ -214,6 +214,34 @@ Pressing Up near a key-required door that hasn't been unlocked yet does
 nothing special - it just jumps normally, rather than silently failing
 to open.
 
+## Checkpoints
+
+A level can hold one checkpoint (a flag, placed from the editor's
+win-condition picker; placing a second moves the first). It is pure level
+design data - `checkpointObjects` in the level content, validated to at
+most one - so every account type can use it.
+
+- **Touch.** Distance-based like keys and doors. It captures a
+  `CheckpointState` (player color, collected key positions, swap-object
+  colors) in the Phaser game registry, which survives `scene.restart()`.
+- **Respawn.** Dying after the touch restarts the scene at the flag with
+  that state restored. On `/play` there is no result modal and the page
+  records a new attempt, exactly as "Play Again" does. Before the touch,
+  the old modal flow is unchanged. In the editor's test play a death after
+  the touch restarts in place. A win, or the editor's `create()`, clears
+  the progress.
+- **Endless.** Each death boots a brand-new game, so the page carries the
+  checkpoint across the restart and drops it on skip, clear and game over.
+- **Ghosts.** Three kinds, one row per (level, kind): `full` (spawn to
+  finish, never touched the flag), `before` (spawn to the touch) and
+  `after` (flag to finish). Each is one unbroken no-death stretch. The
+  level record is the fastest route: the full ghost, or before + after
+  (credited to both holders when they differ; the full ghost wins a tie).
+  A spawn-start player follows the route with the lower combined time, and
+  the before ghost hands over to the after ghost when the player themselves
+  touches the flag. The backend rejects before/after for levels with no
+  checkpoint and checks the start/end positions (64 px tolerance).
+
 ## Accounts, roles & permissions
 
 Two signup paths - verified email (magic-link/passwordless, not

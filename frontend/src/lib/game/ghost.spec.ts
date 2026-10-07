@@ -1,12 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+	chooseGhostRoute,
+	clearedRunsDurationMs,
 	decodeGhostState,
+	emptyGhostSet,
 	encodeGhostState,
 	formatRunTime,
 	GHOST_POSES,
 	GhostRecorder,
+	routeRecord,
 	sampleGhost,
-	type GhostFrame
+	type GhostFrame,
+	type GhostRun
 } from './ghost';
 import { PLAYER_COLORS } from './playerColor';
 
@@ -149,5 +154,111 @@ describe('formatRunTime', () => {
 		expect(formatRunTime(undefined as unknown as number)).toBe('--');
 		expect(formatRunTime(NaN)).toBe('--');
 		expect(formatRunTime(Infinity)).toBe('--');
+	});
+});
+
+
+function ghostRun(username: string, durationMs: number): GhostRun {
+	return { username, durationMs, sampleIntervalMs: 50, frames: [[0, 0, 0]] };
+}
+
+describe('clearedRunsDurationMs', () => {
+	const run = (durationMs: number) => ({ durationMs, frames: [] as GhostFrame[] });
+
+	it('is the full run\'s duration', () => {
+		expect(clearedRunsDurationMs({ full: run(4000) })).toBe(4000);
+	});
+
+	it('adds the two halves of a run through a checkpoint', () => {
+		expect(clearedRunsDurationMs({ before: run(1500), after: run(2500) })).toBe(4000);
+	});
+
+	it('is just the final stretch if the first half is missing', () => {
+		expect(clearedRunsDurationMs({ after: run(2500) })).toBe(2500);
+	});
+});
+
+describe('routeRecord', () => {
+	it('is null with nothing cleared', () => {
+		expect(routeRecord(emptyGhostSet())).toBeNull();
+	});
+
+	it('is the full ghost alone', () => {
+		expect(routeRecord({ ...emptyGhostSet(), full: ghostRun('a', 4000) })).toEqual({
+			username: 'a',
+			durationMs: 4000
+		});
+	});
+
+	it('adds before and after, crediting both holders', () => {
+		const set = { ...emptyGhostSet(), before: ghostRun('a', 1000), after: ghostRun('b', 2000) };
+		expect(routeRecord(set)).toEqual({ username: 'a & b', durationMs: 3000 });
+	});
+
+	it('credits one holder once when they hold both halves', () => {
+		const set = { ...emptyGhostSet(), before: ghostRun('a', 1000), after: ghostRun('a', 2000) };
+		expect(routeRecord(set)?.username).toBe('a');
+	});
+
+	it('needs both halves - one alone is not a route', () => {
+		expect(routeRecord({ ...emptyGhostSet(), before: ghostRun('a', 1000) })).toBeNull();
+		expect(routeRecord({ ...emptyGhostSet(), after: ghostRun('a', 1000) })).toBeNull();
+	});
+
+	it('takes the faster of the full ghost and the pair, preferring full on a tie', () => {
+		const pair = { before: ghostRun('a', 1000), after: ghostRun('b', 2000) };
+		expect(routeRecord({ full: ghostRun('c', 2500), ...pair })).toEqual({
+			username: 'c',
+			durationMs: 2500
+		});
+		expect(routeRecord({ full: ghostRun('c', 3500), ...pair })?.durationMs).toBe(3000);
+		expect(routeRecord({ full: ghostRun('c', 3000), ...pair })?.username).toBe('c');
+	});
+});
+
+describe('chooseGhostRoute', () => {
+	it('is null when there are no ghosts', () => {
+		expect(chooseGhostRoute(emptyGhostSet())).toBeNull();
+	});
+
+	it('follows the full ghost when it is all there is', () => {
+		const full = ghostRun('a', 4000);
+		expect(chooseGhostRoute({ ...emptyGhostSet(), full })).toEqual({ kind: 'full', full });
+	});
+
+	it('follows the pair when it is all there is', () => {
+		const before = ghostRun('a', 1000);
+		const after = ghostRun('b', 2000);
+		expect(chooseGhostRoute({ ...emptyGhostSet(), before, after })).toEqual({
+			kind: 'split',
+			before,
+			after
+		});
+	});
+
+	it('follows whichever route has the lower combined time', () => {
+		const before = ghostRun('a', 1000);
+		const after = ghostRun('b', 2000);
+		const slowFull = ghostRun('c', 3500);
+		const fastFull = ghostRun('c', 2500);
+
+		expect(chooseGhostRoute({ full: slowFull, before, after })).toEqual({
+			kind: 'split',
+			before,
+			after
+		});
+		expect(chooseGhostRoute({ full: fastFull, before, after })).toEqual({
+			kind: 'full',
+			full: fastFull
+		});
+	});
+
+	it('still follows a lone half when no route is complete', () => {
+		const after = ghostRun('b', 2000);
+		expect(chooseGhostRoute({ ...emptyGhostSet(), after })).toEqual({
+			kind: 'split',
+			before: null,
+			after
+		});
 	});
 });

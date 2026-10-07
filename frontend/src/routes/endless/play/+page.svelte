@@ -21,7 +21,8 @@
 	} from '$lib/endlessApi';
 	import { withSession } from '$lib/endlessSession';
 	import { createGameConfig } from '$lib/game/gameConfig';
-	import type { GhostRun, RecordedRun } from '$lib/game/ghost';
+	import { readCheckpointCarry, type CheckpointCarry } from '$lib/game/checkpoints';
+	import { emptyGhostSet, GHOST_KINDS, type ClearedRuns, type GhostSet } from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
@@ -53,9 +54,13 @@
 	let retryAction = $state<(() => void) | null>(null);
 
 	// The level currently being played - what a cleared run's ghost
-	// submission is filed under - and the ghost (fastest clear) it races.
+	// submission is filed under - and the ghosts (fastest clears) it races.
 	let currentSlug = '';
-	let currentGhost: GhostRun | null = null;
+	let currentGhosts: GhostSet = emptyGhostSet();
+	// A checkpoint the player reached on a level they then died on. Every
+	// death boots a brand-new game, so it's carried here between them and
+	// seeded back in - for the same level only (see startLevel).
+	let checkpointCarry: { slug: string; carry: CheckpointCarry } | null = null;
 
 	let gameContainer: HTMLDivElement | undefined = $state();
 	let game: Phaser.Game | undefined;
@@ -127,6 +132,7 @@
 
 	function showGameOver() {
 		teardownGame();
+		checkpointCarry = null;
 		++generation;
 		phase = 'gameover';
 	}
@@ -163,7 +169,7 @@
 		}
 
 		currentSlug = level.slug;
-		currentGhost = ghostResult.success ? (ghostResult.ghost ?? null) : null;
+		currentGhosts = ghostResult.success ? (ghostResult.ghosts ?? emptyGhostSet()) : emptyGhostSet();
 
 		adoptRun(begun.data);
 		if (!begun.data.is_active) {
@@ -182,7 +188,13 @@
 			createGameConfig(gameContainer, {
 				startMode: 'play',
 				content: content.content,
-				ghost: currentGhost ?? undefined
+				ghosts: currentGhosts,
+				// A death restarts the same level at its checkpoint if it
+				// was reached; a different level starts clean.
+				checkpoint:
+					checkpointCarry && checkpointCarry.slug === level.slug
+						? checkpointCarry.carry
+						: undefined
 			})
 		);
 		game.events.on(LEVEL_BEATEN_EVENT, handleBeaten);
@@ -204,15 +216,23 @@
 		await withSession((token) => sendEndlessHeartbeat(token));
 	}
 
-	/** Best-effort: offers a cleared run as the level's ghost; the backend keeps it only if it's the fastest. */
-	function submitGhost(run: RecordedRun) {
+	/**
+	 * Best-effort: offers each stretch of a cleared run as the level's
+	 * ghost of that kind (one full run, or a before and an after half
+	 * through a checkpoint); the backend keeps each only if it's the fastest.
+	 */
+	function submitGhosts(cleared: ClearedRuns) {
 		const slug = currentSlug;
-		void withSession((token) =>
-			submitLevelGhost(slug, token, { durationMs: run.durationMs, frames: run.frames })
-		);
+		for (const kind of GHOST_KINDS) {
+			const run = cleared[kind];
+			if (!run || run.frames.length === 0) continue;
+			void withSession((token) =>
+				submitLevelGhost(slug, token, { durationMs: run.durationMs, frames: run.frames }, kind)
+			);
+		}
 	}
 
-	async function handleBeaten(run?: RecordedRun) {
+	async function handleBeaten(cleared?: ClearedRuns) {
 		if (phase !== 'playing') return;
 		const myGeneration = ++generation;
 		teardownGame();
@@ -220,7 +240,9 @@
 		// Only the first report carries the run - a retry of a failed
 		// clear report (see handleBeatenRetry) has none, and was already
 		// submitted the first time.
-		if (run) submitGhost(run);
+		if (cleared) submitGhosts(cleared);
+		// The level is done; the next one starts from its own spawn.
+		checkpointCarry = null;
 
 		const result = await api(reportEndlessClear);
 		if (destroyed || generation !== myGeneration || result === null) return;
@@ -243,6 +265,11 @@
 	async function handleDied() {
 		if (phase !== 'playing') return;
 		const myGeneration = ++generation;
+		// Remember a reached checkpoint before the game (and its registry)
+		// is torn down, so the level restarts there - the death still
+		// costs a life like any other.
+		const carry = game ? readCheckpointCarry(game.registry) : null;
+		checkpointCarry = carry ? { slug: currentSlug, carry } : null;
 		teardownGame();
 
 		// Back to the same screen as before the attempt, still showing
@@ -306,6 +333,9 @@
 
 		const myGeneration = ++generation;
 		teardownGame();
+		// Skipping moves on to a different level - a checkpoint reached
+		// on this one doesn't follow the player there.
+		checkpointCarry = null;
 		phase = 'interstitial';
 		hit = false;
 		// Keep showing the level being skipped while the counter ticks.

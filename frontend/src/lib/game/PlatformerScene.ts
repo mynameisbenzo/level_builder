@@ -30,6 +30,9 @@ import {
  * during a long editing session (see gameConfig.ts).
  */
 export const LEVEL_BEATEN_EVENT = 'level-beaten';
+// The event carries the playthrough's ClearedRuns (see ghost.ts): a full
+// run, or - on a level whose checkpoint was reached - the spawn-to-
+// checkpoint stretch and the final checkpoint-to-finish stretch.
 
 /**
  * Same game-wide emission pattern as LEVEL_BEATEN_EVENT, for the other
@@ -92,13 +95,32 @@ import {
 	setPlayerWalkAnimationColor
 } from './playerPose';
 import {
+	chooseGhostRoute,
 	decodeGhostState,
+	emptyGhostSet,
 	encodeGhostState,
-	GHOST_REGISTRY_KEY,
+	GHOSTS_REGISTRY_KEY,
 	GhostRecorder,
 	sampleGhost,
-	type GhostRun
+	type ClearedRuns,
+	type GhostKind,
+	type GhostRun,
+	type GhostSet
 } from './ghost';
+import {
+	CHECKPOINT_ACTIVE_FRAMES,
+	CHECKPOINT_ANIMATION_INTERVAL_MS,
+	CHECKPOINT_INACTIVE_FRAME,
+	CHECKPOINT_OBJECTS_REGISTRY_KEY,
+	clearCheckpointProgress,
+	getCheckpointRespawn,
+	isNearCheckpoint,
+	readCheckpointBeforeRun,
+	readCheckpointState,
+	writeCheckpointCarry,
+	type CheckpointObject,
+	type CheckpointState
+} from './checkpoints';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { 
@@ -304,6 +326,13 @@ interface TrackedSwapObject {
 	onCooldown: boolean;
 }
 
+interface TrackedCheckpoint {
+	data: CheckpointObject;
+	sprite: Phaser.GameObjects.Image;
+	/** Flips the flag between its two waving frames once it's active. */
+	animationTimer: Phaser.Time.TimerEvent | null;
+}
+
 interface TrackedSpider {
 	sprite: Phaser.Physics.Arcade.Sprite;
 	direction: 1 | -1;
@@ -359,18 +388,30 @@ export class PlatformerScene extends Phaser.Scene {
 	 * longest delay any currently-collected key could need. */
 	private playerPositionHistory: { x: number; y: number }[] = [];
 	private hasWon = false;
-	/** Time actually spent playing this attempt, in ms - the one clock
-	 * ghost runs are recorded and replayed against. Reset to 0 by every
-	 * create() and advanced only while update() is running normally, so it
-	 * excludes asset loading and the post-win modal delay. */
+	/** Time actually spent playing this stretch, in ms - the clock ghost
+	 * runs are recorded against. A stretch is one unbroken run with no
+	 * death in it: it starts at the spawn (or at the checkpoint after a
+	 * respawn) and restarts at 0 in every create() and again the moment the
+	 * checkpoint is touched. Advanced only while update() is running
+	 * normally, so it excludes asset loading and the post-win modal delay. */
 	private runElapsedMs = 0;
 	private ghostRecorder = new GhostRecorder();
-	/** The fastest recorded clear of this level, if one was seeded into
-	 * the registry (see GHOST_REGISTRY_KEY) - replayed as a translucent
-	 * character alongside the real player. */
-	private ghostRun: GhostRun | null = null;
+	/** The level's ghosts, if any were seeded into the registry (see
+	 * GHOSTS_REGISTRY_KEY) - one is replayed as a translucent character
+	 * alongside the real player. */
+	private ghostSet: GhostSet = emptyGhostSet();
+	/** Which of the ghosts is being replayed right now (null for none). */
+	private ghostStage: GhostKind | null = null;
+	/** Time into the ghost being replayed. Separate from runElapsedMs
+	 * because a full ghost keeps running past the moment the player touches
+	 * the checkpoint, while the after ghost starts over at that moment. */
+	private ghostClockMs = 0;
 	private ghostSprite: Phaser.GameObjects.Sprite | null = null;
 	private ghostLabel: Phaser.GameObjects.Text | null = null;
+	/** The level's checkpoint, if it has one. */
+	private checkpoint: TrackedCheckpoint | null = null;
+	/** Whether the player has touched the checkpoint (or respawned at it). */
+	private checkpointReached = false;
 	/** Only ever set in a public /play/[slug] session - see
 	 * LEVEL_DIED_EVENT. An owner testing in the editor bounces back to
 	 * Edit Mode on death instead and never sets this. */
@@ -457,9 +498,13 @@ export class PlatformerScene extends Phaser.Scene {
 		this.hasDied = false;
 		this.runElapsedMs = 0;
 		this.ghostRecorder.reset();
-		this.ghostRun = null;
+		this.ghostSet = emptyGhostSet();
+		this.ghostStage = null;
+		this.ghostClockMs = 0;
 		this.ghostSprite = null;
 		this.ghostLabel = null;
+		this.checkpoint = null;
+		this.checkpointReached = false;
 		this.isDying = false;
 		this.isFallingThroughLevel = false;
 		this.wasPadJumpButtonDown = false;
@@ -495,17 +540,34 @@ export class PlatformerScene extends Phaser.Scene {
 			| undefined;
 		const spawnPosition = resolveInitialPlayerPosition(storedPosition, DEFAULT_PLAYER_POSITION);
 
+		// A reached checkpoint means this (re)start is a respawn there, not
+		// a fresh start at the spawn. Progress left over from a level that
+		// no longer has a checkpoint is dropped rather than trusted.
+		const checkpointObjects =
+			(this.registry.get(CHECKPOINT_OBJECTS_REGISTRY_KEY) as CheckpointObject[] | undefined) ?? [];
+		let checkpointState = readCheckpointState(this.registry);
+		const respawnPosition = getCheckpointRespawn(checkpointObjects, checkpointState);
+		if (respawnPosition === null) {
+			checkpointState = null;
+			clearCheckpointProgress(this.registry);
+		}
+		const startPosition = respawnPosition ?? spawnPosition;
+
 		// Every fresh Play session begins as the level's starting color,
 		// discarding whatever the runtime color was left at by a previous
 		// session's swaps - a swap should never leak into what a level
 		// begins as, or into what the Editor shows.
-		const playerColor = ensureStartingPlayerColor(this);
+		// ...except after a checkpoint respawn, which keeps the color the
+		// player had when they touched it (the swap objects that gave it to
+		// them are behind the checkpoint now).
+		const startingColor = ensureStartingPlayerColor(this);
+		const playerColor = checkpointState?.playerColor ?? startingColor;
 		this.registry.set(PLAYER_COLOR_REGISTRY_KEY, playerColor);
 		this.playerPoseConfig = getPlayerPoseConfig(playerColor);
 
 		this.player = this.physics.add.sprite(
-			spawnPosition.x,
-			spawnPosition.y,
+			startPosition.x,
+			startPosition.y,
 			CHARACTERS_ATLAS_KEY,
 			this.playerPoseConfig.idle.frame
 		);
@@ -540,7 +602,7 @@ export class PlatformerScene extends Phaser.Scene {
 		// color than this session's starting color. See
 		// setPlayerWalkAnimationColor's own comment for the full story.
 		setPlayerWalkAnimationColor(this, playerColor);
-		this.createGhost(spawnPosition.x, spawnPosition.y);
+		this.createGhost(startPosition.x, startPosition.y, respawnPosition !== null);
 
 		if (this.cameraMode === 'follow') {
 			// A little smoothing (lerp < 1) reads as more polished than an
@@ -754,6 +816,22 @@ export class PlatformerScene extends Phaser.Scene {
 				this.collectKey(tracked);
 			}
 		});
+
+		// The checkpoint flag: grey until touched, then waving. A respawn
+		// starts with it already active, and with the keys and swap
+		// objects put back the way they were when it was touched.
+		const checkpointData = checkpointObjects[0];
+		if (checkpointData) {
+			const sprite = this.add
+				.image(checkpointData.x, checkpointData.y, TILES_ATLAS_KEY, CHECKPOINT_INACTIVE_FRAME)
+				.setDisplaySize(GRID_SIZE, GRID_SIZE);
+			this.checkpoint = { data: { ...checkpointData }, sprite, animationTimer: null };
+			if (checkpointState !== null) {
+				this.checkpointReached = true;
+				this.restoreCheckpointState(checkpointState);
+				this.activateCheckpointFlag();
+			}
+		}
 
 		if (!this.input.keyboard) {
 			throw new Error('Keyboard input plugin is not available');
@@ -983,7 +1061,7 @@ export class PlatformerScene extends Phaser.Scene {
 	 * (for canOpenDoor checks), and appends it to the trailing-chain
 	 * order (see updateKeys).
 	 */
-	private collectKey(key: TrackedKey) {
+	private collectKey(key: TrackedKey, silent = false) {
 		key.isCollected = true;
 		this.uncollectedKeysGroup.remove(key.sprite, false, false);
 		key.sprite.disableBody(false, false);
@@ -991,7 +1069,9 @@ export class PlatformerScene extends Phaser.Scene {
 		key.sprite.setDepth(KEY_FOLLOW_DEPTH);
 		this.collectedKeyColors.add(key.data.color);
 		this.collectedKeysInOrder.push(key);
-		playSfx(this, 'key');
+		if (!silent) {
+			playSfx(this, 'key');
+		}
 	}
 
 	/**
@@ -1067,60 +1147,88 @@ export class PlatformerScene extends Phaser.Scene {
 	}
 
 	/**
-	 * Adds the ghost - the fastest recorded clear of this level - as a
-	 * translucent, tinted character with its owner's name above it, if
-	 * one was seeded into the registry. Public play only: the editor's own
+	 * Adds the level's ghost - the fastest recorded clear - as a
+	 * translucent, tinted character with its owner's name above it, if any
+	 * were seeded into the registry. Public play only: the editor's own
 	 * test-play has no record to race.
+	 *
+	 * Which ghost runs first depends on how this stretch started. A player
+	 * respawning at the checkpoint races the after ghost. One starting at
+	 * the spawn races whichever route is faster (see chooseGhostRoute): the
+	 * full ghost, or the before ghost - which hands over to the after
+	 * ghost the moment this player touches the checkpoint (see
+	 * reachCheckpoint).
 	 */
-	private createGhost(spawnX: number, spawnY: number) {
+	private createGhost(startX: number, startY: number, startedAtCheckpoint: boolean) {
 		if (this.scene.get('LevelEditorScene')) {
 			return;
 		}
 
-		const ghost = this.registry.get(GHOST_REGISTRY_KEY) as GhostRun | undefined;
-		if (!ghost || ghost.frames.length === 0) {
+		const set = (this.registry.get(GHOSTS_REGISTRY_KEY) as GhostSet | undefined) ?? emptyGhostSet();
+		const sample = set.full ?? set.before ?? set.after;
+		if (!sample) {
 			return;
 		}
 
-		this.ghostRun = ghost;
-		const first = decodeGhostState(ghost.frames[0][2]);
+		this.ghostSet = set;
+		this.ghostClockMs = 0;
+		if (startedAtCheckpoint) {
+			this.ghostStage = 'after';
+		} else {
+			const route = chooseGhostRoute(set);
+			this.ghostStage = route === null ? null : route.kind === 'full' ? 'full' : 'before';
+		}
+
+		const first = decodeGhostState(sample.frames[0]?.[2] ?? 0);
 		this.ghostSprite = this.add
-			.sprite(spawnX, spawnY, CHARACTERS_ATLAS_KEY, getPlayerFrameForPose(first.color, first.pose, 0))
+			.sprite(startX, startY, CHARACTERS_ATLAS_KEY, getPlayerFrameForPose(first.color, first.pose, 0))
 			.setDepth(PLAYER_DEPTH - 0.5)
 			.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
 			.setAlpha(0.45)
 			.setTint(0x9ad0ff);
 		this.ghostLabel = this.add
-			.text(spawnX, spawnY - PLAYER_DISPLAY_SIZE / 2 - 4, ghost.username, {
+			.text(startX, startY - PLAYER_DISPLAY_SIZE / 2 - 4, '', {
 				font: '12px monospace',
 				color: '#cfe6ff'
 			})
 			.setOrigin(0.5, 1)
 			.setAlpha(0.7)
 			.setDepth(PLAYER_DEPTH - 0.5);
+		this.showCurrentGhost();
+	}
+
+	/** The ghost being replayed right now, or null (none exists for this stage, or it has no frames). */
+	private getCurrentGhostRun(): GhostRun | null {
+		const run = this.ghostStage ? this.ghostSet[this.ghostStage] : null;
+		return run && run.frames.length > 0 ? run : null;
+	}
+
+	/** Shows (or hides) the ghost sprite for the current stage, with its holder's name. */
+	private showCurrentGhost() {
+		const run = this.getCurrentGhostRun();
+		this.ghostSprite?.setVisible(run !== null);
+		this.ghostLabel?.setVisible(run !== null);
+		this.ghostLabel?.setText(run?.username ?? '');
 	}
 
 	/**
-	 * Moves the ghost to where its run was at this attempt's current time.
-	 * Once the run has played through it lingers briefly at the finish,
-	 * then disappears - it shouldn't sit on top of the goal for a slower
-	 * player's whole attempt.
+	 * Moves the ghost to where its run was at the ghost clock's current
+	 * time. Once the run has played through it lingers briefly at the
+	 * finish, then disappears - it shouldn't sit on top of the goal (or
+	 * the checkpoint) for a slower player's whole attempt.
 	 */
 	private updateGhost() {
-		if (!this.ghostRun || !this.ghostSprite || !this.ghostLabel) {
+		const run = this.getCurrentGhostRun();
+		if (!run || !this.ghostSprite || !this.ghostLabel) {
 			return;
 		}
 
-		const sample = sampleGhost(
-			this.ghostRun.frames,
-			this.ghostRun.sampleIntervalMs,
-			this.runElapsedMs
-		);
+		const sample = sampleGhost(run.frames, run.sampleIntervalMs, this.ghostClockMs);
 		if (!sample) {
 			return;
 		}
 
-		if (sample.finished && this.runElapsedMs > this.ghostRun.durationMs + 400) {
+		if (sample.finished && this.ghostClockMs > run.durationMs + 400) {
 			this.ghostSprite.setVisible(false);
 			this.ghostLabel.setVisible(false);
 			return;
@@ -1130,10 +1238,95 @@ export class PlatformerScene extends Phaser.Scene {
 		this.ghostSprite.setPosition(sample.x, sample.y);
 		this.ghostSprite.setTexture(
 			CHARACTERS_ATLAS_KEY,
-			getPlayerFrameForPose(state.color, state.pose, this.runElapsedMs)
+			getPlayerFrameForPose(state.color, state.pose, this.ghostClockMs)
 		);
 		this.ghostSprite.setFlipX(state.facingLeft);
 		this.ghostLabel.setPosition(sample.x, sample.y - PLAYER_DISPLAY_SIZE / 2 - 4);
+	}
+
+	/**
+	 * Puts the flag into its active, waving state. Called when the
+	 * checkpoint is touched and again at the start of every respawn there.
+	 */
+	private activateCheckpointFlag() {
+		if (!this.checkpoint) {
+			return;
+		}
+		let frameIndex = 0;
+		this.checkpoint.sprite.setTexture(TILES_ATLAS_KEY, CHECKPOINT_ACTIVE_FRAMES[frameIndex]);
+		this.checkpoint.animationTimer?.remove(false);
+		this.checkpoint.animationTimer = this.time.addEvent({
+			delay: CHECKPOINT_ANIMATION_INTERVAL_MS,
+			loop: true,
+			callback: () => {
+				frameIndex = (frameIndex + 1) % CHECKPOINT_ACTIVE_FRAMES.length;
+				this.checkpoint?.sprite.setTexture(TILES_ATLAS_KEY, CHECKPOINT_ACTIVE_FRAMES[frameIndex]);
+			}
+		});
+	}
+
+	/**
+	 * The player just touched the checkpoint. Captures everything a
+	 * respawn here has to restore (keys held, character color, swap-object
+	 * colors), keeps the finished spawn-to-checkpoint stretch for the ghost
+	 * submission at the finish, and starts the after-checkpoint stretch:
+	 * the recorder and its clock begin again from here, and a ghost that
+	 * was racing the before stretch hands over to the after ghost.
+	 */
+	private reachCheckpoint() {
+		this.checkpointReached = true;
+
+		const state: CheckpointState = {
+			playerColor:
+				(this.registry.get(PLAYER_COLOR_REGISTRY_KEY) as PlayerColor | undefined) ?? 'green',
+			collectedKeys: this.collectedKeysInOrder.map((key) => ({ x: key.data.x, y: key.data.y })),
+			swapObjectColors: this.swapObjects.map((swapObject) => swapObject.data.color)
+		};
+		// Touching it ends the stretch that began at the spawn - it can't
+		// contain a death, or the level would have restarted it.
+		const beforeRun = this.ghostRecorder.finish(this.runElapsedMs);
+		writeCheckpointCarry(this.registry, { state, beforeRun });
+
+		this.ghostRecorder.reset();
+		this.runElapsedMs = 0;
+
+		// A full ghost keeps running past the checkpoint - it never touched
+		// it. The before ghost, though, ends here and the after ghost takes
+		// over from the checkpoint.
+		if (this.ghostStage === 'before') {
+			this.ghostStage = 'after';
+			this.ghostClockMs = 0;
+			this.showCurrentGhost();
+		}
+
+		this.activateCheckpointFlag();
+		playSfx(this, 'key');
+	}
+
+	/**
+	 * Puts back what the player had when they touched the checkpoint:
+	 * the keys they held (so a key behind the checkpoint can't be lost for
+	 * good) and each swap object's color (so the swap objects they already
+	 * used don't hand out their original color a second time).
+	 */
+	private restoreCheckpointState(state: CheckpointState) {
+		for (const position of state.collectedKeys) {
+			const key = this.keys.find(
+				(candidate) =>
+					!candidate.isCollected && candidate.data.x === position.x && candidate.data.y === position.y
+			);
+			if (key) {
+				this.collectKey(key, true);
+			}
+		}
+
+		state.swapObjectColors.forEach((color, index) => {
+			const swapObject = this.swapObjects[index];
+			if (swapObject) {
+				swapObject.data.color = color;
+				swapObject.sprite.setTexture(TILES_ATLAS_KEY, getCharacterSwapObjectFrame(color));
+			}
+		});
 	}
 
 	/**
@@ -1170,13 +1363,27 @@ export class PlatformerScene extends Phaser.Scene {
 		// beat and isn't shown anything timed off this event, so it keeps
 		// firing immediately rather than waiting on a delay that exists
 		// for the result modal's sake.
-		const clearedRun = this.ghostRecorder.finish(this.runElapsedMs);
+		// What this playthrough produced: one full run, or - if the
+		// checkpoint was reached - the spawn-to-checkpoint stretch kept when
+		// it was touched plus the final stretch from there to the door.
+		// Progress is forgotten here, so a replay after a win starts from
+		// the spawn again.
+		const finalStretch = this.ghostRecorder.finish(this.runElapsedMs);
+		const beforeRun = readCheckpointBeforeRun(this.registry);
+		const reachedCheckpoint = readCheckpointState(this.registry) !== null;
+		const clearedRuns: ClearedRuns = reachedCheckpoint
+			? beforeRun
+				? { before: beforeRun, after: finalStretch }
+				: { after: finalStretch }
+			: { full: finalStretch };
+		clearCheckpointProgress(this.registry);
+
 		const editorScene = this.scene.get('LevelEditorScene');
 		if (editorScene) {
-			this.game.events.emit(LEVEL_BEATEN_EVENT, clearedRun);
+			this.game.events.emit(LEVEL_BEATEN_EVENT, clearedRuns);
 		} else {
 			this.time.delayedCall(RESULT_MODAL_DELAY_MS, () => {
-				this.game.events.emit(LEVEL_BEATEN_EVENT, clearedRun);
+				this.game.events.emit(LEVEL_BEATEN_EVENT, clearedRuns);
 			});
 		}
 
@@ -1267,6 +1474,15 @@ export class PlatformerScene extends Phaser.Scene {
 	 */
 	private finishDeathFall() {
 		if (this.scene.get('LevelEditorScene')) {
+			// Testing your own level: once the checkpoint has been
+			// reached, a death restarts the test there instead of
+			// bouncing back to Edit Mode - otherwise the part of the level
+			// after the checkpoint would take a full run from the start to
+			// test every time.
+			if (readCheckpointState(this.registry) !== null) {
+				this.scene.restart();
+				return;
+			}
 			const nextMode = toggleMode(CURRENT_MODE);
 			this.scene.start(getSceneKeyForMode(nextMode));
 			return;
@@ -1287,6 +1503,13 @@ export class PlatformerScene extends Phaser.Scene {
 	 */
 	private triggerDeath() {
 		this.hasDied = true;
+		// With a checkpoint reached the host respawns the player straight
+		// away (no result modal), so there's nothing to leave room for -
+		// the freeze and fall already paced the death.
+		if (readCheckpointState(this.registry) !== null) {
+			this.game.events.emit(LEVEL_DIED_EVENT);
+			return;
+		}
 		// Room for the death sound/fall animation to actually finish
 		// playing out before the screen gets covered by a result modal -
 		// same delay, and same reasoning, as triggerWin()'s own delay.
@@ -1510,6 +1733,14 @@ export class PlatformerScene extends Phaser.Scene {
 			return;
 		}
 
+		if (
+			this.checkpoint &&
+			!this.checkpointReached &&
+			isNearCheckpoint(this.player.x, this.player.y, this.checkpoint.data)
+		) {
+			this.reachCheckpoint();
+		}
+
 		this.updateKeys(time);
 		this.updateSpiders(time);
 		this.updateQuadrantCamera();
@@ -1652,6 +1883,7 @@ export class PlatformerScene extends Phaser.Scene {
 		);
 		this.updateGhost();
 		this.runElapsedMs += delta;
+		this.ghostClockMs += delta;
 
 		// Gamepad and touch buttons don't have Phaser's keyboard-style
 		// JustDown() helper, so we track each source's previous-frame state

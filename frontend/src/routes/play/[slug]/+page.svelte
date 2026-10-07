@@ -5,11 +5,15 @@
 	import { auth } from '$lib/auth.svelte';
 	import { withSession } from '$lib/endlessSession';
 	import { createGameConfig } from '$lib/game/gameConfig';
+	import { readCheckpointState } from '$lib/game/checkpoints';
 	import {
-		GHOST_REGISTRY_KEY,
-		GHOST_SAMPLE_INTERVAL_MS,
-		type GhostRun,
-		type RecordedRun
+		clearedRunsDurationMs,
+		emptyGhostSet,
+		GHOST_KINDS,
+		GHOSTS_REGISTRY_KEY,
+		routeRecord,
+		type ClearedRuns,
+		type GhostSet
 	} from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
@@ -34,59 +38,55 @@
 	// showing, i.e. the game is still in progress.
 	let resultOutcome: 'won' | 'died' | null = $state(null);
 
-	// Ghost: the fastest recorded clear of this level, replayed alongside
-	// the player. Updated in place when a clear beats it, so "Replay"
-	// races the new record straight away.
-	let ghost: GhostRun | null = null;
+	// Ghosts: the fastest recorded clears of this level, replayed alongside
+	// the player - one full ghost, or on a level with a checkpoint a before
+	// and an after ghost. Refreshed after a clear, so "Replay" races the
+	// new record straight away.
+	let ghosts: GhostSet = emptyGhostSet();
 	// What the result modal shows for a win: this attempt's time and the
 	// standing record (isNew when this very run just set it).
 	let runTimeMs: number | null = $state(null);
 	let recordInfo: { username: string; durationMs: number; isNew: boolean } | null = $state(null);
 
-	async function handleGhostRun(run: RecordedRun) {
-		runTimeMs = run.durationMs;
+	async function handleGhostRun(cleared: ClearedRuns) {
+		runTimeMs = clearedRunsDurationMs(cleared);
 		// Until (or unless) this run is submitted, the standing record is
-		// whichever ghost was loaded.
-		recordInfo = ghost
-			? { username: ghost.username, durationMs: ghost.durationMs, isNew: false }
-			: null;
+		// whichever route the loaded ghosts make up.
+		const standing = routeRecord(ghosts);
+		recordInfo = standing ? { ...standing, isNew: false } : null;
 
 		// Only an account can hold a record - an anonymous win just
 		// shows the time against the existing one.
 		if (!auth.accessToken) return;
 
-		const result = await withSession((token) =>
-			submitLevelGhost(slug, token, {
-				durationMs: run.durationMs,
-				frames: run.frames
-			})
-		);
-		if (!result?.success || !result.record) return;
-
-		recordInfo = {
-			username: result.record.username,
-			durationMs: result.record.durationMs,
-			isNew: result.isRecord === true
-		};
-
-		if (result.isRecord && auth.user) {
-			ghost = {
-				username: auth.user.username,
-				durationMs: run.durationMs,
-				sampleIntervalMs: GHOST_SAMPLE_INTERVAL_MS,
-				frames: run.frames
-			};
-		} else {
-			// Not a record - but someone may have set a newer one than the
-			// ghost loaded at page load, so pick up whatever stands now.
-			const fresh = await getLevelGhost(slug);
-			if (fresh.success) ghost = fresh.ghost ?? null;
+		// A run through a checkpoint is two stretches (before and after),
+		// each offered as its own ghost; a run that skipped it is one full
+		// stretch. The last answer carries the level's record afterwards.
+		let setARecord = false;
+		let latest: { username: string; durationMs: number } | null = null;
+		for (const kind of GHOST_KINDS) {
+			const run = cleared[kind];
+			if (!run || run.frames.length === 0) continue;
+			const result = await withSession((token) =>
+				submitLevelGhost(slug, token, { durationMs: run.durationMs, frames: run.frames }, kind)
+			);
+			if (!result?.success || !result.record) continue;
+			setARecord = setARecord || result.isRecord === true;
+			latest = result.record;
 		}
+		if (latest) {
+			recordInfo = { ...latest, isNew: setARecord };
+		}
+
+		// Pick up whatever ghosts stand now - ours if they were records,
+		// or newer ones someone else set since the page loaded.
+		const fresh = await getLevelGhost(slug);
+		if (fresh.success && fresh.ghosts) ghosts = fresh.ghosts;
 	}
 
-	function handleLevelBeaten(run?: RecordedRun) {
+	function handleLevelBeaten(cleared?: ClearedRuns) {
 		resultOutcome = 'won';
-		if (run) void handleGhostRun(run);
+		if (cleared) void handleGhostRun(cleared);
 		// Best-effort, fire-and-forget - a metrics call failing shouldn't
 		// block or interrupt the win screen the player is already looking
 		// at (see recordLevelCompletion's own comment). Passing the access
@@ -96,29 +96,38 @@
 	}
 
 	function handleLevelDied() {
+		// A checkpoint was reached: no result modal - straight back into
+		// the level at the checkpoint (the scene's own create() puts the
+		// player there), counted as a new attempt exactly like "Play Again".
+		if (game && readCheckpointState(game.registry) !== null) {
+			restartLevel();
+			return;
+		}
 		resultOutcome = 'died';
+	}
+
+	function restartLevel() {
+		// Seeded before the restart so create() sees the current ghosts.
+		game?.registry.set(GHOSTS_REGISTRY_KEY, ghosts);
+		// create() resets every runtime field (hasWon, hasDied, position,
+		// collected keys, ...) on every (re)start, same as the editor's
+		// own "test my level" flow already relied on - restarting is
+		// what actually puts the player back at the level's real spawn
+		// point (or its checkpoint, if one was reached), not just closing
+		// the modal.
+		game?.scene.getScene('PlatformerScene')?.scene.restart();
+		// A conscious "Play Again" - or a respawn at the checkpoint - is a
+		// genuine new attempt at the level, same as the very first load
+		// below - counted the same way (including the same owner-exclusion
+		// via the access token).
+		void recordLevelPlay(slug, auth.accessToken ?? undefined);
 	}
 
 	function handleReplay() {
 		resultOutcome = null;
 		runTimeMs = null;
 		recordInfo = null;
-		// Seeded before the restart so create() sees the current record.
-		if (ghost) {
-			game?.registry.set(GHOST_REGISTRY_KEY, ghost);
-		} else {
-			game?.registry.remove(GHOST_REGISTRY_KEY);
-		}
-		// create() resets every runtime field (hasWon, hasDied, position,
-		// collected keys, ...) on every (re)start, same as the editor's
-		// own "test my level" flow already relied on - restarting is
-		// what actually puts the player back at the level's real spawn
-		// point, not just closing the modal.
-		game?.scene.getScene('PlatformerScene')?.scene.restart();
-		// A conscious "Play Again" is a genuine new attempt at the level,
-		// same as the very first load below - counted the same way
-		// (including the same owner-exclusion via the access token).
-		void recordLevelPlay(slug, auth.accessToken ?? undefined);
+		restartLevel();
 	}
 
 	onMount(async () => {
@@ -130,7 +139,7 @@
 			return;
 		}
 
-		ghost = ghostResult.success ? (ghostResult.ghost ?? null) : null;
+		ghosts = ghostResult.success ? (ghostResult.ghosts ?? emptyGhostSet()) : emptyGhostSet();
 
 		title = result.title ?? '';
 		ownerUsername = result.ownerUsername ?? '';
@@ -152,7 +161,7 @@
 			createGameConfig(gameContainer, {
 				startMode: 'play',
 				content: result.content,
-				ghost: ghost ?? undefined
+				ghosts
 			})
 		);
 		game.events.on(LEVEL_BEATEN_EVENT, handleLevelBeaten);

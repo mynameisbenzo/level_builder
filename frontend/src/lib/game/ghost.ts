@@ -14,8 +14,8 @@ import { PLAYER_COLORS, type PlayerColor } from './playerColor';
 
 export const GHOST_SAMPLE_INTERVAL_MS = 50;
 
-/** Registry key the page seeds the ghost under (see createGameConfig). */
-export const GHOST_REGISTRY_KEY = 'ghostRun';
+/** Registry key the page seeds the level's ghosts under (see createGameConfig). */
+export const GHOSTS_REGISTRY_KEY = 'ghostSet';
 
 /** Order matters - a pose's position here is what gets stored. */
 export const GHOST_POSES: readonly PlayerPose[] = ['idle', 'walk', 'jump', 'duck'];
@@ -32,6 +32,101 @@ export interface GhostRun {
 	durationMs: number;
 	sampleIntervalMs: number;
 	frames: GhostFrame[];
+}
+
+/**
+ * A level holds up to three ghosts, each with its own holder and fastest
+ * time (mirrors backend/app/services/ghosts.py):
+ *   full    spawn -> finish, from a run that never touched the checkpoint
+ *   before  spawn -> checkpoint touch
+ *   after   checkpoint -> finish
+ * A level without a checkpoint only ever has a full ghost.
+ */
+export type GhostKind = 'full' | 'before' | 'after';
+export const GHOST_KINDS: readonly GhostKind[] = ['full', 'before', 'after'];
+
+export interface GhostSet {
+	full: GhostRun | null;
+	before: GhostRun | null;
+	after: GhostRun | null;
+}
+
+export function emptyGhostSet(): GhostSet {
+	return { full: null, before: null, after: null };
+}
+
+/**
+ * What one playthrough produced when the level was beaten: a full run if
+ * the checkpoint was never touched, otherwise the spawn-to-checkpoint
+ * stretch and the final checkpoint-to-finish stretch.
+ */
+export interface ClearedRuns {
+	full?: RecordedRun;
+	before?: RecordedRun;
+	after?: RecordedRun;
+}
+
+/** The time a cleared route took: the full run, or its two halves added together. */
+export function clearedRunsDurationMs(cleared: ClearedRuns): number {
+	if (cleared.full) {
+		return cleared.full.durationMs;
+	}
+	return (cleared.before?.durationMs ?? 0) + (cleared.after?.durationMs ?? 0);
+}
+
+export interface GhostRecord {
+	username: string;
+	durationMs: number;
+}
+
+/**
+ * The level's record: the fastest complete route, either the full ghost or
+ * the before + after pair (credited to both holders if they differ; the
+ * full ghost wins a tie). Mirrors backend best_route.
+ */
+export function routeRecord(set: GhostSet): GhostRecord | null {
+	const candidates: GhostRecord[] = [];
+	if (set.full) {
+		candidates.push({ username: set.full.username, durationMs: set.full.durationMs });
+	}
+	if (set.before && set.after) {
+		candidates.push({
+			username:
+				set.before.username === set.after.username
+					? set.before.username
+					: `${set.before.username} & ${set.after.username}`,
+			durationMs: set.before.durationMs + set.after.durationMs
+		});
+	}
+	if (candidates.length === 0) {
+		return null;
+	}
+	return candidates.reduce((best, next) => (next.durationMs < best.durationMs ? next : best));
+}
+
+/** Which ghost(s) a player starting at the spawn follows. */
+export type GhostRoute =
+	| { kind: 'full'; full: GhostRun }
+	| { kind: 'split'; before: GhostRun | null; after: GhostRun | null };
+
+/**
+ * Picks the route a player starting at the spawn races: whichever of the
+ * full ghost and the before + after pair is faster (the full ghost on a
+ * tie). With no complete route, whatever half exists is still followed.
+ */
+export function chooseGhostRoute(set: GhostSet): GhostRoute | null {
+	const complete = routeRecord(set);
+	if (complete !== null) {
+		const pairTime = set.before && set.after ? set.before.durationMs + set.after.durationMs : Infinity;
+		if (set.full && set.full.durationMs <= pairTime) {
+			return { kind: 'full', full: set.full };
+		}
+		return { kind: 'split', before: set.before, after: set.after };
+	}
+	if (set.before || set.after) {
+		return { kind: 'split', before: set.before, after: set.after };
+	}
+	return null;
 }
 
 export interface GhostState {

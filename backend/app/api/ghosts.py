@@ -30,26 +30,32 @@ def _live_level_or_404(slug: str) -> Level:
 def get_level_ghost(slug):
     """
     Public, unauthenticated - fetched alongside a level when it's played.
-    `ghost` is null when the level has no recorded clear yet.
+    `ghosts` has one entry per kind (`full`, `before`, `after`), each null
+    until someone has cleared that stretch; a level without a checkpoint
+    only ever has `full`. `ghost` is the `full` ghost again - what clients
+    from before checkpoints existed read.
     """
     level = _live_level_or_404(slug)
 
-    ghost = ghost_service.get_ghost(level.id)
-    if ghost is None:
-        return jsonify({"ghost": None}), 200
-
-    return jsonify({"ghost": ghost_service.ghost_to_dict(ghost)}), 200
+    ghosts = ghost_service.get_ghosts(level.id)
+    payload = {
+        kind: ghost_service.ghost_to_dict(ghost) if ghost is not None else None
+        for kind, ghost in ghosts.items()
+    }
+    return jsonify({"ghost": payload["full"], "ghosts": payload}), 200
 
 
 @ghosts_bp.post("/<string:slug>/ghost")
 @jwt_required()
 def submit_level_ghost(slug):
     """
-    Offers a just-cleared run as the level's ghost. Body: `duration_ms`
-    and `frames` (see app/services/ghosts.py). Always 200
-    on a valid run: `is_record` says whether it became the ghost, and
-    `record` is whoever holds the record afterwards - what the result
-    modal compares the player's time against.
+    Offers a just-cleared stretch as the level's ghost of that kind. Body:
+    `duration_ms`, `frames` and optionally `kind` ("full" by default, or
+    "before" / "after" for the two halves of a run through a checkpoint -
+    see app/services/ghosts.py). Always 200 on a valid run: `is_record`
+    says whether it became that kind's ghost, and `record` is the level's
+    record afterwards (the fastest full route, or before + after pair) -
+    what the result modal compares the player's time against.
     """
     user = User.query.filter_by(public_id=get_jwt_identity()).first()
     if user is None or user.is_deleted:
@@ -63,11 +69,22 @@ def submit_level_ghost(slug):
     level = _live_level_or_404(slug)
     payload = request.get_json(silent=True) or {}
 
+    kind = payload.get("kind", "full")
     is_record, ghost = ghost_service.submit_run(
         user,
         level,
         payload.get("duration_ms"),
         payload.get("frames"),
+        kind,
     )
 
-    return jsonify({"is_record": is_record, "record": ghost_service.record_summary(ghost)}), 200
+    return (
+        jsonify(
+            {
+                "is_record": is_record,
+                "kind": kind,
+                "record": ghost_service.level_record(level.id, ghost),
+            }
+        ),
+        200,
+    )

@@ -9,6 +9,10 @@ import {
 	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
 	type CharacterSwapObject
 } from './characterSwapObjects';
+import {
+	CHECKPOINT_OBJECTS_REGISTRY_KEY,
+	type CheckpointObject
+} from './checkpoints';
 import { KEY_OBJECTS_REGISTRY_KEY, type KeyObject } from './keys';
 import { PLACED_OBJECTS_REGISTRY_KEY, type PlacedObject } from './placedObjects';
 import {
@@ -40,6 +44,8 @@ export interface LevelContent {
 	characterSwapObjects: CharacterSwapObject[];
 	doorObjects: DoorObject[];
 	keyObjects: KeyObject[];
+	/** At most one - see checkpoints.ts. Absent on levels saved before checkpoints existed. */
+	checkpointObjects: CheckpointObject[];
 }
 
 /**
@@ -69,7 +75,9 @@ export function serializeLevelContent(registry: Phaser.Data.DataManager): LevelC
 			(registry.get(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY) as CharacterSwapObject[] | undefined) ??
 			[],
 		doorObjects: (registry.get(DOOR_OBJECTS_REGISTRY_KEY) as DoorObject[] | undefined) ?? [],
-		keyObjects: (registry.get(KEY_OBJECTS_REGISTRY_KEY) as KeyObject[] | undefined) ?? []
+		keyObjects: (registry.get(KEY_OBJECTS_REGISTRY_KEY) as KeyObject[] | undefined) ?? [],
+		checkpointObjects:
+			(registry.get(CHECKPOINT_OBJECTS_REGISTRY_KEY) as CheckpointObject[] | undefined) ?? []
 	};
 }
 
@@ -101,4 +109,7 @@ export function deserializeLevelContent(
 	registry.set(CHARACTER_SWAP_OBJECTS_REGISTRY_KEY, content.characterSwapObjects);
 	registry.set(DOOR_OBJECTS_REGISTRY_KEY, content.doorObjects);
 	registry.set(KEY_OBJECTS_REGISTRY_KEY, content.keyObjects);
+	// Defaulted like backgroundTheme: a level saved before checkpoints
+	// existed has no checkpointObjects key at runtime, whatever the type says.
+	registry.set(CHECKPOINT_OBJECTS_REGISTRY_KEY, content.checkpointObjects ?? []);
 }

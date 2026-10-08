@@ -17,6 +17,9 @@
 	} from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
+	import { PLAYTIME_HEARTBEAT_INTERVAL_MS } from '$lib/game/playtime';
+	import { postLevelPlaytime } from '$lib/playtimeApi';
+	import type { PlatformerScene } from '$lib/game/PlatformerScene';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
 	import LevelResultModal from './LevelResultModal.svelte';
@@ -95,7 +98,31 @@
 		void recordLevelCompletion(slug, auth.accessToken ?? undefined);
 	}
 
+	// Total playtime: the scene counts the time the player is really
+	// playing; this reports it to the server every few seconds (and when
+	// the tab is hidden, or the player dies), where the running total
+	// lives. Only a logged-in player has a total.
+	let playtimeTimer: ReturnType<typeof setInterval> | undefined;
+
+	async function flushPlaytime() {
+		if (!auth.accessToken) return;
+		const scene = game?.scene.getScene('PlatformerScene') as PlatformerScene | undefined;
+		if (!scene || typeof scene.takePlaytimeMs !== 'function') return;
+
+		const ms = scene.takePlaytimeMs();
+		if (ms <= 0) return;
+
+		const result = await withSession((token) => postLevelPlaytime(slug, token, ms));
+		// Not reported (offline, logged out): carry the time into the next report.
+		if (!result?.success) scene.returnPlaytimeMs(ms);
+	}
+
+	function handleVisibilityChange() {
+		if (document.hidden) void flushPlaytime();
+	}
+
 	function handleLevelDied() {
+		void flushPlaytime();
 		// A checkpoint was reached: no result modal - straight back into
 		// the level at the checkpoint (the scene's own create() puts the
 		// player there), counted as a new attempt exactly like "Play Again".
@@ -170,9 +197,15 @@
 		// The level actually loaded and a real playthrough is starting -
 		// counted the same way as a later "Play Again" (see handleReplay).
 		void recordLevelPlay(slug, auth.accessToken ?? undefined);
+
+		playtimeTimer = setInterval(() => void flushPlaytime(), PLAYTIME_HEARTBEAT_INTERVAL_MS);
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 	});
 
 	onDestroy(() => {
+		clearInterval(playtimeTimer);
+		document.removeEventListener('visibilitychange', handleVisibilityChange);
+		void flushPlaytime();
 		game?.events.off(LEVEL_BEATEN_EVENT, handleLevelBeaten);
 		game?.events.off(LEVEL_DIED_EVENT, handleLevelDied);
 		game?.destroy(true);

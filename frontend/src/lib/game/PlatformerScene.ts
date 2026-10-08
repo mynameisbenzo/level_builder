@@ -121,6 +121,7 @@ import {
 	type CheckpointObject,
 	type CheckpointState
 } from './checkpoints';
+import { PlaytimeClock } from './playtime';
 import { getGroupFrames, type PositionedTile } from './groundTiling';
 import { GRID_SIZE } from './gridSnap';
 import { 
@@ -408,6 +409,10 @@ export class PlatformerScene extends Phaser.Scene {
 	private ghostClockMs = 0;
 	private ghostSprite: Phaser.GameObjects.Sprite | null = null;
 	private ghostLabel: Phaser.GameObjects.Text | null = null;
+	/** The player's real time spent on this level, reported to the server
+	 * by the play page (see playtime.ts). Deliberately NOT reset by
+	 * create(): time counted before a death is still waiting to be sent. */
+	private playtime = new PlaytimeClock();
 	/** The level's checkpoint, if it has one. */
 	private checkpoint: TrackedCheckpoint | null = null;
 	/** Whether the player has touched the checkpoint (or respawned at it). */
@@ -505,6 +510,9 @@ export class PlatformerScene extends Phaser.Scene {
 		this.ghostLabel = null;
 		this.checkpoint = null;
 		this.checkpointReached = false;
+		// A (re)start waits for the player's first control before the
+		// playtime clock runs again.
+		this.playtime.resetControl();
 		this.isDying = false;
 		this.isFallingThroughLevel = false;
 		this.wasPadJumpButtonDown = false;
@@ -1244,6 +1252,16 @@ export class PlatformerScene extends Phaser.Scene {
 		this.ghostLabel.setPosition(sample.x, sample.y - PLAYER_DISPLAY_SIZE / 2 - 4);
 	}
 
+	/** Hands the play page the playtime counted since its last report (ms). */
+	takePlaytimeMs(): number {
+		return this.playtime.take();
+	}
+
+	/** A report failed: puts its time back so the next one carries it. */
+	returnPlaytimeMs(ms: number): void {
+		this.playtime.giveBack(ms);
+	}
+
 	/**
 	 * Puts the flag into its active, waving state. Called when the
 	 * checkpoint is touched and again at the start of every respawn there.
@@ -1902,6 +1920,16 @@ export class PlatformerScene extends Phaser.Scene {
 			touchJumpJustPressed;
 		const isJumpHeld =
 			this.wasd.w.isDown || this.arrows.up.isDown || padJumpButtonDown || touchInputState.jump;
+
+		// Total playtime: counts from the first control, and only on frames
+		// where the player can move (update() returns early while dying or
+		// won). Skipped in the editor's test-play, which has no record.
+		if (!this.scene.get('LevelEditorScene') && !document.hidden) {
+			this.playtime.advance(
+				delta,
+				leftDown || rightDown || isDucking || isJumpHeld || isDashHeld
+			);
+		}
 
 		// Door interaction uses the same "up" input as jumping - pressing
 		// up while near a closed door opens it instead of jumping, rather

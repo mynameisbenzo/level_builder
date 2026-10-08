@@ -188,8 +188,9 @@ implements.)
 lifecycle design this work implements.)
 
 - [x] `PlayAttempt` model — source of truth for clear rate; only
-      registered, non-owner users' real playthrough attempts count,
-      anonymous plays don't (they still bump the play/completion
+      registered users' real playthrough attempts count (the creator's
+      too, once the level is published - as in Super Mario Maker; their
+      pre-publish test plays never are), anonymous plays don't (they still bump the play/completion
       counts shown on level cards). One row per try, with `source`
       `'direct'` or `'endless'`; `completed_at` is null for a death,
       quit or abandon.

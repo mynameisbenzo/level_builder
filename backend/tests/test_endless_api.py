@@ -397,22 +397,6 @@ def test_clear_advances_and_repeats_are_allowed(clock):
         assert db.session.get(Level, level.id).completion_count == 1
 
 
-def test_creator_playing_their_own_level_does_not_inflate_its_counts(clock):
-    app, client = _client()
-    with app.app_context():
-        token, player = _player(app, client, clock)
-        own = _live_level(player, title="Mine")
-        _start(client, token)
-
-        run = _post(client, token, "/runs/current/begin").get_json()["run"]
-        assert run["current_level"]["title"] == "Mine"
-        _post(client, token, "/runs/current/clear")
-
-        refreshed = db.session.get(Level, own.id)
-        assert refreshed.play_count == 0
-        assert refreshed.completion_count == 0
-
-
 def test_skip_costs_a_life_with_or_without_an_attempt(clock):
     app, client = _client()
     with app.app_context():
@@ -711,16 +695,3 @@ def test_endless_tries_and_clears_feed_the_levels_attempts(clock):
         assert [attempt.source for attempt in attempts] == ["endless", "endless"]
         assert [attempt.completed_at is not None for attempt in attempts] == [False, True]
         assert all(attempt.user_id == player.id for attempt in attempts)
-
-
-def test_a_creators_own_endless_plays_are_not_attempts(clock):
-    app, client = _client()
-    with app.app_context():
-        token, player = _player(app, client, clock)
-        own = _live_level(player, title="Mine")
-        _start(client, token)
-
-        _post(client, token, "/runs/current/begin")
-        _post(client, token, "/runs/current/clear")
-
-        assert PlayAttempt.query.filter_by(level_id=own.id).count() == 0

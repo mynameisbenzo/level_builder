@@ -2,7 +2,7 @@
 Difficulty labels, derived from a level's clear rate.
 
 A level's clear rate is completions / attempts over its PlayAttempt rows
-(registered, non-owner players only - see app/models/play_attempt.py).
+(registered players only, the creator included - see app/models/play_attempt.py).
 Because a published level never changes, those numbers always describe
 exactly one layout.
 
@@ -69,8 +69,8 @@ def recompute_level_difficulty(level: Level) -> None:
 
 def record_attempt_start(level: Level, user, source: str = PLAY_ATTEMPT_SOURCE_DIRECT) -> None:
     """
-    A registered, non-owner player began a try at the level. Callers have
-    already excluded the owner and anonymous plays.
+    A registered player (the level's creator included) began a try at the
+    level. Callers have already excluded anonymous plays.
     """
     db.session.add(PlayAttempt(level_id=level.id, user_id=user.id, source=source))
     db.session.flush()

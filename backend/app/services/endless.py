@@ -411,21 +411,18 @@ def start_run(
 def _count_play_for_level(level: Level, user: User) -> None:
     """
     Endless attempts count toward a level's play count like direct
-    plays do - including the same owner exclusion, so a creator being
-    served their own level doesn't inflate it. The separate per-endless
-    record lives on EndlessRunLevel.
+    plays do - everyone, a creator served their own level included. The
+    separate per-endless record lives on EndlessRunLevel.
     """
-    if level.owner_id != user.id:
-        level.play_count += 1
-        # Every endless try is a registered player's attempt, so it feeds
-        # the level's clear rate / difficulty label too.
-        record_attempt_start(level, user, PLAY_ATTEMPT_SOURCE_ENDLESS)
+    level.play_count += 1
+    # Every endless try is a registered player's attempt, so it feeds
+    # the level's clear rate / difficulty label too.
+    record_attempt_start(level, user, PLAY_ATTEMPT_SOURCE_ENDLESS)
 
 
 def _count_completion_for_level(level: Level, user: User) -> None:
-    if level.owner_id != user.id:
-        level.completion_count += 1
-        record_attempt_completion(level, user, PLAY_ATTEMPT_SOURCE_ENDLESS)
+    level.completion_count += 1
+    record_attempt_completion(level, user, PLAY_ATTEMPT_SOURCE_ENDLESS)
 
 
 def begin_attempt(run: EndlessRun, user: User, now: datetime) -> bool:

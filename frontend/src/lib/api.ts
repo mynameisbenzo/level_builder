@@ -767,20 +767,20 @@ export interface RecordLevelPlayResult {
 }
 
 /**
- * Calls POST /api/levels/<slug>/play - no auth required, but the
- * backend optionally reads an Authorization header when one's given
- * (see record_level_play) to recognize the level's own owner play-
- * testing it from /u/[username], and skip counting that. accessToken
- * is therefore optional too - pass it whenever the caller has one
- * (auth.accessToken) so that exclusion can actually kick in; an
- * anonymous visitor has none to pass, and still counts normally.
- * Records one real playthrough attempt (distinct from GET .../play
- * above, which only ever serves content). Called once a playthrough's
- * content has actually loaded, and again on every "Play Again" - each
- * is a separate attempt at the level, not just a page view.
- * Best-effort: a failure here shouldn't block or interrupt the player,
- * so callers generally just fire this and don't surface its error.
- */
+	* Calls POST /api/levels/<slug>/play - no auth required, but the
+	* backend optionally reads an Authorization header when one's given
+	* (see record_level_play) so a logged-in player's try also feeds the
+	* level's clear rate (the creator's included). accessToken is therefore
+	* optional too - pass it whenever the caller has one (auth.accessToken);
+	* an anonymous visitor has none to pass, and still counts for the play
+	* count, just not the clear rate.
+	* Records one real playthrough attempt (distinct from GET .../play
+	* above, which only ever serves content). Called once a playthrough's
+	* content has actually loaded, and again on every "Play Again" - each
+	* is a separate attempt at the level, not just a page view.
+	* Best-effort: a failure here shouldn't block or interrupt the player,
+	* so callers generally just fire this and don't surface its error.
+*/
 export async function recordLevelPlay(
 	slug: string,
 	accessToken?: string
@@ -801,11 +801,11 @@ export async function recordLevelPlay(
 }
 
 /**
- * Calls POST /api/levels/<slug>/complete - same optional-auth owner
- * exclusion as recordLevelPlay above (see record_level_complete).
- * Records a completion the moment LEVEL_BEATEN_EVENT fires during a
- * real playthrough. Same best-effort reasoning as recordLevelPlay -
- * never something the player needs to wait on or be told about.
+	 * Calls POST /api/levels/<slug>/complete - same optional-auth rule as
+	 * recordLevelPlay above (see record_level_complete).
+	 * Records a completion the moment LEVEL_BEATEN_EVENT fires during a
+	 * real playthrough. Same best-effort reasoning as recordLevelPlay -
+	 * never something the player needs to wait on or be told about.
  */
 export async function recordLevelCompletion(
 	slug: string,

@@ -101,17 +101,6 @@ def test_anonymous_plays_count_on_the_card_but_not_toward_difficulty():
         assert _slug_attempts(slug) == []
 
 
-def test_the_owners_own_plays_are_never_attempts():
-    app, client = _client()
-    with app.app_context():
-        slug, owner = _published_level(app, client)
-
-        client.post(f"/api/levels/{slug}/play", headers=_auth_headers(owner))
-        client.post(f"/api/levels/{slug}/complete", headers=_auth_headers(owner))
-
-        assert _slug_attempts(slug) == []
-
-
 def test_a_completion_closes_the_players_open_attempt():
     app, client = _client()
     with app.app_context():

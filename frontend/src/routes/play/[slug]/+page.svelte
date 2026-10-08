@@ -114,8 +114,8 @@
 		// Best-effort, fire-and-forget - a metrics call failing shouldn't
 		// block or interrupt the win screen the player is already looking
 		// at (see recordLevelCompletion's own comment). Passing the access
-		// token (when logged in) is what lets the backend recognize the
-		// level's own owner and skip counting their own playthrough.
+  		// token (when logged in) is what lets the backend also count the
+  		// clear toward the level's clear rate.
 		void recordLevelCompletion(slug, auth.accessToken ?? undefined);
 	}
 
@@ -174,8 +174,8 @@
 		game?.scene.getScene('PlatformerScene')?.scene.restart();
 		// A conscious "Play Again" - or a respawn at the checkpoint - is a
 		// genuine new attempt at the level, same as the very first load
-		// below - counted the same way (including the same owner-exclusion
-		// via the access token).
+  		// below - counted the same way (the access token is what lets the
+  		// backend also count it toward the clear rate).
 		void recordLevelPlay(slug, auth.accessToken ?? undefined);
 	}
 

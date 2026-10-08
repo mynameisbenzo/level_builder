@@ -13,9 +13,10 @@ class PlayAttempt(db.Model):
     user - the source of truth for a level's clear rate, and so for its
     difficulty label (see app/services/difficulty.py).
 
-    Only a logged-in player other than the level's owner ever gets a row:
-    anonymous plays and the creator's own plays are deliberately not
-    recorded here. (Level.play_count / completion_count still count
+    Any logged-in player gets a row, the level's creator included once it
+    is published (as in Super Mario Maker); only anonymous plays are not
+    recorded here. The creator's pre-publish test plays never are - they
+    happen on an unpublished draft. (Level.play_count / completion_count still count
     anonymous plays - they're the numbers shown on level cards - but they
     are a different thing from this table.)
 

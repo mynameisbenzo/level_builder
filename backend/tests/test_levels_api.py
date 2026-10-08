@@ -435,39 +435,6 @@ def test_record_play_counts_a_logged_in_non_owner():
         assert response.get_json()["play_count"] == 1
 
 
-def test_record_play_does_not_count_the_levels_own_owner():
-    """
-    The actual fix this is testing for: a creator play-testing their own
-    published level from /u/[username] shouldn't inflate their own play
-    count - see _is_requester_the_owner in app/api/levels.py.
-    """
-    app, client = _client()
-    with app.app_context():
-        token = _signup_and_login(app, client)
-        level = _create_level(client, token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, level['id'])
-
-        response = client.post(f"/api/levels/{level['id']}/play", headers=_auth_headers(token))
-
-        assert response.status_code == 200
-        assert response.get_json()["play_count"] == 0
-
-
-def test_record_completion_does_not_count_the_levels_own_owner():
-    app, client = _client()
-    with app.app_context():
-        token = _signup_and_login(app, client)
-        level = _create_level(client, token)
-        client.post(f"/api/levels/{level['id']}/beat", headers=_auth_headers(token))
-        _publish(client, token, level['id'])
-
-        response = client.post(f"/api/levels/{level['id']}/complete", headers=_auth_headers(token))
-
-        assert response.status_code == 200
-        assert response.get_json()["completion_count"] == 0
-
-
 def test_record_completion_counts_a_logged_in_non_owner():
     app, client = _client()
     with app.app_context():

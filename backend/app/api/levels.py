@@ -509,21 +509,6 @@ def get_level_for_play(slug):
     )
 
 
-def _is_requester_the_owner(level) -> bool:
-    """
-    True only when the request carries a valid access token belonging
-    to this level's own owner - used by record_level_play/
-    record_level_complete to keep a creator play-testing their own
-    published level from inflating its own play/completion counts.
-    Both callers use @jwt_required(optional=True), so get_jwt_identity()
-    is simply None for an anonymous request (no token, or a bad/expired
-    one) rather than raising - which is exactly the common case here,
-    since most plays are anonymous.
-    """
-    user = _get_optional_requester()
-    return user is not None and user.id == level.owner_id
-
-
 def _get_optional_requester():
     """
     The logged-in user making this request, or None for an anonymous one.
@@ -553,26 +538,25 @@ def record_level_play(slug):
 
     Optionally authenticated (unlike every @jwt_required() endpoint
     above, a missing/invalid token here isn't rejected - most plays are
-    anonymous) purely so a logged-in creator play-testing their own
-    published level from /u/[username] doesn't inflate their own play
-    count every time - see _is_requester_the_owner. Anyone else,
-    anonymous or logged in, still counts, and there's still no
-    per-viewer dedup for them: a play count is meant to reflect how
-    many times a level has actually been attempted, including the same
-    non-owner replaying it repeatedly, not a distinct-people tally.
+    anonymous) so a logged-in player's try can also feed the level's
+    clear rate. Everyone counts, the level's own creator included (once
+    it is published their plays are ordinary plays, as in Super Mario
+    Maker), and there's no per-viewer dedup: a play count is meant to
+    reflect how many times a level has actually been attempted,
+    including the same person replaying it repeatedly, not a
+    distinct-people tally.
     """
     level = Level.query.filter_by(slug=slug).first()
     if level is None or not level.is_published or level.is_deleted:
         return jsonify({"error": "level not found"}), 404
 
     requester = _get_optional_requester()
-    if requester is None or requester.id != level.owner_id:
-        level.play_count += 1
-        # Registered players' tries also feed the clear rate that
-        # decides the level's difficulty label; anonymous ones don't.
-        if requester is not None:
-            record_attempt_start(level, requester)
-        db.session.commit()
+    level.play_count += 1
+    # Registered players' tries (the creator's too) also feed the clear
+    # rate that decides the level's difficulty label; anonymous ones don't.
+    if requester is not None:
+        record_attempt_start(level, requester)
+    db.session.commit()
 
     return jsonify({"play_count": level.play_count}), 200
 
@@ -581,11 +565,9 @@ def record_level_play(slug):
 @jwt_required(optional=True)
 def record_level_complete(slug):
     """
-    Same lookup rules as record_level_play, including the same
-    optional-auth owner exclusion (see _is_requester_the_owner) - a
-    creator beating their own published level from /u/[username]
-    shouldn't inflate their own completion count any more than their
-    own play count. Called the moment LEVEL_BEATEN_EVENT fires during a
+    Same lookup rules as record_level_play, and the same everyone-counts
+    rule (the creator's clears included). Called the moment 
+    LEVEL_BEATEN_EVENT fires during a
     real public playthrough (/play/[slug]) - never from the editor's
     own test-play loop, which reaches its own win condition through
     PlatformerScene but reports it via POST .../beat instead, against
@@ -602,11 +584,10 @@ def record_level_complete(slug):
         return jsonify({"error": "level not found"}), 404
 
     requester = _get_optional_requester()
-    if requester is None or requester.id != level.owner_id:
-        level.completion_count += 1
-        if requester is not None:
-            record_attempt_completion(level, requester)
-        db.session.commit()
+    level.completion_count += 1
+    if requester is not None:
+        record_attempt_completion(level, requester)
+    db.session.commit()
 
     return jsonify({"completion_count": level.completion_count}), 200
 

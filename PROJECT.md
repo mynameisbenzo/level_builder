@@ -295,7 +295,10 @@ be published again. (`published_at` is set once and never cleared; the
 only way to take a published level down is the owner's soft delete.)
 Because a published level never changes, everything measured against
 it - plays, completions, ratings, its ghost, its difficulty - is about
-exactly one layout. Anyone can remix a published level into a new,
+exactly one layout. Once published, the creator's own plays count like
+anyone's, toward play/completion counts and the clear rate alike (as in
+Super Mario Maker); only the pre-publish test plays, which happen on the
+draft, never do. Anyone can remix a published level into a new,
 separate level they own (`remixed_from_level_id`; no endpoint yet) —
 this forms a remix tree, not a chain, with both ancestry and descendant
 views.

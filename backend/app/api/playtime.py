@@ -53,3 +53,55 @@ def post_level_playtime(slug):
         ),
         200,
     )
+    
+@playtime_bp.get("/<string:slug>/record")
+def get_level_record(slug):
+    """
+    Public, unauthenticated - the level's record (who beat it with the
+    least total playtime, and how long), or null if nobody has yet.
+    """
+    level = Level.query.filter_by(slug=slug).first()
+    if level is None or not level.is_published or level.is_deleted:
+        raise PlaytimeError("level_not_found", "level not found", 404)
+
+    record = playtime_service.get_record(level.id)
+    return jsonify({"record": playtime_service.record_to_dict(record) if record else None}), 200
+
+
+@playtime_bp.post("/<string:slug>/record")
+@jwt_required()
+def submit_level_win(slug):
+    """
+    The player just beat the level. Body: `elapsed_ms`, the play time since
+    their previous heartbeat (0 if there is none). The server adds it, takes
+    their running total as their time, resets the running total and offers
+    the time as the level's record. Always 200 for a valid request:
+    `is_record` says whether it became the record, and `record` is whoever
+    holds it afterwards.
+    """
+    user = User.query.filter_by(public_id=get_jwt_identity()).first()
+    if user is None or user.is_deleted:
+        raise PlaytimeError("account_not_found", "account not found", 404)
+
+    gate_error = _verification_gate(user)
+    if gate_error is not None:
+        message, status = gate_error
+        raise PlaytimeError("verification_required", message, status)
+
+    level = Level.query.filter_by(slug=slug).first()
+    if level is None or not level.is_published or level.is_deleted:
+        raise PlaytimeError("level_not_found", "level not found", 404)
+
+    payload = request.get_json(silent=True) or {}
+    total_ms, is_record, record = playtime_service.submit_win(user, level, payload.get("elapsed_ms"))
+
+    return (
+        jsonify(
+            {
+                "total_ms": total_ms,
+                "is_record": is_record,
+                "record": playtime_service.record_to_dict(record) if record else None,
+            }
+        ),
+        200,
+    )

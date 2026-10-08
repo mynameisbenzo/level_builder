@@ -50,6 +50,7 @@ def create_app(config_name: str = "development") -> Flask:
     from app.models.level import Level  # noqa: F401
     from app.models.level_ghost import LevelGhost  # noqa: F401
     from app.models.level_playtime import LevelPlaytime  # noqa: F401
+    from app.models.level_record import LevelRecord  # noqa: F401
     from app.models.level_rating import LevelRating  # noqa: F401
     from app.models.login_link_request import LoginLinkRequest  # noqa: F401
     from app.models.login_token import LoginToken  # noqa: F401

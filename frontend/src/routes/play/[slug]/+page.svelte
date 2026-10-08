@@ -11,14 +11,13 @@
 		emptyGhostSet,
 		GHOST_KINDS,
 		GHOSTS_REGISTRY_KEY,
-		routeRecord,
 		type ClearedRuns,
 		type GhostSet
 	} from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
 	import { PLAYTIME_HEARTBEAT_INTERVAL_MS } from '$lib/game/playtime';
-	import { postLevelPlaytime } from '$lib/playtimeApi';
+	import { getLevelRecord, postLevelPlaytime, submitLevelWin } from '$lib/playtimeApi';
 	import type { PlatformerScene } from '$lib/game/PlatformerScene';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
@@ -46,39 +45,33 @@
 	// and an after ghost. Refreshed after a clear, so "Replay" races the
 	// new record straight away.
 	let ghosts: GhostSet = emptyGhostSet();
-	// What the result modal shows for a win: this attempt's time and the
-	// standing record (isNew when this very run just set it).
+	// What the result modal shows for a win: the player's total playtime
+	// across every try (null for an anonymous player, who has no total),
+	// this last attempt's clear time, and the level's playtime record
+	// (isNew when this very clear just set it).
+	let totalMs: number | null = $state(null);
 	let runTimeMs: number | null = $state(null);
-	let recordInfo: { username: string; durationMs: number; isNew: boolean } | null = $state(null);
+	let recordInfo: { username: string; totalMs: number; isNew: boolean } | null = $state(null);
+	// The record standing when the page loaded / after the last clear.
+	let standingRecord: { username: string; totalMs: number } | null = null;
 
+	// Ghost submission is separate from the record: the ghost is the
+	// replayed route, the record is the total playtime.
 	async function handleGhostRun(cleared: ClearedRuns) {
 		runTimeMs = clearedRunsDurationMs(cleared);
-		// Until (or unless) this run is submitted, the standing record is
-		// whichever route the loaded ghosts make up.
-		const standing = routeRecord(ghosts);
-		recordInfo = standing ? { ...standing, isNew: false } : null;
 
-		// Only an account can hold a record - an anonymous win just
-		// shows the time against the existing one.
+		// Only an account can hold a ghost.
 		if (!auth.accessToken) return;
 
 		// A run through a checkpoint is two stretches (before and after),
 		// each offered as its own ghost; a run that skipped it is one full
-		// stretch. The last answer carries the level's record afterwards.
-		let setARecord = false;
-		let latest: { username: string; durationMs: number } | null = null;
+		// stretch.
 		for (const kind of GHOST_KINDS) {
 			const run = cleared[kind];
 			if (!run || run.frames.length === 0) continue;
-			const result = await withSession((token) =>
+			await withSession((token) =>
 				submitLevelGhost(slug, token, { durationMs: run.durationMs, frames: run.frames }, kind)
 			);
-			if (!result?.success || !result.record) continue;
-			setARecord = setARecord || result.isRecord === true;
-			latest = result.record;
-		}
-		if (latest) {
-			recordInfo = { ...latest, isNew: setARecord };
 		}
 
 		// Pick up whatever ghosts stand now - ours if they were records,
@@ -87,8 +80,36 @@
 		if (fresh.success && fresh.ghosts) ghosts = fresh.ghosts;
 	}
 
+	// The playtime record: report the last stretch with the win. The
+	// server adds it to the running total, ends the total (the next try
+	// starts from zero) and compares it with the record.
+	async function handleRecordRun() {
+		recordInfo = standingRecord ? { ...standingRecord, isNew: false } : null;
+		if (!auth.accessToken) return;
+
+		// A heartbeat might still be on its way; let it land first so the
+		// win's report is what comes after it.
+		await flushInFlight;
+		const scene = game?.scene.getScene('PlatformerScene') as PlatformerScene | undefined;
+		const ms = scene && typeof scene.takePlaytimeMs === 'function' ? scene.takePlaytimeMs() : 0;
+
+		const result = await withSession((token) => submitLevelWin(slug, token, ms));
+		if (!result?.success) {
+			// Not recorded; the player still sees the level record as it stood.
+			if (scene && ms > 0) scene.returnPlaytimeMs(ms);
+			return;
+		}
+		totalMs = result.totalMs ?? null;
+		if (result.record) {
+			standingRecord = result.record;
+			recordInfo = { ...result.record, isNew: result.isRecord === true };
+		}
+	}
+
 	function handleLevelBeaten(cleared?: ClearedRuns) {
 		resultOutcome = 'won';
+		totalMs = null;
+		void handleRecordRun();
 		if (cleared) void handleGhostRun(cleared);
 		// Best-effort, fire-and-forget - a metrics call failing shouldn't
 		// block or interrupt the win screen the player is already looking
@@ -104,7 +125,15 @@
 	// lives. Only a logged-in player has a total.
 	let playtimeTimer: ReturnType<typeof setInterval> | undefined;
 
-	async function flushPlaytime() {
+	// The report currently on its way, so a win can wait for it.
+	let flushInFlight: Promise<void> = Promise.resolve();
+
+	function flushPlaytime(): Promise<void> {
+		flushInFlight = flushInFlight.then(sendPlaytime);
+		return flushInFlight;
+	}
+
+	async function sendPlaytime() {
 		if (!auth.accessToken) return;
 		const scene = game?.scene.getScene('PlatformerScene') as PlatformerScene | undefined;
 		if (!scene || typeof scene.takePlaytimeMs !== 'function') return;
@@ -153,12 +182,17 @@
 	function handleReplay() {
 		resultOutcome = null;
 		runTimeMs = null;
+		totalMs = null;
 		recordInfo = null;
 		restartLevel();
 	}
 
 	onMount(async () => {
-		const [result, ghostResult] = await Promise.all([getLevelForPlay(slug), getLevelGhost(slug)]);
+		const [result, ghostResult, recordResult] = await Promise.all([
+			getLevelForPlay(slug),
+			getLevelGhost(slug),
+			getLevelRecord(slug)
+		]);
 
 		if (!result.success || !result.content) {
 			loadStatus = 'error';
@@ -167,6 +201,8 @@
 		}
 
 		ghosts = ghostResult.success ? (ghostResult.ghosts ?? emptyGhostSet()) : emptyGhostSet();
+
+		standingRecord = recordResult.success ? (recordResult.record ?? null) : null;
 
 		title = result.title ?? '';
 		ownerUsername = result.ownerUsername ?? '';
@@ -237,6 +273,7 @@
 					{slug}
 					{ownerUsername}
 					onReplay={handleReplay}
+					{totalMs}
 					timeMs={runTimeMs}
 					record={recordInfo}
 				/>

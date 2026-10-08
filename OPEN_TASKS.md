@@ -125,9 +125,8 @@ reach and which catalog content they can use.
       the current Arcade-physics loop isn't built for.
 - [ ] **Ghost: owner/staff reset (future)** - remove a ghost that
       slipped through (owner of the level, moderators).
-- [ ] **Ghost: show the record on level cards (future)** - best time and
-      holder next to likes/clear rate on `/u/[username]` and Discover.
-- [ ] **Record time = total playtime (future)** - the time that counts
+- [ ] **Record time = total playtime (`/play` done, endless left)** - the
+      time that counts
       for a level (the result modal, "New record!", and the best time on
       level cards) is the **total time the player spent playing the
       level**, not one clean stretch: the clock starts when the player
@@ -135,8 +134,10 @@ reach and which catalog content they can use.
       over and added to their total on every retry. Ghosts stay as they
       are, showing the current ideal path; the record time is a
       separate number, so it can be held by a different player than a
-      ghost. Applies to levels with or without a checkpoint. Today's
-      records stay valid, since a clean run's duration is its total.
+      ghost. Applies to levels with or without a checkpoint.
+      - **Done on `/play`.** The running total, the win report, the
+        `level_records` record, the result modal and the level cards.
+        Remaining: endless (below).
       - **Clock.** Starts when the player gets control and pauses
         whenever they can't move (death modal, respawn pause, loading,
         endless interstitials and life-lost screens).
@@ -499,8 +500,7 @@ already have a link to:
         about 20 seconds, and if nobody votes the server picks at random.
       - **Starting.** Every client loads the chosen level and tells the
         server it is ready - phones load slower than laptops - and
-        anyone who doesn't within about 15 seconds is dropped. Then 
-        the server sends a "go at time T" against a shared
+        anyone who doesn't within about 15 seconds is dropped. Then the server sends a "go at time T" against a shared
         server clock (with a clock-offset estimate per client), with a
         3-2-1 countdown and controls locked until go.
       - **The race.** Each client simulates only its own player and
@@ -657,4 +657,3 @@ model only, details TBD:
 
 - [ ] npm version differs between the two dev machines this project is
       built on (Windows and macOS) — not urgent, but worth syncing to
-      keep `package-lock.json` diffs from being noise.

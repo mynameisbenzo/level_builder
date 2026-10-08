@@ -235,12 +235,29 @@ most one - so every account type can use it.
 - **Ghosts.** Three kinds, one row per (level, kind): `full` (spawn to
   finish, never touched the flag), `before` (spawn to the touch) and
   `after` (flag to finish). Each is one unbroken no-death stretch. The
-  level record is the fastest route: the full ghost, or before + after
+  ghost route is the fastest of: the full ghost, or before + after
   (credited to both holders when they differ; the full ghost wins a tie).
   A spawn-start player follows the route with the lower combined time, and
   the before ghost hands over to the after ghost when the player themselves
   touches the flag. The backend rejects before/after for levels with no
   checkpoint and checks the start/end positions (64 px tolerance).
+- **Total playtime and the level record.** The level record is a player's
+  total playtime for the level across every try, not their fastest single
+  stretch; it is separate from the ghosts. The browser's `PlaytimeClock`
+  counts from the first control and stops when the player can't move
+  (death, result modal, hidden tab). It reports to
+  `POST /api/levels/<slug>/playtime` every 5 s, on death and when the tab
+  is hidden. The server keeps one `level_playtimes` row per (user, level).
+  Each report is capped at the real time since the previous one (plus a
+  2 s tolerance) and the total at the real time since the row was created,
+  with a 99:59.999 ceiling. A win goes to `POST /api/levels/<slug>/record`
+  with the last stretch: the server adds it, deletes the row (the next try
+  starts from zero) and compares the total with the level's `level_records`
+  row (strictly faster replaces; a tie keeps the holder; totals under
+  200 ms can't set a record). The result modal shows the total and "New
+  record!"; level cards show the record. Anonymous players have no total.
+  The client controls what it reports, so records are plausible, not
+  proven, as with ghosts. Currently `/play` only; endless is next.
 
 ## Accounts, roles & permissions
 

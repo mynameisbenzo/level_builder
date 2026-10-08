@@ -17,12 +17,13 @@ long gap (a closed laptop, say) adds one heartbeat's worth at most. On top
 of that the total is capped by the real time since the row was created, and
 by a ceiling of 99:59.999 - past it, no more time is added.
 """
-
+from datetime import timedelta
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
 from app.models.level import Level
 from app.models.level_playtime import LevelPlaytime
+from app.models.level_record import LevelRecord
 from app.models.user import User
 from app.utils.time import utc_now
 
@@ -33,7 +34,9 @@ HEARTBEAT_TOLERANCE_MS = 2000
 # The most a single heartbeat can ever add.
 MAX_HEARTBEAT_MS = HEARTBEAT_INTERVAL_MS + HEARTBEAT_TOLERANCE_MS
 
-# 99 minutes 59.999 seconds - the display ceiling the total stops at.
+# A win with less total playtime than this isn't a real clear (the same
+# floor the ghosts use for a run's duration) and can't set the record.
+MIN_RECORD_MS = 200
 MAX_PLAYTIME_MS = 99 * 60 * 1000 + 59 * 1000 + 999
 
 
@@ -79,12 +82,18 @@ def apply_heartbeat(user: User, level: Level, elapsed_ms, now=None) -> LevelPlay
 
     row = _get_row(user, level, for_update=True)
     if row is None:
+        # The very first report: the time it describes happened before the
+        # row existed, so the row is dated back by that much (at most one
+        # heartbeat's worth) - otherwise a quick win, reported in a single
+        # call, would count as no time at all.
+        credit = min(elapsed_ms, MAX_HEARTBEAT_MS)
+        started = now - timedelta(milliseconds=credit)
         row = LevelPlaytime(
             level_id=level.id,
             user_id=user.id,
             total_ms=0,
-            created_at=now,
-            last_heartbeat_at=now,
+            created_at=started,
+            last_heartbeat_at=started,
         )
         db.session.add(row)
         try:
@@ -118,3 +127,74 @@ def finish_playtime(user: User, level: Level) -> int:
     total = row.total_ms
     db.session.delete(row)
     return total
+
+def record_to_dict(record: LevelRecord) -> dict:
+    return {"username": record.user.username, "total_ms": record.total_ms}
+
+
+def get_record(level_id: int) -> LevelRecord | None:
+    """
+    The level's record, or None. A record whose holder has since deleted
+    their account is treated as absent - the next win then takes it.
+    """
+    record = LevelRecord.query.filter_by(level_id=level_id).first()
+    if record is None or record.user.is_deleted:
+        return None
+    return record
+
+
+def best_times_for_levels(level_ids: list[int]) -> dict[int, int]:
+    """
+    {level_id: record total in ms} for every level in a list response, in
+    one query rather than one per level. A level nobody has beaten (or
+    whose record holder deleted their account) simply isn't a key.
+    """
+    if not level_ids:
+        return {}
+
+    rows = (
+        db.session.query(LevelRecord.level_id, LevelRecord.total_ms)
+        .join(User, User.id == LevelRecord.user_id)
+        .filter(LevelRecord.level_id.in_(level_ids))
+        .filter(User.is_deleted.is_(False))
+        .all()
+    )
+    return {level_id: total_ms for level_id, total_ms in rows}
+
+
+def submit_win(user: User, level: Level, elapsed_ms, now=None) -> tuple[int, bool, LevelRecord | None]:
+    """
+    The player beat the level. `elapsed_ms` is the play time since their
+    last heartbeat (the same number a heartbeat carries, clamped the same
+    way). Adds it, takes the player's total and clears their running row so
+    the next try starts at zero, then offers the total as the level's
+    record. Returns (total_ms, is_record, record): `record` is whoever
+    holds the record afterwards. A tie keeps the existing record - it only
+    changes hands for a strictly faster total. Commits.
+    """
+    apply_heartbeat(user, level, elapsed_ms, now=now)
+    total_ms = finish_playtime(user, level)
+
+    if total_ms < MIN_RECORD_MS:
+        db.session.commit()
+        return total_ms, False, get_record(level.id)
+
+    existing = LevelRecord.query.filter_by(level_id=level.id).with_for_update().first()
+    is_record = False
+    if existing is None:
+        db.session.add(LevelRecord(level_id=level.id, user_id=user.id, total_ms=total_ms))
+        is_record = True
+    elif existing.user.is_deleted or total_ms < existing.total_ms:
+        existing.user_id = user.id
+        existing.total_ms = total_ms
+        existing.set_at = utc_now()
+        is_record = True
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Two first wins landed at once; the other one got there first.
+        db.session.rollback()
+        return total_ms, False, get_record(level.id)
+
+    return total_ms, is_record, get_record(level.id)

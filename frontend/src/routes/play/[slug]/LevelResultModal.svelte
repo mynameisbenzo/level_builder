@@ -19,16 +19,19 @@
 		ownerUsername,
 		onReplay,
 		timeMs = null,
+		totalMs = null,
 		record = null
 	}: {
 		outcome: 'won' | 'died';
 		slug: string;
 		ownerUsername: string;
 		onReplay: () => void;
-		/** This attempt's clear time - only passed for a win. */
+		/** This last attempt's clear time - only passed for a win. */
 		timeMs?: number | null;
-		/** The level's standing record (isNew when this run just set it). */
-		record?: { username: string; durationMs: number; isNew: boolean } | null;
+		/** The player's total playtime across every try - a logged-in win only. */
+		totalMs?: number | null;
+		/** The level's playtime record (isNew when this clear just set it). */
+		record?: { username: string; totalMs: number; isNew: boolean } | null;
 	} = $props();
 
 	// null until a rating is known one way or the other - either loaded
@@ -120,12 +123,16 @@
 		<div class="modal-card">
 			<h2>{outcome === 'won' ? 'Level Cleared!' : 'You Died'}</h2>
 
-			{#if outcome === 'won' && timeMs !== null}
-				<p class="time">Your time: <strong>{formatRunTime(timeMs)}</strong></p>
+			{#if outcome === 'won'}
+				{#if totalMs !== null}
+					<p class="time">Total time: <strong>{formatRunTime(totalMs)}</strong></p>
+				{:else if timeMs !== null}
+					<p class="time">Your time: <strong>{formatRunTime(timeMs)}</strong></p>
+				{/if}
 				{#if record?.isNew}
 					<p class="record record-new">New record!</p>
 				{:else if record}
-					<p class="record">Record: {formatRunTime(record.durationMs)} by {record.username}</p>
+					<p class="record">Record: {formatRunTime(record.totalMs)} by {record.username}</p>
 				{/if}
 			{/if}
 

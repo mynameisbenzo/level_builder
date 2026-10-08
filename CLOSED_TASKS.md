@@ -264,6 +264,8 @@ test-play flow.)
       checked server-side for shape, sane duration, a start near the
       spawn, and no teleports between samples (`app/services/ghosts.py`).
       The result modal shows your time and the record ("New record!").
+      (Superseded: the record is now total playtime, see "Total playtime
+      record" at the end of this file.)
 
 - [x] Dying restarts the level from the beginning (`scene.restart()`,
       which `create()` already resets every piece of runtime state for
@@ -271,3 +273,14 @@ test-play flow.)
       leaving the player stuck on a frozen, non-interactive screen.
 - [x] A visitor never sees the "Tab to switch to Edit Mode" hint or has
       the Tab/touch-toggle actually do anything - both are now gated
+
+
+## Total playtime record (`/play`)
+
+- [x] The level record is the player's **total playtime across all tries**
+      (e.g. a first try of x plus a winning try of y = x + y), kept
+      server-side in one `level_playtimes` row per (user, level) and
+      cleared only by a win. Heartbeats are clamped by the real time since
+      the previous one and since the row was created, with a 99:59.999
+      ceiling. `level_records` holds one row per level; the result modal
+      shows the total and "New record!"; level cards show the record.

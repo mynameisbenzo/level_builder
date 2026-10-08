@@ -8,7 +8,7 @@ from app.models.level import Level, LevelVisibilityState
 from app.models.level_rating import LevelRating
 from app.models.user import User
 from app.schemas.level import level_to_dict, level_to_summary_dict
-from app.services import ghosts as ghost_service
+from app.services import playtime as playtime_service
 from app.services.difficulty import record_attempt_completion, record_attempt_start
 from app.services.level_content import default_level_content, validate_level_content
 from app.services.thumbnails import ThumbnailError, upload_level_thumbnail
@@ -204,7 +204,7 @@ def list_my_levels():
 
     levels = Level.query.filter_by(owner_id=user.id).order_by(Level.created_at.desc()).all()
     rating_counts = _rating_counts_for([level.id for level in levels])
-    best_times = ghost_service.best_times_for_levels([level.id for level in levels if level.is_published])
+    best_times = playtime_service.best_times_for_levels([level.id for level in levels if level.is_published])
 
     return (
         jsonify([level_to_summary_dict(level, rating_counts, best_times) for level in levels]),
@@ -718,7 +718,7 @@ def list_levels_by_user(username):
         .all()
     )
     rating_counts = _rating_counts_for([level.id for level in levels])
-    best_times = ghost_service.best_times_for_levels([level.id for level in levels])
+    best_times = playtime_service.best_times_for_levels([level.id for level in levels])
 
     return (
         jsonify([level_to_summary_dict(level, rating_counts, best_times) for level in levels]),

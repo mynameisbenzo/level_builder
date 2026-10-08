@@ -286,62 +286,12 @@ def test_non_json_body_is_a_400_not_a_crash():
     assert response.status_code == 400
 
 
-# ── Best time on level lists ────────────────────────────────────────────
+# The best time on level lists is the level's total-playtime record now (see
+# test_playtime_api.py), not the fastest ghost.
 
 
 def _creator_levels(client):
     return client.get("/api/levels/by-user/creator").get_json()
-
-
-def test_public_level_list_carries_the_best_time():
-    _app, client, token, level = _world()
-
-    assert _creator_levels(client)[0]["best_time_ms"] is None
-
-    _submit(client, token, level.slug, _run(2000))
-    assert _creator_levels(client)[0]["best_time_ms"] == 2000
-
-
-def test_best_time_follows_a_faster_clear():
-    app, client, token, level = _world()
-    other_token, _ = _player(app, client, "speedy", "s@example.com")
-
-    _submit(client, token, level.slug, _run(3000))
-    _submit(client, other_token, level.slug, _run(1500))
-
-    assert _creator_levels(client)[0]["best_time_ms"] == 1500
-
-
-def test_best_time_ignores_a_deleted_holder():
-    _app, client, token, level = _world()
-    _submit(client, token, level.slug, _run(2000))
-    runner = User.query.filter_by(username="runner").first()
-    runner.is_deleted = True
-    db.session.commit()
-
-    assert _creator_levels(client)[0]["best_time_ms"] is None
-
-
-def test_best_time_is_per_level_in_a_list():
-    _app, client, token, level = _world()
-    creator = User.query.filter_by(username="creator").first()
-    other_level = _live_level(creator)
-    _submit(client, token, level.slug, _run(2000))
-
-    by_slug = {item["id"]: item["best_time_ms"] for item in _creator_levels(client)}
-    assert by_slug[level.slug] == 2000
-    assert by_slug[other_level.slug] is None
-
-
-def test_owner_list_carries_the_best_time_too():
-    app, client, token, level = _world()
-    _submit(client, token, level.slug, _run(2000))
-    creator_token = _login_existing(app, client, "creator")
-
-    response = client.get("/api/levels", headers=_headers(creator_token))
-    assert response.status_code == 200
-    assert response.get_json()[0]["best_time_ms"] == 2000
-    
 
 
 # ── Checkpoint ghosts (full / before / after) ───────────────────────────
@@ -458,22 +408,6 @@ def test_a_lone_before_ghost_falls_back_to_its_own_summary():
     response = _submit(client, token, level.slug, _before_run(2000)).get_json()
 
     assert response["record"] == {"username": "runner", "duration_ms": 2000}
-
-
-def test_best_time_on_a_level_card_needs_a_complete_route():
-    _app, client, token, level = _checkpoint_world()
-
-    # Only one half so far: no complete route, so no best time yet.
-    _submit(client, token, level.slug, _before_run(2000))
-    assert _creator_levels(client)[0]["best_time_ms"] is None
-
-    # Both halves: the route time is their sum.
-    _submit(client, token, level.slug, _after_run(3000))
-    assert _creator_levels(client)[0]["best_time_ms"] == 5000
-
-    # A faster full run takes over.
-    _submit(client, token, level.slug, _run(4000))
-    assert _creator_levels(client)[0]["best_time_ms"] == 4000
 
 
 def test_before_and_after_are_rejected_on_a_level_without_a_checkpoint():

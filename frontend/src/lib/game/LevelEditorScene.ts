@@ -94,13 +94,17 @@ import {
 	getNextActiveGroupKeys,
 	getSameGroupTileKeys,
 	HAZARD_TILE_FRAME,
-	HAZARD_Y_OFFSET,
 	HAZARD_DISPLAY_WIDTH,
 	HAZARD_DISPLAY_HEIGHT,
+	getHazardPlacement,
+	getHazardRotation,
 	isPositionOccupied,
 	mergeAdjacentSameStyleGroups,
 	PLACED_OBJECTS_REGISTRY_KEY,
 	removePosition,
+	rotateHazardAt,
+	type HazardPlacedObject,
+	type HazardRotation,
 	resolveGroupIdForPlacement,
 	tileKey,
 	updateObjectStyle,
@@ -527,7 +531,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 		for (const object of placedObjects) {
 			if (object.type === 'hazard') {
-				this.renderHazardTile(object.x, object.y);
+				this.renderHazardTile(object.x, object.y, getHazardRotation(object));
 			} else if (object.type === 'enemy') {
 				this.renderEnemyTile(object.x, object.y);
 			}
@@ -909,7 +913,7 @@ export class LevelEditorScene extends Phaser.Scene {
 			'Click a platform to select it, click again to deselect',
 			'Select a platform to reveal the style picker and change its appearance',
 			'Eraser tool: click or click-drag a tile to remove it',
-			'Hazard tool: click-drag to paint spike tiles - deadly to the touch',
+			'Hazard tool: click-drag to paint spike tiles - deadly to the touch. Click a spike again to rotate it',
 			'Enemy tool: click-drag to place spiders - stomp them from above, or they\'ll hurt you',
 			'Tab, or the mobile \u21c4 button, switches to Play Mode'
 		];
@@ -2401,7 +2405,7 @@ export class LevelEditorScene extends Phaser.Scene {
 		}
 
 		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...existing, { type: 'hazard', x, y }]);
-		this.renderHazardTile(x, y);
+		this.renderHazardTile(x, y, 0);
 	}
 
 	/**
@@ -2414,17 +2418,50 @@ export class LevelEditorScene extends Phaser.Scene {
 	 * generic image cleanup works for either kind without needing to
 	 * know which one it's looking at.
 	 */
-	private renderHazardTile(x: number, y: number) {
+	private renderHazardTile(x: number, y: number, rotation: HazardRotation) {
 		const tile = this.add
-			.image(x, y + HAZARD_Y_OFFSET, HAZARD_ATLAS_KEY, HAZARD_TILE_FRAME)
+			.image(x, y, HAZARD_ATLAS_KEY, HAZARD_TILE_FRAME)
 			.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT)
 			.setInteractive();
+		this.applyHazardRotation(tile, x, y, rotation);
 		tile.on('pointerdown', () => {
-			if (this.getEditorTool() === 'eraser') {
+			const tool = this.getEditorTool();
+			if (tool === 'eraser') {
 				this.eraseTile(x, y);
+			} else if (tool === 'hazard') {
+				this.rotateHazard(x, y);
 			}
 		});
 		this.tileImagesByKey.set(tileKey(x, y), tile);
+	}
+
+	/** Positions and turns a hazard's image for its rotation (see getHazardPlacement). */
+	private applyHazardRotation(
+		tile: Phaser.GameObjects.Image,
+		cellX: number,
+		cellY: number,
+		rotation: HazardRotation
+	) {
+		const placement = getHazardPlacement(cellX, cellY, rotation);
+		tile.setPosition(placement.x, placement.y);
+		tile.setAngle(placement.angle);
+	}
+
+	/** Clicking an existing spike with the Hazard tool turns it 90 degrees clockwise. */
+	private rotateHazard(x: number, y: number) {
+		const existing =
+			(this.registry.get(PLACED_OBJECTS_REGISTRY_KEY) as PlacedObject[] | undefined) ?? [];
+		const updated = rotateHazardAt(existing, x, y);
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, updated);
+
+		const hazard = updated.find(
+			(object): object is HazardPlacedObject =>
+				object.type === 'hazard' && object.x === x && object.y === y
+		);
+		const image = this.tileImagesByKey.get(tileKey(x, y));
+		if (hazard && image) {
+			this.applyHazardRotation(image as Phaser.GameObjects.Image, x, y, getHazardRotation(hazard));
+		}
 	}
 
 	// ── Enemy placement tool ─────────────────────────────────────────────

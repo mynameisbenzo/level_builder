@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import {
 	bridgeIfBetweenTwoGroups,
+	getHazardPlacement,
+	getHazardRotation,
 	getNextActiveGroupKeys,
 	getSameGroupTileKeys,
 	isPositionOccupied,
 	mergeAdjacentSameStyleGroups,
 	mergeGroupIds,
+	nextHazardRotation,
 	removePosition,
 	resolveGroupIdForPlacement,
+	rotateHazardAt,
 	tileKey,
 	updateObjectStyle,
-	type GroundPlacedObject
+	type GroundPlacedObject,
+	type PlacedObject
 } from './placedObjects';
 
 const obj = (
@@ -255,5 +260,71 @@ describe('isPositionOccupied / removePosition with a mixed ground+hazard array',
 	it('removes only the exact match regardless of type', () => {
 		const existing = [obj(0, 0), { type: 'hazard' as const, x: 32, y: 0 }];
 		expect(removePosition(existing, 32, 0)).toEqual([obj(0, 0)]);
+	});
+});
+
+
+describe('hazard rotation', () => {
+	it('treats a missing or unknown rotation as 0', () => {
+		expect(getHazardRotation({})).toBe(0);
+		expect(getHazardRotation({ rotation: 45 })).toBe(0);
+		expect(getHazardRotation({ rotation: '90' })).toBe(0);
+		expect(getHazardRotation({ rotation: 270 })).toBe(270);
+	});
+
+	it('cycles 0 -> 90 -> 180 -> 270 -> 0', () => {
+		expect(nextHazardRotation(0)).toBe(90);
+		expect(nextHazardRotation(90)).toBe(180);
+		expect(nextHazardRotation(180)).toBe(270);
+		expect(nextHazardRotation(270)).toBe(0);
+	});
+
+	it('turns only the hazard at that position, and drops the field on a full turn', () => {
+		const start: PlacedObject[] = [
+			obj(16, 16),
+			{ type: 'hazard', x: 48, y: 16 },
+			{ type: 'hazard', x: 80, y: 16 }
+		];
+
+		const once = rotateHazardAt(start, 48, 16);
+		expect(once[0]).toEqual(obj(16, 16));
+		expect(once[1]).toEqual({ type: 'hazard', x: 48, y: 16, rotation: 90 });
+		expect(once[2]).toEqual({ type: 'hazard', x: 80, y: 16 });
+
+		let turned = once;
+		for (let i = 0; i < 3; i++) turned = rotateHazardAt(turned, 48, 16);
+		expect(turned[1]).toEqual({ type: 'hazard', x: 48, y: 16 });
+		expect('rotation' in turned[1]).toBe(false);
+	});
+
+	it('leaves ground tiles and empty cells alone', () => {
+		const start: PlacedObject[] = [obj(16, 16)];
+		expect(rotateHazardAt(start, 16, 16)).toEqual(start);
+		expect(rotateHazardAt(start, 48, 16)).toEqual(start);
+	});
+
+	it('does not change the array it was given', () => {
+		const start: PlacedObject[] = [{ type: 'hazard', x: 16, y: 16 }];
+		rotateHazardAt(start, 16, 16);
+		expect(start[0]).toEqual({ type: 'hazard', x: 16, y: 16 });
+	});
+
+	it('rests each rotation against the edge of its cell it points away from', () => {
+		// Cell centered at (48, 48) in a 32px grid: edges at 32 / 64.
+		const up = getHazardPlacement(48, 48, 0);
+		expect(up).toEqual({ x: 48, y: 56, angle: 0, width: 28, height: 16 });
+		expect(up.y + up.height / 2).toBe(64); // flush with the floor
+
+		const right = getHazardPlacement(48, 48, 90);
+		expect(right).toEqual({ x: 40, y: 48, angle: 90, width: 16, height: 28 });
+		expect(right.x - right.width / 2).toBe(32); // flush with the left edge
+
+		const down = getHazardPlacement(48, 48, 180);
+		expect(down).toEqual({ x: 48, y: 40, angle: 180, width: 28, height: 16 });
+		expect(down.y - down.height / 2).toBe(32); // hanging from the ceiling
+
+		const left = getHazardPlacement(48, 48, 270);
+		expect(left).toEqual({ x: 56, y: 48, angle: 270, width: 16, height: 28 });
+		expect(left.x + left.width / 2).toBe(64); // flush with the right edge
 	});
 });

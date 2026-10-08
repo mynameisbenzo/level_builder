@@ -129,7 +129,8 @@ import {
 	PLACED_OBJECTS_REGISTRY_KEY, 
 	HAZARD_DISPLAY_WIDTH, 
 	HAZARD_DISPLAY_HEIGHT, 
-	HAZARD_Y_OFFSET,
+	getHazardPlacement,
+	getHazardRotation,
 	type PlacedObject } from './placedObjects';
 import {
 	CHARACTER_SWAP_OBJECTS_REGISTRY_KEY,
@@ -663,13 +664,26 @@ export class PlatformerScene extends Phaser.Scene {
 		this.hazards = this.physics.add.staticGroup();
 		for (const object of placedObjects) {
 			if (object.type !== 'hazard') continue;
+			const rotation = getHazardRotation(object);
+			const placement = getHazardPlacement(object.x, object.y, rotation);
 			const tile = this.hazards.create(
-				object.x,
-				object.y + HAZARD_Y_OFFSET,
+				placement.x,
+				placement.y,
 				HAZARD_ATLAS_KEY,
 				HAZARD_TILE_FRAME
 			) as Phaser.Physics.Arcade.Sprite;
-			tile.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT);
+			if (rotation === 0) {
+				tile.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT);
+			} else {
+				// A static body can't be turned, so a rotated spike gets an
+				// invisible body sized to the turned strip (placement.width x
+				// placement.height) and a separate, rotated image to draw.
+				tile.setDisplaySize(placement.width, placement.height).setVisible(false);
+				this.add
+					.image(placement.x, placement.y, HAZARD_ATLAS_KEY, HAZARD_TILE_FRAME)
+					.setDisplaySize(HAZARD_DISPLAY_WIDTH, HAZARD_DISPLAY_HEIGHT)
+					.setAngle(placement.angle);
+			}
 			tile.refreshBody();
 		}
 		this.physics.add.overlap(this.player, this.hazards, () => this.die());

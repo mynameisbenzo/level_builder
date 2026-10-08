@@ -49,6 +49,8 @@ DEFAULT_BACKGROUND_THEME = "color_hills"
 # spider exists so far, but kept as a set (not a single string check) for
 # the same reason the frontend does: a second enemy is already planned.
 ENEMY_TYPES = {"spider"}
+# Which way a hazard's spikes can point, in degrees clockwise (0 = up).
+HAZARD_ROTATIONS = (0, 90, 180, 270)
 
 # Ground tiles get a much larger budget than everything else below
 # because they're the one object type placeable via click-and-drag
@@ -161,9 +163,15 @@ def _validate_placed_objects(value) -> str | None:
             # is the same fixed sprite, and hazards never merge into
             # multi-tile platforms the way ground tiles do (see
             # frontend/src/lib/game/placedObjects.ts's HazardPlacedObject).
-            extra_keys = set(obj.keys()) - {"type", "x", "y"}
+            # The one extra is an optional rotation (degrees clockwise);
+            # a hazard without one points up, as they all did before.
+            extra_keys = set(obj.keys()) - {"type", "x", "y", "rotation"}
             if extra_keys:
                 return f"placedObjects[{i}] (a hazard) must not have: {', '.join(sorted(extra_keys))}"
+            if "rotation" in obj:
+                rotation = obj["rotation"]
+                if isinstance(rotation, bool) or rotation not in HAZARD_ROTATIONS:
+                    return f"placedObjects[{i}].rotation must be one of: {', '.join(str(r) for r in HAZARD_ROTATIONS)}"
         else:
             if obj.get("enemyType") not in ENEMY_TYPES:
                 return f"placedObjects[{i}].enemyType must be one of: {', '.join(sorted(ENEMY_TYPES))}"

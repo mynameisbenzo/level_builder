@@ -179,17 +179,81 @@ def count_eligible_levels() -> dict:
     return counts
 
 
-def _serve_next_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
-    """
-    Picks a random eligible level (repeats are allowed, and a user can be
-    served their own level) and records it as the run's new current
-    level. Returns None if nothing is eligible.
-    """
+# How many level ids a run's shuffled list holds at most. A random sample
+# of the eligible pool, so a big pool doesn't mean a big list.
+LEVEL_QUEUE_SIZE = 100
+
+
+def _category_levels_query(run: EndlessRun):
+    """The eligible levels for this run's difficulty choice."""
     query = _eligible_levels_query()
     if run.difficulty is not None:
         query = query.filter(Level.difficulty_label_cached == run.difficulty)
+    return query
 
-    level = query.order_by(func.random()).first()
+
+def _build_level_queue(run: EndlessRun, last_level_id: int | None) -> list[int]:
+    """
+    A fresh shuffled list of eligible level ids (a random sample of up to
+    LEVEL_QUEUE_SIZE). If the level just served would come first, it's
+    moved to the back, so the seam between two lists can't repeat it.
+    """
+    ids = [
+        row[0]
+        for row in _category_levels_query(run)
+        .with_entities(Level.id)
+        .order_by(func.random())
+        .limit(LEVEL_QUEUE_SIZE)
+        .all()
+    ]
+    if len(ids) > 1 and ids[0] == last_level_id:
+        ids.append(ids.pop(0))
+    return ids
+
+
+def _next_level_from_queue(run: EndlessRun, last_level_id: int | None) -> Level | None:
+    """
+    Takes the next level off the run's shuffled list, rebuilding the list
+    when it's empty. Ids that are no longer eligible (unpublished, deleted,
+    or relabeled out of this category since the list was built) are
+    skipped. Returns None if nothing is eligible.
+    """
+    queue = list(run.level_queue or [])
+    rebuilt = False
+    while True:
+        if not queue:
+            if rebuilt:
+                run.level_queue = []
+                return None
+            queue = _build_level_queue(run, last_level_id)
+            rebuilt = True
+            if not queue:
+                run.level_queue = []
+                return None
+
+        level_id = queue.pop(0)
+        level = _category_levels_query(run).filter(Level.id == level_id).first()
+        if level is not None:
+            # A new list object, so the JSON column registers the change.
+            run.level_queue = queue
+            return level
+
+
+def _serve_next_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
+    """
+    Serves the next level from the run's shuffled list and records it as
+    the run's new current level (a user can be served their own level; a
+    level can come up again, but only after the rest of the list). Returns
+    None if nothing is eligible.
+    """
+    last_level_id = (
+        db.session.query(EndlessRunLevel.level_id)
+        .filter(EndlessRunLevel.run_id == run.id)
+        .order_by(EndlessRunLevel.position.desc())
+        .limit(1)
+        .scalar()
+    )
+    level = _next_level_from_queue(run, last_level_id)
     if level is None:
         return None
 

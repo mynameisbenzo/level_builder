@@ -695,3 +695,124 @@ def test_endless_tries_and_clears_feed_the_levels_attempts(clock):
         assert [attempt.source for attempt in attempts] == ["endless", "endless"]
         assert [attempt.completed_at is not None for attempt in attempts] == [False, True]
         assert all(attempt.user_id == player.id for attempt in attempts)
+        
+
+
+# --- the shuffled list levels are served from ---
+
+
+def _setup_paid_world(app, client, clock, levels):
+    """A paid player (so a run can have many lives) and `levels` live levels."""
+    token, player = _player(app, client, clock, paid=True)
+    creator = _creator(app, client, clock)
+    for index in range(levels):
+        _live_level(creator, title=f"Level {index}")
+    return token, player, creator
+
+
+def _served_level_ids(run_id):
+    from app.models.endless import EndlessRunLevel
+
+    entries = EndlessRunLevel.query.filter_by(run_id=run_id).order_by(EndlessRunLevel.position).all()
+    return [entry.level_id for entry in entries]
+
+
+def test_every_level_is_served_once_before_any_repeats(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _c = _setup_paid_world(app, client, clock, levels=4)
+        run = _start(client, token, starting_lives=50).get_json()["run"]
+
+        for _ in range(7):
+            _post(client, token, "/runs/current/skip")
+
+        served = _served_level_ids(EndlessRun.query.first().id)
+        assert len(served) == 8
+        # Two full passes through the 4 levels: each pass has no duplicates.
+        assert len(set(served[:4])) == 4
+        assert len(set(served[4:])) == 4
+        assert run["current_level"]["position"] == 1
+
+
+def test_the_same_level_is_never_served_twice_in_a_row(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _c = _setup_paid_world(app, client, clock, levels=2)
+        _start(client, token, starting_lives=50)
+
+        for _ in range(30):
+            _post(client, token, "/runs/current/skip")
+
+        served = _served_level_ids(EndlessRun.query.first().id)
+        assert len(served) == 31
+        assert all(a != b for a, b in zip(served, served[1:]))
+
+
+def test_a_lone_level_repeats_since_it_is_the_only_choice(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _c = _setup_free_world(app, client, clock, levels=1)
+        _start(client, token)
+        _post(client, token, "/runs/current/skip")
+        _post(client, token, "/runs/current/skip")
+
+        served = _served_level_ids(EndlessRun.query.first().id)
+        assert len(served) == 3
+        assert len(set(served)) == 1
+
+
+def test_a_level_removed_after_the_list_was_built_is_skipped(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _c = _setup_paid_world(app, client, clock, levels=5)
+        _start(client, token, starting_lives=50)
+        run = EndlessRun.query.first()
+        remaining = list(run.level_queue)
+        assert len(remaining) == 4
+
+        # Delete the level that was next in line.
+        doomed = db.session.get(Level, remaining[0])
+        doomed.is_deleted = True
+        db.session.commit()
+
+        _post(client, token, "/runs/current/skip")
+
+        served = _served_level_ids(run.id)
+        assert doomed.id not in served
+        assert served[1] == remaining[1]
+
+
+def test_a_relabeled_level_drops_out_of_a_difficulty_run(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p = _player(app, client, clock, paid=True)
+        creator = _creator(app, client, clock)
+        for index in range(3):
+            _live_level(creator, title=f"Hard {index}", difficulty="hard")
+        _start(client, token, difficulty="hard", starting_lives=50)
+        run = EndlessRun.query.first()
+        remaining = list(run.level_queue)
+
+        relabeled = db.session.get(Level, remaining[0])
+        relabeled.difficulty_label_cached = "easy"
+        db.session.commit()
+
+        _post(client, token, "/runs/current/skip")
+
+        assert relabeled.id not in _served_level_ids(run.id)
+
+
+def test_a_run_with_no_levels_left_serves_none(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _c = _setup_paid_world(app, client, clock, levels=2)
+        _start(client, token, starting_lives=50)
+        for level in Level.query.all():
+            level.is_deleted = True
+        db.session.commit()
+
+        response = _post(client, token, "/runs/current/skip")
+
+        # Same as before the list existed: the run stays, with no level to serve.
+        assert response.status_code == 200
+        assert response.get_json()["run"]["current_level"] is None

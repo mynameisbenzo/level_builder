@@ -192,7 +192,41 @@ def test_placed_object_with_wrong_type_field_is_rejected():
     is_valid, error = validate_level_content(_minimal_valid_content(placedObjects=[tile]))
     assert is_valid is False
     assert "type" in error
+# --- hazard rotation ---
 
+
+def _hazard(**extra) -> dict:
+    return {"type": "hazard", "x": _cell_center(0), "y": _cell_center(0), **extra}
+
+
+def test_a_hazard_without_a_rotation_still_passes():
+    is_valid, _error = validate_level_content(_minimal_valid_content(placedObjects=[_hazard()]))
+    assert is_valid is True
+
+
+def test_every_hazard_rotation_passes():
+    for rotation in (0, 90, 180, 270):
+        is_valid, error = validate_level_content(
+            _minimal_valid_content(placedObjects=[_hazard(rotation=rotation)])
+        )
+        assert is_valid is True, error
+
+
+def test_a_hazard_rotation_must_be_one_of_the_four_turns():
+    for rotation in (45, 360, -90, "90", None, True, [90]):
+        is_valid, error = validate_level_content(
+            _minimal_valid_content(placedObjects=[_hazard(rotation=rotation)])
+        )
+        assert is_valid is False, rotation
+        assert "rotation" in error
+
+
+def test_a_hazard_still_rejects_other_extra_fields():
+    is_valid, error = validate_level_content(
+        _minimal_valid_content(placedObjects=[_hazard(style="grass")])
+    )
+    assert is_valid is False
+    assert "style" in error
 
 # --- characterSwapObjects ---
 

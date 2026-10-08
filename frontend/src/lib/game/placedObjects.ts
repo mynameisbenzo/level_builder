@@ -25,7 +25,18 @@ export interface HazardPlacedObject {
 	type: 'hazard';
 	x: number;
 	y: number;
+	/**
+	 * Which way the spikes point, in degrees clockwise: 0 (up, sitting on
+	 * the cell's floor - the original and default), 90 (right, against the
+	 * cell's left edge), 180 (down, hanging from the cell's ceiling), or
+	 * 270 (left, against the cell's right edge). Left off for 0, so
+	 * hazards saved before rotation existed are unchanged.
+	 */
+	rotation?: HazardRotation;
 }
+
+export const HAZARD_ROTATIONS = [0, 90, 180, 270] as const;
+export type HazardRotation = (typeof HAZARD_ROTATIONS)[number];
 
 /**
  * An enemy spawn point - which kind (enemyType) patrols/behaves however
@@ -65,6 +76,77 @@ export const HAZARD_DISPLAY_HEIGHT = 16;
 export const HAZARD_Y_OFFSET = (GRID_SIZE - HAZARD_DISPLAY_HEIGHT) / 2;
 
 export const PLACED_OBJECTS_REGISTRY_KEY = 'placedObjects';
+
+/** The rotation a hazard has (0 when none is stored, or the value is unknown). */
+export function getHazardRotation(object: { rotation?: unknown }): HazardRotation {
+	return (HAZARD_ROTATIONS as readonly unknown[]).includes(object.rotation)
+		? (object.rotation as HazardRotation)
+		: 0;
+}
+
+/** The next rotation in the click cycle: 0 -> 90 -> 180 -> 270 -> 0. */
+export function nextHazardRotation(rotation: HazardRotation): HazardRotation {
+	return ((rotation + 90) % 360) as HazardRotation;
+}
+
+/**
+ * Returns a new array with the hazard at the given position turned 90
+ * degrees clockwise. A rotation of 0 is stored by leaving `rotation` off,
+ * so a full turn gives back the original `{ type, x, y }`. Anything that
+ * isn't a hazard at that position is left alone (the array comes back
+ * unchanged, but still new).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function rotateHazardAt(existing: PlacedObject[], x: number, y: number): PlacedObject[] {
+	return existing.map((object) => {
+		if (object.type !== 'hazard' || object.x !== x || object.y !== y) {
+			return object;
+		}
+		const next = nextHazardRotation(getHazardRotation(object));
+		const { rotation: _previous, ...rest } = object;
+		return next === 0 ? rest : { ...rest, rotation: next };
+	});
+}
+
+export interface HazardPlacement {
+	/** Center of the spike strip. */
+	x: number;
+	y: number;
+	/** Degrees clockwise to draw the sprite at. */
+	angle: number;
+	/** Size of the spike strip once rotated (its hitbox). */
+	width: number;
+	height: number;
+}
+
+/**
+ * Where a hazard in the grid cell centered at (cellX, cellY) is drawn and
+ * what space it covers. The strip sits flush against the edge of the cell
+ * it points away from - the floor when pointing up, the ceiling when
+ * pointing down, the left edge when pointing right, the right edge when
+ * pointing left - the same way the upright strip rests on the floor
+ * (see HAZARD_Y_OFFSET).
+ * Pure function, no Phaser dependency, safe to unit test directly.
+ */
+export function getHazardPlacement(
+	cellX: number,
+	cellY: number,
+	rotation: HazardRotation
+): HazardPlacement {
+	const sideways = rotation === 90 || rotation === 270;
+	const width = sideways ? HAZARD_DISPLAY_HEIGHT : HAZARD_DISPLAY_WIDTH;
+	const height = sideways ? HAZARD_DISPLAY_WIDTH : HAZARD_DISPLAY_HEIGHT;
+	const inset = (GRID_SIZE - HAZARD_DISPLAY_HEIGHT) / 2;
+
+	let x = cellX;
+	let y = cellY;
+	if (rotation === 0) y = cellY + inset;
+	else if (rotation === 90) x = cellX - inset;
+	else if (rotation === 180) y = cellY - inset;
+	else x = cellX + inset;
+
+	return { x, y, angle: rotation, width, height };
+}
 
 /**
  * Checks whether a placed object already exists at the exact given

@@ -63,6 +63,13 @@ class EndlessRun(db.Model):
     # ENDLESS_DIFFICULTIES in app/services/endless.py.
     difficulty = db.Column(db.String(20), nullable=True)
 
+    # The shuffled list of level ids still to be served in this run (see
+    # _serve_next_level in app/services/endless.py): each level served is
+    # removed, and the list is rebuilt and reshuffled when it empties, so
+    # a level can't come up twice in a row unless it's the only one
+    # available. NULL until the first level is served.
+    level_queue = db.Column(db.JSON, nullable=True)
+
     starting_lives = db.Column(db.Integer, nullable=False)
     lives_remaining = db.Column(db.Integer, nullable=False)
     levels_cleared = db.Column(db.Integer, nullable=False, default=0)

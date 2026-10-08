@@ -321,8 +321,11 @@ already have a link to:
         TAS!?!? - see Levels (publishing is final); these come from
         `Level.difficulty_label_cached`, which is unset until a level
         has 10 attempts). A category with zero
-        matching levels is greyed out in the picker. Repeats are fine,
-        and a user can be served their own levels.
+        matching levels is greyed out in the picker. Levels are served
+        from a shuffled list stored on the run (up to 100 ids, each
+        removed as it's served, reshuffled when empty), so a level comes
+        up again only after the rest, never twice in a row unless it's
+        the only one. A user can be served their own levels.
       - **Server-authoritative runs.** One active run per user at a
         time, owned by the backend so a refresh can't reset lives and the
         client can't edit them. Starting a new run while one is active
@@ -377,23 +380,42 @@ already have a link to:
       plus `difficulty` and `starting_lives`. Needs a leaderboard
       query/endpoint and somewhere to show it (entry screen, profile).
 - [ ] **Scoreboard mode (future)** - a separate mode from the lives-based
-      endless mode above, built around a high-score leaderboard. Idea
-      only, no design work or code yet:
-      - Every run is **5 lives**, fixed.
+      endless mode above, built around a high-score leaderboard. Design
+      decided, no code yet:
+      - Every run is **5 lives**, fixed. A skip still costs a life.
+      - Shares endless mode's **daily lives pool and free/paid limits**
+        (see the paid-tier item).
       - The same difficulty categories can be picked as in endless mode
         (Any, Easy, Normal, Hard, Very Hard, TAS!?!?).
+      - **Only labeled levels** (10+ registered attempts) are eligible,
+        so a brand-new level can't appear until it has a label.
       - A run's score is the **number of levels beaten**, with one
-        exception: in the **Any** category a level is worth more the
-        harder it is - +1 for Easy, +2 for Normal, +3 for Hard, and so
-        on up the labels (the values for Very Hard and TAS!?!? aren't
-        set yet; +4 and +5 would continue the pattern).
+        exception: in **Any** a level is worth its difficulty - +1 Easy,
+        +2 Normal, +3 Hard, +4 Very Hard, +5 TAS!?!?. The weight is the
+        label when the level was served (labels can change later), so
+        store it on the run entry.
+      - Repeats of a level within a run are allowed and score again; the
+        shuffled-list serving (built) keeps them from landing
+        back-to-back.
+      - **Absorbs "longest runs" above**: one leaderboard per category
+        reading a `score` stored on the run (equal to `levels_cleared`
+        outside Any). Needs a migration (per-entry weight, run `score`).
+        **The board starts fresh** - existing endless runs aren't
+        backfilled.
       - A scoreboard to show the high scores, per category.
-      - Not yet decided: how it relates to the "longest runs" record
-        above (likely replaces or absorbs it); whether it shares endless
-        mode's daily lives pool and free/paid limits; whether skipping
-        still costs a life; how an unlabeled level (under 10 attempts)
-        scores in Any; and whether a score counts the same level more
-        than once.
+      - **Tiebreak (TODO, not for now).** Ties are left as ties. If they
+        turn out to matter, break them by the earlier run, or by summing
+        the per-level playtime totals credited during the run.
+- [ ] **Endless: serve levels from a shuffled list (future)** - random
+      pick (`func.random()` per level) can serve the same level twice in
+      a row. Instead, build a list of eligible level ids for the run's
+      category, shuffle it, serve from it, remove each level as it's
+      served, and rebuild and reshuffle when it empties. Details to
+      settle: store the remaining list on the run (survives reloads);
+      when refilling, make sure the first level isn't the one just
+      served; skip ids that are no longer eligible (unpublished or
+      deleted); cap the list size if the eligible pool is large.
+      Applies to endless mode and scoreboard mode alike.
 - [ ] **Endless mode: report abandons on page close (future)** - a
       best-effort report to the server when the page is closed or hidden
       (`navigator.sendBeacon`), so most abandoned attempts resolve right

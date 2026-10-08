@@ -4,6 +4,7 @@
 	import { getLevelRating, rateLevel } from '$lib/api';
 	import { auth } from '$lib/auth.svelte';
 	import { formatRunTime } from '$lib/game/ghost';
+	import DifficultyBadge from '$lib/DifficultyBadge.svelte';
 
 	/**
 	 * Shown over the game canvas whenever a public playthrough ends,
@@ -20,7 +21,8 @@
 		onReplay,
 		timeMs = null,
 		totalMs = null,
-		record = null
+		record = null,
+		difficulty = null
 	}: {
 		outcome: 'won' | 'died';
 		slug: string;
@@ -32,6 +34,8 @@
 		totalMs?: number | null;
 		/** The level's playtime record (isNew when this clear just set it). */
 		record?: { username: string; totalMs: number; isNew: boolean } | null;
+		/** The level's difficulty label, or null while it has under 10 attempts. */
+		difficulty?: string | null;
 	} = $props();
 
 	// null until a rating is known one way or the other - either loaded
@@ -122,6 +126,7 @@
 	<div class="modal-backdrop">
 		<div class="modal-card">
 			<h2>{outcome === 'won' ? 'Level Cleared!' : 'You Died'}</h2>
+			<p class="difficulty-row"><DifficultyBadge label={difficulty} /></p>
 
 			{#if outcome === 'won'}
 				{#if totalMs !== null}
@@ -197,6 +202,10 @@
 		font-size: 1.4rem;
 		margin: 0 0 20px;
 		color: #ffd23f;
+	}
+
+	.difficulty-row {
+		margin: -12px 0 14px;
 	}
 
 	.time {

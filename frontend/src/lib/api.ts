@@ -736,6 +736,8 @@ export interface PlayLevelResult {
 	 * (see /play/[slug]/+page.svelte) routes back to this person's
 	 * public profile. */
 	ownerUsername?: string;
+	/** Difficulty label, or null until the level has enough attempts. */
+	difficulty?: string | null;
 	error?: string;
 }
 
@@ -754,7 +756,8 @@ export async function getLevelForPlay(slug: string): Promise<PlayLevelResult> {
 			success: true,
 			title: data.title,
 			content: data.content,
-			ownerUsername: data.owner_username
+			ownerUsername: data.owner_username,
+			difficulty: data.difficulty ?? null
 		};
 	} catch {
 		return { success: false, error: 'Could not reach the server. Please try again.' };
@@ -944,6 +947,9 @@ export interface LevelListItem {
 	/** The fastest recorded clear of the level, in ms - null if nobody
 	 * has cleared it yet. */
 	best_time_ms: number | null;
+	/** Difficulty label (easy / normal / hard / very_hard / tas), or null
+	 * for a draft or a level without enough registered attempts yet. */
+	difficulty: string | null;
 }
 
 export interface ListLevelsResult {

@@ -2,6 +2,7 @@
 	import { onDestroy, onMount } from 'svelte';
 	import { getUserByUsername, listLevelsByUser, type LevelListItem, type PublicUser } from '$lib/api';
 	import Navbar from '$lib/Navbar.svelte';
+	import DifficultyBadge from '$lib/DifficultyBadge.svelte';
 	import { formatRunTime } from '$lib/game/ghost';
 	import type { PageProps } from './$types';
 
@@ -172,6 +173,7 @@
 													? 'No plays yet'
 													: `${Math.round(level.completion_rate * 100)}% complete`}
 											</span>
+											<DifficultyBadge label={level.difficulty} />
 											{#if typeof level.best_time_ms === 'number'}
 												<span class="metric metric-time">⏱ {formatRunTime(level.best_time_ms)}</span>
 											{:else}

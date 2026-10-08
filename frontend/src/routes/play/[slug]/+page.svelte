@@ -34,6 +34,7 @@
 	let loadError = $state('');
 	let title = $state('');
 	let ownerUsername = $state('');
+	let difficulty: string | null = $state(null);
 
 	// Set the moment a playthrough ends (win or death) - see
 	// LEVEL_BEATEN_EVENT/LEVEL_DIED_EVENT. null means no modal is
@@ -206,6 +207,7 @@
 
 		title = result.title ?? '';
 		ownerUsername = result.ownerUsername ?? '';
+		difficulty = result.difficulty ?? null;
 		loadStatus = 'ready';
 
 		// Same reasoning as /edit/[slug] - loadStatus just flipped to
@@ -276,6 +278,7 @@
 					{totalMs}
 					timeMs={runTimeMs}
 					record={recordInfo}
+					{difficulty}
 				/>
 			{/if}
 		</div>

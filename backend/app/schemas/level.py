@@ -77,4 +77,8 @@ def level_to_summary_dict(
         # The fastest recorded clear of the level, in ms - null if it's
         # never been cleared (or isn't published).
         "best_time_ms": (best_times or {}).get(level.id),
+        # The cached difficulty label (easy / normal / hard / very_hard /
+        # tas), or null: a draft, or a published level that hasn't had
+        # enough registered attempts yet (see app/services/difficulty.py).
+        "difficulty": level.difficulty_label_cached if level.is_published else None,
     }

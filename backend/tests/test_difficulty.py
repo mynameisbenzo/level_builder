@@ -203,3 +203,44 @@ def test_anonymous_plays_dont_move_the_label():
             client.post(f"/api/levels/{slug}/play")
 
         assert Level.query.filter_by(slug=slug).first().difficulty_label_cached is None
+
+
+
+# --- the label in API responses ---
+
+
+def test_the_label_is_null_in_the_play_and_list_responses_until_it_exists():
+    app, client = _client()
+    with app.app_context():
+        slug, _owner = _published_level(app, client)
+
+        assert client.get(f"/api/levels/{slug}/play").get_json()["difficulty"] is None
+        listed = client.get("/api/levels/by-user/creator").get_json()
+        assert [level["difficulty"] for level in listed] == [None]
+
+
+def test_the_label_shows_up_in_the_play_and_list_responses_once_set():
+    app, client = _client()
+    with app.app_context():
+        slug, owner_token = _published_level(app, client)
+        player = _signup_and_login(app, client, "player", "p@example.com")
+
+        for _ in range(MIN_ATTEMPTS_FOR_LABEL):
+            client.post(f"/api/levels/{slug}/play", headers=_auth_headers(player))
+
+        assert client.get(f"/api/levels/{slug}/play").get_json()["difficulty"] == "tas"
+        listed = client.get("/api/levels/by-user/creator").get_json()
+        assert [level["difficulty"] for level in listed] == ["tas"]
+        own = client.get("/api/levels", headers=_auth_headers(owner_token)).get_json()
+        assert [level["difficulty"] for level in own] == ["tas"]
+
+
+def test_a_draft_has_no_label_in_the_owners_list():
+    app, client = _client()
+    with app.app_context():
+        token = _signup_and_login(app, client, "creator", "c@example.com")
+        _create_level(client, token)
+
+        own = client.get("/api/levels", headers=_auth_headers(token)).get_json()
+
+        assert [level["difficulty"] for level in own] == [None]

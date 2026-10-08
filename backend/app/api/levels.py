@@ -503,6 +503,9 @@ def get_level_for_play(slug):
                 # has no other way to learn who owns a level it's only
                 # ever seen a slug for.
                 "owner_username": level.owner.username,
+                # easy / normal / hard / very_hard / tas, or null until the
+                # level has enough registered attempts for a label.
+                "difficulty": level.difficulty_label_cached,
             }
         ),
         200,

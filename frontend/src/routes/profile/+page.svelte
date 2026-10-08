@@ -13,6 +13,7 @@
 	import { redirectToTwitchLink } from '$lib/twitch';
 	import { startNewLevel } from '$lib/startNewLevel';
 	import Navbar from '$lib/Navbar.svelte';
+	import DifficultyBadge from '$lib/DifficultyBadge.svelte';
 
 	let newLevelStatus: 'idle' | 'creating' | 'error' = $state('idle');
 	let newLevelError = $state('');
@@ -459,6 +460,7 @@
 											? 'no completion rate yet'
 											: `${Math.round(level.completion_rate * 100)}% completion rate`}
 									</span>
+									<DifficultyBadge label={level.difficulty} />
 									<span class="metric metric-likes">👍 {level.like_count}</span>
 									<span class="metric metric-dislikes">👎 {level.dislike_count}</span>
 								</div>

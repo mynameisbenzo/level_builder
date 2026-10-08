@@ -106,8 +106,8 @@ reach and which catalog content they can use.
 
 ### Levels (publishing is final: no versions)
 
-- [ ] Show the difficulty label in the UI (level cards, `/play/[slug]`,
-      Discover) - nothing displays it yet
+- [ ] Show the difficulty label on Discover cards (level cards and the
+      `/play/[slug]` result modal already show it; Discover isn't built)
 - [ ] `Tag`/`LevelTag` models — dev/moderator-curated pool, two
       user-suggested tags auto-applied per level, one "Other" free-text
       slot requiring moderation

@@ -125,7 +125,7 @@ reach and which catalog content they can use.
       the current Arcade-physics loop isn't built for.
 - [ ] **Ghost: owner/staff reset (future)** - remove a ghost that
       slipped through (owner of the level, moderators).
-- [ ] **Record time = total playtime (`/play` done, endless left)** - the
+- [ ] **Record time = total playtime (built; this item is the design record)** - the
       time that counts
       for a level (the result modal, "New record!", and the best time on
       level cards) is the **total time the player spent playing the
@@ -135,9 +135,9 @@ reach and which catalog content they can use.
       are, showing the current ideal path; the record time is a
       separate number, so it can be held by a different player than a
       ghost. Applies to levels with or without a checkpoint.
-      - **Done on `/play`.** The running total, the win report, the
-        `level_records` record, the result modal and the level cards.
-        Remaining: endless (below).
+      - **Built.** The running total, the win report, the
+        `level_records` record, the result modal and the level cards,
+        on `/play` and in endless mode.
       - **Clock.** Starts when the player gets control and pauses
         whenever they can't move (death modal, respawn pause, loading,
         endless interstitials and life-lost screens).

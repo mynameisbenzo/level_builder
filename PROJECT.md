@@ -257,7 +257,11 @@ most one - so every account type can use it.
   200 ms can't set a record). The result modal shows the total and "New
   record!"; level cards show the record. Anonymous players have no total.
   The client controls what it reports, so records are plausible, not
-  proven, as with ghosts. Currently `/play` only; endless is next.
+  proven, as with ghosts. Endless mode shares the same row and record: its
+  page takes the playtime out of each game before it is destroyed (every
+  death boots a new one), sends it in order through a small reporter that
+  carries anything that failed to deliver, and sends the last stretch with
+  a clear through the same win endpoint.
 
 ## Accounts, roles & permissions
 

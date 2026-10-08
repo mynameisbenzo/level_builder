@@ -275,7 +275,7 @@ test-play flow.)
       the Tab/touch-toggle actually do anything - both are now gated
 
 
-## Total playtime record (`/play`)
+## Total playtime record (`/play`) and `endless`
 
 - [x] The level record is the player's **total playtime across all tries**
       (e.g. a first try of x plus a winning try of y = x + y), kept
@@ -284,3 +284,8 @@ test-play flow.)
       the previous one and since the row was created, with a 99:59.999
       ceiling. `level_records` holds one row per level; the result modal
       shows the total and "New record!"; level cards show the record.
+- [x] Endless mode shares it: the same per-(user, level) row and record. The
+      endless page takes the playtime out of each game before it is torn
+      down (every death boots a new game), sends it through an ordered
+      reporter that carries undelivered time into the next report, and
+      sends the last stretch with a clear through the same win endpoint.

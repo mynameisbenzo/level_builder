@@ -25,6 +25,10 @@
 	import { emptyGhostSet, GHOST_KINDS, type ClearedRuns, type GhostSet } from '$lib/game/ghost';
 	import { LEVEL_BEATEN_EVENT, LEVEL_DIED_EVENT } from '$lib/game/PlatformerScene';
 	import { getLevelGhost, submitLevelGhost } from '$lib/ghostApi';
+	import { PLAYTIME_HEARTBEAT_INTERVAL_MS } from '$lib/game/playtime';
+	import { PlaytimeReporter } from '$lib/game/playtimeReporter';
+	import { postLevelPlaytime, submitLevelWin } from '$lib/playtimeApi';
+	import type { PlatformerScene } from '$lib/game/PlatformerScene';
 	import LandscapeGuard from '$lib/game/LandscapeGuard.svelte';
 	import TouchControls from '$lib/game/TouchControls.svelte';
 
@@ -65,6 +69,20 @@
 	let gameContainer: HTMLDivElement | undefined = $state();
 	let game: Phaser.Game | undefined;
 	let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+	let playtimeTimer: ReturnType<typeof setInterval> | null = null;
+
+	// Total playtime (shared with /play - one running total per player and
+	// level, and a clear updates the level's record). The scene counts the
+	// time under control; every death boots a new game, so what it counted
+	// is taken out before the game goes, and the reporter sends it in order
+	// and carries anything that could not be delivered.
+	const playtime = new PlaytimeReporter({
+		heartbeat: async (slug, ms) => {
+			const result = await withSession((token) => postLevelPlaytime(slug, token, ms));
+			return result?.success === true;
+		},
+		win: (slug, ms) => withSession((token) => submitLevelWin(slug, token, ms))
+	});
 
 	// Every transition takes a new generation; an async step that wakes up
 	// to find the generation has moved on (a skip/quit mid-timer, or the
@@ -79,9 +97,31 @@
 			clearInterval(heartbeatTimer);
 			heartbeatTimer = null;
 		}
+		if (playtimeTimer !== null) {
+			clearInterval(playtimeTimer);
+			playtimeTimer = null;
+		}
+	}
+
+	/** Takes the playtime the running game has counted since the last report (0 if none). */
+	function takePlaytime(): number {
+		const scene = game?.scene.getScene('PlatformerScene') as PlatformerScene | undefined;
+		return scene && typeof scene.takePlaytimeMs === 'function' ? scene.takePlaytimeMs() : 0;
+	}
+
+	function flushPlaytime() {
+		const ms = takePlaytime();
+		if (ms > 0 && currentSlug) void playtime.report(currentSlug, ms);
+	}
+
+	function handleVisibilityChange() {
+		if (document.hidden) flushPlaytime();
 	}
 
 	function teardownGame() {
+		// Whatever the game counted but has not reported goes out before it
+		// is destroyed (a win takes its time first, see handleBeaten).
+		flushPlaytime();
 		stopHeartbeat();
 		if (game) {
 			game.events.off(LEVEL_BEATEN_EVENT, handleBeaten);
@@ -201,6 +241,7 @@
 		game.events.on(LEVEL_DIED_EVENT, handleDied);
 
 		startHeartbeat();
+		playtimeTimer = setInterval(flushPlaytime, PLAYTIME_HEARTBEAT_INTERVAL_MS);
 	}
 
 	function startHeartbeat() {
@@ -235,8 +276,16 @@
 	async function handleBeaten(cleared?: ClearedRuns) {
 		if (phase !== 'playing') return;
 		const myGeneration = ++generation;
+		// The last stretch of playtime goes out with the win: the server
+		// adds it to the player's total for this level, ends the total and
+		// offers it as the level's record. Taken before the game goes.
+		const winSlug = currentSlug;
+		const winMs = takePlaytime();
 		teardownGame();
 		phase = 'interstitial';
+		// A retry of a failed clear report has nothing left to send.
+		if (!retryingClear) void playtime.win(winSlug, winMs);
+		retryingClear = false;
 		// Only the first report carries the run - a retry of a failed
 		// clear report (see handleBeatenRetry) has none, and was already
 		// submitted the first time.
@@ -257,8 +306,11 @@
 
 	// A failed clear report is retried as-is (the attempt is still
 	// pending server-side), not by replaying the level.
+	let retryingClear = false;
+
 	async function handleBeatenRetry() {
 		phase = 'playing'; // satisfies handleBeaten's guard
+		retryingClear = true;
 		await handleBeaten();
 	}
 
@@ -365,6 +417,7 @@
 	// ── Mount / unmount ─────────────────────────────────────────────────
 
 	onMount(async () => {
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 		if (!auth.isLoggedIn) {
 			goto('/signup');
 			return;
@@ -387,6 +440,7 @@
 	});
 
 	onDestroy(() => {
+		document.removeEventListener('visibilitychange', handleVisibilityChange);
 		destroyed = true;
 		++generation;
 		teardownGame();

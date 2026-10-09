@@ -21,6 +21,7 @@
 <nav>
 	<a class="wordmark" href="/">Pixel Maker</a>
 	<div class="auth-links">
+		<a class="scores-link" href="/scoreboard">High Scores</a>
 		{#if auth.isLoggedIn}
 			<a class="greeting" href="/profile">Hi, {auth.user?.username}</a>
 			<button class="nav-link nav-link-ghost" onclick={handleLogout}>Log Out</button>
@@ -86,6 +87,22 @@
 		transition: color 0.15s ease;
 	}
 
+	.scores-link {
+		font-size: 0.9rem;
+		color: #c7cbef;
+		text-decoration: none;
+		transition: color 0.15s ease;
+	}
+
+	.scores-link:hover {
+		color: #f4f6ff;
+	}
+
+	.scores-link:focus-visible {
+		outline: 3px solid #ffd23f;
+		outline-offset: 2px;
+	}
+
 	.greeting:hover {
 		color: #f4f6ff;
 	}
@@ -129,6 +146,12 @@
 		.nav-link {
 			padding: 8px 14px;
 			font-size: 0.82rem;
+		}
+
+		/* Tight on a phone - the board is also linked from the Endless
+		   screen and the game-over banner. */
+		.scores-link {
+			display: none;
 		}
 	}
 </style>

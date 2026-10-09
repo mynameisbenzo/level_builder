@@ -11,6 +11,9 @@ from app.models.endless import (
     EndlessRunEndReason,
     EndlessRunLevel,
     EndlessRunLevelOutcome,
+    RUN_MODE_ENDLESS,
+    RUN_MODE_SCOREBOARD,
+    RUN_MODES,
 )
 from app.models.level import Level
 from app.models.play_attempt import PLAY_ATTEMPT_SOURCE_ENDLESS
@@ -51,6 +54,14 @@ ATTEMPT_GRACE_PERIOD = timedelta(seconds=30)
 # (difficulty=None) is usable. The future labeler must write exactly
 # these strings.
 ENDLESS_DIFFICULTIES = ("easy", "normal", "hard", "very_hard", "tas")
+
+
+# Scoreboard mode: every run has the same fixed lives (so scores are
+# comparable), drawn from the same daily pool as endless mode. Only levels
+# with a difficulty label are served. In the Any category a clear is worth
+# its level's difficulty; in a single-difficulty category every clear is 1.
+SCOREBOARD_LIVES = 5
+SCOREBOARD_POINTS = {"easy": 1, "normal": 2, "hard": 3, "very_hard": 4, "tas": 5}
 
 
 class EndlessError(Exception):
@@ -114,7 +125,26 @@ def get_pool_state(user: User, now: datetime) -> dict | None:
     }
 
 
-def _starting_lives_for(user: User, requested, now: datetime) -> int:
+def _starting_lives_for(user: User, requested, now: datetime, mode: str = RUN_MODE_ENDLESS) -> int:
+    if mode == RUN_MODE_SCOREBOARD:
+        if requested is not None:
+            raise EndlessError(
+                "fixed_lives", f"scoreboard runs always have {SCOREBOARD_LIVES} lives", 400
+            )
+        if not is_paid_account(user):
+            # A short run would score unfairly low, so a free account needs
+            # the whole run's lives left in today's pool.
+            pool = get_pool_state(user, now)
+            if pool["remaining"] < SCOREBOARD_LIVES:
+                raise EndlessError(
+                    "daily_pool_too_low",
+                    f"a scoreboard run needs {SCOREBOARD_LIVES} lives and you have "
+                    f"{pool['remaining']} left today",
+                    429,
+                    {"pool": _serialize_pool(pool)},
+                )
+        return SCOREBOARD_LIVES
+
     if is_paid_account(user):
         if requested is None:
             return PAID_DEFAULT_LIVES
@@ -166,16 +196,28 @@ def _eligible_levels_query():
     return Level.query.filter(Level.published_at.isnot(None)).filter(Level.is_deleted.is_(False))
 
 
-def count_eligible_levels() -> dict:
+def _levels_for(mode: str, difficulty: str | None):
+    """
+    The levels a run of this mode and difficulty choice can serve. A
+    scoreboard run only serves levels that already have a difficulty label.
+    """
+    query = _eligible_levels_query()
+    if mode == RUN_MODE_SCOREBOARD:
+        query = query.filter(Level.difficulty_label_cached.isnot(None))
+    if difficulty is not None:
+        query = query.filter(Level.difficulty_label_cached == difficulty)
+    return query
+
+
+def count_eligible_levels(mode: str = RUN_MODE_ENDLESS) -> dict:
     """
     {"any": N, "easy": n, ...} - how many levels each difficulty choice
-    could serve. The picker greys out a choice whose count is 0.
+    could serve in the given mode. The picker greys out a choice whose
+    count is 0.
     """
-    counts = {"any": _eligible_levels_query().count()}
+    counts = {"any": _levels_for(mode, None).count()}
     for difficulty in ENDLESS_DIFFICULTIES:
-        counts[difficulty] = (
-            _eligible_levels_query().filter(Level.difficulty_label_cached == difficulty).count()
-        )
+        counts[difficulty] = _levels_for(mode, difficulty).count()
     return counts
 
 
@@ -186,10 +228,16 @@ LEVEL_QUEUE_SIZE = 100
 
 def _category_levels_query(run: EndlessRun):
     """The eligible levels for this run's difficulty choice."""
-    query = _eligible_levels_query()
+    return _levels_for(run.mode, run.difficulty)
+
+
+def _points_for(run: EndlessRun, level: Level) -> int | None:
+    """What clearing `level` is worth in `run` (None outside scoreboard mode)."""
+    if run.mode != RUN_MODE_SCOREBOARD:
+        return None
     if run.difficulty is not None:
-        query = query.filter(Level.difficulty_label_cached == run.difficulty)
-    return query
+        return 1
+    return SCOREBOARD_POINTS.get(level.difficulty_label_cached, 1)
 
 
 def _build_level_queue(run: EndlessRun, last_level_id: int | None) -> list[int]:
@@ -265,6 +313,7 @@ def _serve_next_level(run: EndlessRun, now: datetime) -> EndlessRunLevel | None:
         level_id=level.id,
         position=(last_position or 0) + 1,
         outcome=EndlessRunLevelOutcome.ACTIVE,
+        points=_points_for(run, level),
         served_at=now,
     )
     db.session.add(entry)
@@ -403,9 +452,10 @@ def start_run(
     requested_lives,
     replace: bool,
     now: datetime,
+    mode: str = RUN_MODE_ENDLESS,
 ) -> EndlessRun:
     """
-    Starts a run and serves its first level. If the user already has an
+    Starts a run (endless or scoreboard) and serves its first level. If the user already has an
     active run, that is an error unless `replace` is true, in which case
     the old run is forfeited first ("start over") - including charging
     its abandoned attempt, so starting over can't dodge a life loss.
@@ -413,6 +463,9 @@ def start_run(
     run was forfeited (e.g. the daily pool turns out to be empty) rolls
     the forfeit back too.
     """
+    if mode not in RUN_MODES:
+        raise EndlessError("invalid_mode", f"mode must be one of: {', '.join(RUN_MODES)}", 400)
+
     if difficulty is not None and difficulty not in ENDLESS_DIFFICULTIES:
         raise EndlessError(
             "invalid_difficulty",
@@ -420,10 +473,7 @@ def start_run(
             400,
         )
 
-    query = _eligible_levels_query()
-    if difficulty is not None:
-        query = query.filter(Level.difficulty_label_cached == difficulty)
-    if query.first() is None:
+    if _levels_for(mode, difficulty).first() is None:
         raise EndlessError("no_levels_available", "there are no levels available for that choice", 409)
 
     existing = get_active_run(user, now, resolve_pending=False)
@@ -441,10 +491,11 @@ def start_run(
             _end_run(existing, EndlessRunEndReason.FORFEITED, now)
             db.session.flush()
 
-        lives = _starting_lives_for(user, requested_lives, now)
+        lives = _starting_lives_for(user, requested_lives, now, mode)
 
         run = EndlessRun(
             user_id=user.id,
+            mode=mode,
             difficulty=difficulty,
             starting_lives=lives,
             lives_remaining=lives,
@@ -549,6 +600,8 @@ def report_clear(run: EndlessRun, user: User, now: datetime) -> EndlessRunLevel 
     entry.outcome = EndlessRunLevelOutcome.CLEARED
     entry.resolved_at = now
     run.levels_cleared += 1
+    if run.mode == RUN_MODE_SCOREBOARD:
+        run.score += entry.points or 0
     run.last_activity_at = now
     _count_completion_for_level(entry.level, user)
 

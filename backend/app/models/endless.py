@@ -4,6 +4,14 @@ from app.extensions import db
 from app.utils.time import utc_now
 
 
+# A run is either the open-ended "endless" mode or a "scoreboard" run: a
+# fixed number of lives, scored for the high-score board. Both live in the
+# same tables (and share the daily lives pool); see app/services/endless.py.
+RUN_MODE_ENDLESS = "endless"
+RUN_MODE_SCOREBOARD = "scoreboard"
+RUN_MODES = (RUN_MODE_ENDLESS, RUN_MODE_SCOREBOARD)
+
+
 class EndlessRunEndReason(enum.Enum):
     # Lives hit zero - the normal "game over".
     OUT_OF_LIVES = "out_of_lives"
@@ -59,6 +67,12 @@ class EndlessRun(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
 
+    # RUN_MODE_ENDLESS or RUN_MODE_SCOREBOARD.
+    mode = db.Column(db.String(20), nullable=False, default=RUN_MODE_ENDLESS, server_default=RUN_MODE_ENDLESS)
+    # A scoreboard run's points so far (see SCOREBOARD_POINTS in the
+    # service); always 0 for an endless run, which isn't scored.
+    score = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+
     # NULL means "any difficulty" (truly random). Otherwise one of
     # ENDLESS_DIFFICULTIES in app/services/endless.py.
     difficulty = db.Column(db.String(20), nullable=True)
@@ -113,6 +127,10 @@ class EndlessRunLevel(db.Model):
     level_id = db.Column(db.Integer, db.ForeignKey("levels.id"), nullable=False, index=True)
     # 1-based order within the run.
     position = db.Column(db.Integer, nullable=False)
+    # What clearing this level is worth in a scoreboard run, fixed when the
+    # level is served (a level's label can change later). NULL in an
+    # endless run.
+    points = db.Column(db.Integer, nullable=True)
 
     outcome = db.Column(
         db.Enum(EndlessRunLevelOutcome, name="endless_run_level_outcome"),

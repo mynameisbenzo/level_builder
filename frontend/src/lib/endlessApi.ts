@@ -13,6 +13,9 @@ export const ENDLESS_DIFFICULTY_LABELS: Record<EndlessDifficulty, string> = {
 	tas: 'TAS!?!?'
 };
 
+/** Mirrors RUN_MODES in backend/app/models/endless.py. */
+export type EndlessMode = 'endless' | 'scoreboard';
+
 /** Standing of a free account's daily lives pool. Null on a paid account's run/status. */
 export interface EndlessPool {
 	daily_limit: number;
@@ -29,9 +32,14 @@ export interface EndlessCurrentLevel {
 	position: number;
 	attempts: number;
 	attempt_in_progress: boolean;
+	/** What clearing this level is worth on the scoreboard (null in endless mode). */
+	points: number | null;
 }
 
 export interface EndlessRun {
+	mode: EndlessMode;
+	/** A scoreboard run's points so far (always 0 in endless mode). */
+	score: number;
 	difficulty: string | null;
 	is_active: boolean;
 	end_reason: 'out_of_lives' | 'forfeited' | 'expired' | null;
@@ -50,6 +58,15 @@ export interface EndlessStatus {
 	pool: EndlessPool | null;
 	/** How many levels each difficulty choice could serve right now. */
 	difficulties: Record<string, number>;
+	/** Scoreboard mode's own picker data. */
+	scoreboard: {
+		/** Every scoreboard run's fixed number of lives. */
+		lives: number;
+		/** How many labeled levels each difficulty choice could serve. */
+		difficulties: Record<string, number>;
+		/** What a clear is worth in the Any category, by level difficulty. */
+		points: Record<string, number>;
+	};
 	active_run: EndlessRun | null;
 }
 
@@ -142,9 +159,16 @@ export function getEndlessStatus(accessToken: string) {
  */
 export function startEndlessRun(
 	accessToken: string,
-	options: { difficulty?: EndlessDifficulty | null; startingLives?: number; replace?: boolean } = {}
+	options: {
+		difficulty?: EndlessDifficulty | null;
+		startingLives?: number;
+		replace?: boolean;
+		/** 'scoreboard' for a scored 5-life run; left off for endless. */
+		mode?: EndlessMode;
+	} = {}
 ) {
 	const body: Record<string, unknown> = {};
+	if (options.mode) body.mode = options.mode;
 	if (options.difficulty) body.difficulty = options.difficulty;
 	if (options.startingLives !== undefined) body.starting_lives = options.startingLives;
 	if (options.replace) body.replace = true;
@@ -176,4 +200,77 @@ export function skipEndlessLevel(accessToken: string) {
 
 export function quitEndlessRun(accessToken: string) {
 	return call<EndlessRun>('POST', '/runs/current/quit', accessToken, undefined, runOf, 'Could not quit the run.');
+}
+
+
+export interface ScoreboardEntry {
+	/** Tied scores share a rank (1, 1, 3). */
+	rank: number;
+	username: string;
+	score: number;
+	levels_cleared: number;
+	/** ISO timestamp (naive UTC from the backend - see parseServerTime). */
+	ended_at: string | null;
+	/** True for the signed-in caller's own runs. */
+	is_you: boolean;
+}
+
+export interface Scoreboard {
+	difficulty: EndlessDifficulty;
+	/** How many finished runs the board has in all (not just this page). */
+	total: number;
+	entries: ScoreboardEntry[];
+}
+
+export interface ScoreboardResult {
+	success: boolean;
+	board?: Scoreboard;
+	error?: string;
+}
+
+export const SCOREBOARD_PAGE_SIZE = 25;
+
+/**
+ * GET /api/endless/scoreboard - public. Every finished scoreboard run is
+ * its own row, best first. A signed-in caller's token only marks their own
+ * runs (`is_you`); if it has expired the board is fetched again without it
+ * rather than failing, since looking at the scores needs no account.
+ */
+export async function getScoreboard(
+	difficulty: EndlessDifficulty,
+	options: { offset?: number; limit?: number; accessToken?: string | null } = {}
+): Promise<ScoreboardResult> {
+	const query = new URLSearchParams({
+		difficulty,
+		limit: String(options.limit ?? SCOREBOARD_PAGE_SIZE),
+		offset: String(options.offset ?? 0)
+	});
+	const url = `${API_BASE_URL}/api/endless/scoreboard?${query.toString()}`;
+
+	async function fetchBoard(token: string | null | undefined) {
+		return fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+	}
+
+	try {
+		let response = await fetchBoard(options.accessToken);
+		if (response.status === 401 && options.accessToken) {
+			response = await fetchBoard(null);
+		}
+
+		const data = await response.json().catch(() => ({}));
+		if (!response.ok) {
+			return { success: false, error: data.error ?? 'Could not load the scoreboard.' };
+		}
+
+		return { success: true, board: data as Scoreboard };
+	} catch {
+		return { success: false, error: 'Could not reach the server. Please try again.' };
+	}
+}
+
+/** "Easy +1 · Normal +2 · ..." - what a clear is worth in the Any category. */
+export function describeAnyPoints(points: Record<string, number>): string {
+	return ENDLESS_DIFFICULTY_CHOICES.filter((choice) => choice !== 'any' && points[choice] !== undefined)
+		.map((choice) => `${ENDLESS_DIFFICULTY_LABELS[choice]} +${points[choice]}`)
+		.join(' · ');
 }

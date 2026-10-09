@@ -379,9 +379,9 @@ already have a link to:
       category). The data already exists: `EndlessRun.levels_cleared`
       plus `difficulty` and `starting_lives`. Needs a leaderboard
       query/endpoint and somewhere to show it (entry screen, profile).
-- [ ] **Scoreboard mode (future)** - a separate mode from the lives-based
+- [x] **Scoreboard mode (built)** - a separate mode from the lives-based
       endless mode above, built around a high-score leaderboard. Design
-      decided, no code yet:
+      and build notes:
       - Every run is **5 lives**, fixed. A skip still costs a life.
       - Shares endless mode's **daily lives pool and free/paid limits**
         (see the paid-tier item).
@@ -402,6 +402,25 @@ already have a link to:
         outside Any). Needs a migration (per-entry weight, run `score`).
         **The board starts fresh** - existing endless runs aren't
         backfilled.
+      - **Built so far (backend core):** `mode` ("endless" | "scoreboard"),
+        `score` on the run and `points` per run entry; 5 fixed lives (a
+        chosen number is refused); labeled levels only; the weight is set
+        when a level is served; a free account needs all 5 lives left in
+        today's pool to start (`daily_pool_too_low`).
+      - **UI (built):** a mode toggle (Endless | Scoreboard) and category
+        picker on `/endless` (`/endless?mode=scoreboard` opens on the
+        latter); score in the play HUD, points on the interstitial, final
+        score and "High scores" on the game-over banner; the public
+        `/scoreboard` page (a tab per difficulty, every run a row, your
+        own runs highlighted, "show more" paging); a "High Scores" link in
+        the navbar (hidden at phone width, where the board is reached from
+        the Endless screen and game over).
+      - **Leaderboard (built):** `GET /api/endless/scoreboard?difficulty=
+        &limit=&offset=`, public. One board per difficulty; **every
+        finished run is its own row** (arcade style, so one player can
+        hold several); runs still in progress, scoring 0, or by deleted or
+        suspended accounts are left off; tied scores share a rank, the
+        earlier finish listed first.
       - A scoreboard to show the high scores, per category.
       - **Tiebreak (TODO, not for now).** Ties are left as ties. If they
         turn out to matter, break them by the earlier run, or by summing

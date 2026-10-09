@@ -26,6 +26,8 @@ def current_level_to_dict(entry) -> dict | None:
         "position": entry.position,
         "attempts": entry.attempts,
         "attempt_in_progress": entry.attempt_started_at is not None,
+        # What clearing it is worth on the scoreboard (null in endless mode).
+        "points": entry.points,
     }
 
 
@@ -38,6 +40,8 @@ def run_to_dict(run: EndlessRun, pool: dict | None) -> dict:
     addresses it as "current".
     """
     return {
+        "mode": run.mode,
+        "score": run.score,
         "difficulty": run.difficulty,
         "is_active": run.is_active,
         "end_reason": run.end_reason.value if run.end_reason else None,

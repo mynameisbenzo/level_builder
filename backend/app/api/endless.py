@@ -6,6 +6,7 @@ from app.extensions import db
 from app.models.user import User
 from app.schemas.endless import run_to_dict
 from app.services import endless as endless_service
+from app.services import scoreboard as scoreboard_service
 from app.services.endless import EndlessError
 from app.utils.time import utc_now
 
@@ -92,6 +93,16 @@ def get_status():
                 "lives": lives,
                 "pool": pool,
                 "difficulties": endless_service.count_eligible_levels(),
+                # Scoreboard mode's own picker: how many labeled levels each
+                # choice could serve, its fixed lives, and the points a clear
+                # is worth in the Any category.
+                "scoreboard": {
+                    "lives": endless_service.SCOREBOARD_LIVES,
+                    "difficulties": endless_service.count_eligible_levels(
+                        endless_service.RUN_MODE_SCOREBOARD
+                    ),
+                    "points": endless_service.SCOREBOARD_POINTS,
+                },
                 "active_run": run_to_dict(run, pool) if run is not None else None,
             }
         ),
@@ -99,12 +110,36 @@ def get_status():
     )
 
 
+@endless_bp.get("/scoreboard")
+@jwt_required(optional=True)
+def get_scoreboard():
+    """
+    The high-score board for one difficulty - public, so anyone can look.
+    Query: `difficulty` (any, easy, normal, hard, very_hard, tas; default
+    any), `limit` (1-100, default 50) and `offset`. Every finished
+    scoreboard run is its own row, best first; a logged-in caller's own
+    runs carry `is_you`. See app/services/scoreboard.py for what counts.
+    """
+    identity = get_jwt_identity()
+    viewer = User.query.filter_by(public_id=identity).first() if identity is not None else None
+
+    board = scoreboard_service.get_scoreboard(
+        request.args.get("difficulty", "any"),
+        request.args.get("limit"),
+        request.args.get("offset"),
+        viewer,
+    )
+    return jsonify(board), 200
+
+
 @endless_bp.post("/runs")
 @jwt_required()
 def start_run():
     """
     Body (all optional): `difficulty` (one of ENDLESS_DIFFICULTIES; omit
-    or null for any), `starting_lives` (paid accounts only, 1-100),
+    or null for any), `mode` ("endless", the default, or "scoreboard": always
+    5 lives, labeled levels only, scored - `starting_lives` is refused),
+    `starting_lives` (endless mode, paid accounts only, 1-100),
     `replace` (true to forfeit an already-active run and start this one
     instead - without it, an existing active run is a 409 the frontend
     turns into "resume or start over").
@@ -121,8 +156,14 @@ def start_run():
     if difficulty == "any":
         difficulty = None
 
+    mode = payload.get("mode", endless_service.RUN_MODE_ENDLESS)
+    if mode is None:
+        mode = endless_service.RUN_MODE_ENDLESS
+
     try:
-        run = endless_service.start_run(user, difficulty, payload.get("starting_lives"), replace, now)
+        run = endless_service.start_run(
+            user, difficulty, payload.get("starting_lives"), replace, now, mode
+        )
     except EndlessError as error:
         if error.code == "active_run_exists":
             existing = endless_service.get_active_run(user, now, resolve_pending=False)

@@ -816,3 +816,248 @@ def test_a_run_with_no_levels_left_serves_none(clock):
         # Same as before the list existed: the run stays, with no level to serve.
         assert response.status_code == 200
         assert response.get_json()["run"]["current_level"] is None
+        
+
+
+# --- scoreboard mode ---
+
+
+@pytest.fixture
+def frozen_labels(monkeypatch):
+    """
+    Keeps the labels these tests give their levels. Beginning and clearing
+    an attempt recomputes a level's label from its real play attempts (see
+    app/services/difficulty.py), which would wipe a label a test just set
+    by hand - the scoreboard rules are what's under test here, not that.
+    """
+    monkeypatch.setattr("app.services.difficulty.recompute_level_difficulty", lambda level: None)
+
+
+def _start_scoreboard(client, token, **body):
+    return _start(client, token, mode="scoreboard", **body)
+
+
+def _clear_once(client, token):
+    assert _post(client, token, "/runs/current/begin").status_code == 200
+    return _post(client, token, "/runs/current/clear")
+
+
+def _scoreboard_world(app, client, clock, labels, paid=False):
+    """A player plus one live level per label in `labels` (None = unlabeled)."""
+    token, player = _player(app, client, clock, paid=paid)
+    creator = _creator(app, client, clock)
+    levels = [_live_level(creator, title=f"Level {i}", difficulty=label) for i, label in enumerate(labels)]
+    return token, player, levels
+
+
+def test_status_lists_the_scoreboard_picker_data(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["easy", "hard", None])
+
+        body = _status(client, token).get_json()
+
+        assert body["scoreboard"]["lives"] == 5
+        assert body["scoreboard"]["points"] == {"easy": 1, "normal": 2, "hard": 3, "very_hard": 4, "tas": 5}
+        # Endless counts the unlabeled level; the scoreboard doesn't.
+        assert body["difficulties"]["any"] == 3
+        assert body["scoreboard"]["difficulties"]["any"] == 2
+        assert body["scoreboard"]["difficulties"]["hard"] == 1
+        assert body["scoreboard"]["difficulties"]["tas"] == 0
+
+
+def test_a_scoreboard_run_has_five_lives_and_only_serves_labeled_levels(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, levels = _scoreboard_world(app, client, clock, ["easy", "normal", None])
+        unlabeled = levels[2]
+
+        run = _start_scoreboard(client, token).get_json()["run"]
+        assert run["mode"] == "scoreboard"
+        assert run["starting_lives"] == 5
+        assert run["lives_remaining"] == 5
+        assert run["score"] == 0
+
+        for _ in range(4):
+            _post(client, token, "/runs/current/skip")
+        served = _served_level_ids(EndlessRun.query.first().id)
+        assert unlabeled.id not in served
+
+
+def test_a_scoreboard_run_needs_a_labeled_level(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, [None, None])
+
+        response = _start_scoreboard(client, token)
+
+        assert response.status_code == 409
+        assert response.get_json()["code"] == "no_levels_available"
+        # Endless mode still serves them.
+        assert _start(client, token).status_code == 201
+
+
+def test_a_scoreboard_run_refuses_a_chosen_number_of_lives(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["easy"], paid=True)
+
+        response = _start_scoreboard(client, token, starting_lives=20)
+
+        assert response.status_code == 400
+        assert response.get_json()["code"] == "fixed_lives"
+
+
+def test_an_unknown_mode_is_rejected(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["easy"])
+
+        response = _start(client, token, mode="chaos")
+
+        assert response.status_code == 400
+        assert response.get_json()["code"] == "invalid_mode"
+
+
+def test_in_any_a_clear_is_worth_the_levels_difficulty(clock, frozen_labels):
+    app, client = _client()
+    with app.app_context():
+        token, _p, levels = _scoreboard_world(app, client, clock, ["easy", "normal", "hard", "very_hard", "tas"])
+        weights = {level.id: points for level, points in zip(levels, [1, 2, 3, 4, 5])}
+        _start_scoreboard(client, token, difficulty="any")
+
+        expected = 0
+        run = None
+        for _ in range(5):
+            current = EndlessRun.query.first()
+            entry_level_id = [e for e in current.levels if e.outcome.value == "active"][0].level_id
+            expected += weights[entry_level_id]
+            run = _clear_once(client, token).get_json()["run"]
+            assert run["score"] == expected
+            assert run["levels_cleared"] == len([e for e in EndlessRun.query.first().levels if e.outcome.value == "cleared"])
+
+        assert expected == 15
+
+
+def test_in_a_single_difficulty_every_clear_is_one_point(clock, frozen_labels):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["hard", "hard", "easy"])
+        run = _start_scoreboard(client, token, difficulty="hard").get_json()["run"]
+        assert run["current_level"]["points"] == 1
+
+        _clear_once(client, token)
+        run = _clear_once(client, token).get_json()["run"]
+
+        assert run["score"] == 2
+
+
+def test_a_levels_points_are_fixed_when_it_is_served(clock, frozen_labels):
+    app, client = _client()
+    with app.app_context():
+        token, _p, levels = _scoreboard_world(app, client, clock, ["tas"])
+        run = _start_scoreboard(client, token).get_json()["run"]
+        assert run["current_level"]["points"] == 5
+
+        # Relabeled while the player is on it: still worth what it was.
+        levels[0].difficulty_label_cached = "easy"
+        db.session.commit()
+        run = _clear_once(client, token).get_json()["run"]
+
+        assert run["score"] == 5
+
+
+def test_deaths_and_skips_score_nothing_and_five_end_the_run(clock, frozen_labels):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["normal"])
+        _start_scoreboard(client, token)
+        _clear_once(client, token)
+
+        for _ in range(4):
+            _die_once(client, token)
+        run = _post(client, token, "/runs/current/skip").get_json()["run"]
+
+        assert run["is_active"] is False
+        assert run["end_reason"] == "out_of_lives"
+        assert run["score"] == 2
+        assert run["lives_remaining"] == 0
+
+
+def test_scoreboard_lives_come_out_of_the_free_daily_pool(clock, frozen_labels):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["easy"])
+        _start_scoreboard(client, token)
+
+        run = _die_once(client, token).get_json()["run"]
+
+        assert run["pool"]["remaining"] == 49
+
+
+def test_a_free_account_needs_a_full_runs_worth_of_pool_left(clock):
+    app, client = _client()
+    with app.app_context():
+        token, player, _levels = _scoreboard_world(app, client, clock, ["easy"])
+        from app.models.endless import EndlessLifeLossReason
+
+        earlier = EndlessRun(user_id=player.id, starting_lives=10, lives_remaining=0, is_active=False)
+        db.session.add(earlier)
+        db.session.flush()
+        for _ in range(46):  # 4 of today's 50 left
+            db.session.add(
+                EndlessLifeLoss(
+                    user_id=player.id, run_id=earlier.id, reason=EndlessLifeLossReason.DEATH, created_at=clock.now
+                )
+            )
+        db.session.commit()
+
+        response = _start_scoreboard(client, token)
+
+        assert response.status_code == 429
+        assert response.get_json()["code"] == "daily_pool_too_low"
+        assert response.get_json()["pool"]["remaining"] == 4
+        # Endless mode would still start (with the 4 lives that are left).
+        assert _start(client, token).get_json()["run"]["starting_lives"] == 4
+
+
+def test_a_paid_account_has_no_pool_in_scoreboard_mode(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["easy"], paid=True)
+
+        run = _start_scoreboard(client, token).get_json()["run"]
+
+        assert run["starting_lives"] == 5
+        assert run["pool"] is None
+
+
+def test_an_endless_run_is_not_scored(clock, frozen_labels):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["hard"])
+        run = _start(client, token).get_json()["run"]
+        assert run["mode"] == "endless"
+        assert run["current_level"]["points"] is None
+
+        run = _clear_once(client, token).get_json()["run"]
+
+        assert run["score"] == 0
+        assert run["levels_cleared"] == 1
+
+
+def test_a_scoreboard_run_shares_the_one_active_run_slot(clock):
+    app, client = _client()
+    with app.app_context():
+        token, _p, _levels = _scoreboard_world(app, client, clock, ["easy"])
+        _start(client, token)
+
+        response = _start_scoreboard(client, token)
+
+        assert response.status_code == 409
+        assert response.get_json()["code"] == "active_run_exists"
+        assert response.get_json()["active_run"]["mode"] == "endless"
+
+        replaced = _start_scoreboard(client, token, replace=True)
+        assert replaced.status_code == 201
+        assert replaced.get_json()["run"]["mode"] == "scoreboard"

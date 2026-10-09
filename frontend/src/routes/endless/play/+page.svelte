@@ -484,6 +484,9 @@
 		<div class="hud lives-hud">
 			<CharacterPortrait color={shownLevel?.player_starting_color ?? 'green'} size={32} />
 			<span>x {displayedLives}</span>
+			{#if run?.mode === 'scoreboard'}
+				<span class="score-hud">Score {run.score}</span>
+			{/if}
 		</div>
 		<div class="hud action-hud">
 			<button class="hud-button" onclick={handleSkip}>Skip (−1 ♥)</button>
@@ -504,10 +507,16 @@
 			<div class="banner">
 				<h1>{shownLevel.title}</h1>
 				<p class="creator">by {shownLevel.owner_username}</p>
+				{#if run?.mode === 'scoreboard' && shownLevel.points != null && phase === 'interstitial'}
+					<p class="points">Worth {shownLevel.points} {shownLevel.points === 1 ? 'point' : 'points'}</p>
+				{/if}
 			</div>
 
 			{#if run && phase === 'interstitial'}
 				<p class="muted cleared">
+					{#if run.mode === 'scoreboard'}
+						Score {run.score} ·
+					{/if}
 					{run.levels_cleared}
 					{run.levels_cleared === 1 ? 'level' : 'levels'} cleared
 				</p>
@@ -521,6 +530,9 @@
 		{#if phase === 'gameover' && run}
 			<div class="gameover-banner">
 				<h2>Game Over</h2>
+				{#if run.mode === 'scoreboard'}
+					<p class="final-score">Score: <strong>{run.score}</strong></p>
+				{/if}
 				<p>
 					{run.levels_cleared}
 					{run.levels_cleared === 1 ? 'level' : 'levels'} cleared · {run.deaths}
@@ -536,7 +548,17 @@
 					</p>
 				{/if}
 				<div class="row">
-					<button class="primary" onclick={() => goto('/endless')}>New run</button>
+					{#if run.mode === 'scoreboard'}
+						<button class="primary" onclick={() => goto('/endless?mode=scoreboard')}>New run</button>
+						<button
+							class="secondary"
+							onclick={() => goto(`/scoreboard?difficulty=${run?.difficulty ?? 'any'}`)}
+						>
+							High scores
+						</button>
+					{:else}
+						<button class="primary" onclick={() => goto('/endless')}>New run</button>
+					{/if}
 					<button class="secondary" onclick={() => goto('/')}>Home</button>
 				</div>
 			</div>
@@ -588,6 +610,22 @@
 		margin: 4px 0 0;
 		color: #c7cbef;
 		font-size: 1.1rem;
+	}
+
+	.points {
+		margin: 8px 0 0;
+		color: #ffd23f;
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+	}
+
+	.final-score {
+		font-family: 'Baloo 2', sans-serif;
+		font-size: 1.4rem;
+	}
+
+	.final-score strong {
+		color: #ffd23f;
 	}
 
 	.lives {
@@ -746,6 +784,11 @@
 		color: #f4f6ff;
 		text-shadow: 0 2px 0 rgba(0, 0, 0, 0.6);
 		pointer-events: none;
+	}
+
+	.score-hud {
+		margin-left: 10px;
+		color: #ffd23f;
 	}
 
 	.action-hud {

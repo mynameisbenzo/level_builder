@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	beginEndlessAttempt,
+	describeAnyPoints,
 	formatTimeUntil,
 	getEndlessStatus,
+	getScoreboard,
 	parseServerTime,
 	startEndlessRun
 } from './endlessApi';
@@ -73,6 +75,26 @@ describe('endless API calls', () => {
 		});
 	});
 
+	it('sends the mode for a scoreboard run, and leaves it off for endless', async () => {
+		const fetchMock = mockFetch(201, { run: {} });
+		await startEndlessRun('tok', { mode: 'scoreboard', difficulty: 'tas' });
+		expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ mode: 'scoreboard', difficulty: 'tas' });
+
+		await startEndlessRun('tok', { difficulty: 'tas' });
+		expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ difficulty: 'tas' });
+	});
+
+	it('surfaces the pool on daily_pool_too_low', async () => {
+		mockFetch(429, {
+			error: 'needs 5',
+			code: 'daily_pool_too_low',
+			pool: { daily_limit: 50, remaining: 4, resets_at: '2026-10-06T00:00:00' }
+		});
+		const result = await startEndlessRun('tok', { mode: 'scoreboard' });
+		expect(result.code).toBe('daily_pool_too_low');
+		expect(result.pool?.remaining).toBe(4);
+	});
+
 	it('sends an empty body for a default start', async () => {
 		const fetchMock = mockFetch(201, { run: {} });
 		await startEndlessRun('tok');
@@ -109,5 +131,62 @@ describe('endless API calls', () => {
 		const result = await beginEndlessAttempt('tok');
 		expect(result.success).toBe(false);
 		expect(result.error).toMatch(/could not reach the server/i);
+	});
+});
+
+
+describe('getScoreboard', () => {
+	const board = { difficulty: 'hard', total: 1, entries: [{ rank: 1, username: 'ann', score: 9 }] };
+
+	it('asks for one difficulty and page, and works with no token', async () => {
+		const fetchMock = mockFetch(200, board);
+		const result = await getScoreboard('hard', { offset: 25, limit: 10 });
+		expect(result.success).toBe(true);
+		expect(result.board?.entries[0].username).toBe('ann');
+		const [url, init] = fetchMock.mock.calls[0];
+		expect(url).toMatch(/\/api\/endless\/scoreboard\?difficulty=hard&limit=10&offset=25$/);
+		expect(init).toBeUndefined();
+	});
+
+	it('sends the token when there is one', async () => {
+		const fetchMock = mockFetch(200, board);
+		await getScoreboard('any', { accessToken: 'tok' });
+		expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer tok');
+	});
+
+	it('falls back to an anonymous request when the token has expired', async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce({ ok: false, status: 401, json: async () => ({ error: 'expired' }) })
+			.mockResolvedValueOnce({ ok: true, status: 200, json: async () => board });
+		vi.stubGlobal('fetch', fetchMock);
+
+		const result = await getScoreboard('hard', { accessToken: 'stale' });
+
+		expect(result.success).toBe(true);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		expect(fetchMock.mock.calls[1][1]).toBeUndefined();
+	});
+
+	it('reports a server error and a network failure without throwing', async () => {
+		mockFetch(400, { error: 'bad difficulty' });
+		expect(await getScoreboard('hard')).toEqual({ success: false, error: 'bad difficulty' });
+
+		vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')));
+		const result = await getScoreboard('hard');
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(/could not reach the server/i);
+	});
+});
+
+describe('describeAnyPoints', () => {
+	it('lists each difficulty with its points, easiest first', () => {
+		expect(describeAnyPoints({ easy: 1, normal: 2, hard: 3, very_hard: 4, tas: 5 })).toBe(
+			'Easy +1 · Normal +2 · Hard +3 · Very Hard +4 · TAS!?!? +5'
+		);
+	});
+
+	it('skips a difficulty the server did not send', () => {
+		expect(describeAnyPoints({ easy: 1 })).toBe('Easy +1');
 	});
 });

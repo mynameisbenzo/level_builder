@@ -4,6 +4,7 @@
 	import { auth } from '$lib/auth.svelte';
 	import Navbar from '$lib/Navbar.svelte';
 	import {
+		describeAnyPoints,
 		ENDLESS_DIFFICULTY_CHOICES,
 		ENDLESS_DIFFICULTY_LABELS,
 		formatTimeUntil,
@@ -11,6 +12,7 @@
 		parseServerTime,
 		startEndlessRun,
 		type EndlessDifficulty,
+		type EndlessMode,
 		type EndlessStatus
 	} from '$lib/endlessApi';
 	import { withSession } from '$lib/endlessSession';
@@ -19,6 +21,9 @@
 	let loadError = $state('');
 	let status = $state<EndlessStatus | null>(null);
 
+	// Endless (lives until you run out) or scoreboard (5 lives, scored for
+	// the high-score board). /endless?mode=scoreboard opens on the latter.
+	let mode = $state<EndlessMode>('endless');
 	let difficulty: EndlessDifficulty = $state('any');
 	let paidLives = $state(100);
 
@@ -32,6 +37,19 @@
 	const showPicker = $derived(!hasActiveRun || startingOver);
 	const pool = $derived(status?.pool ?? null);
 	const poolExhausted = $derived(pool !== null && pool.remaining <= 0);
+	const isScoreboard = $derived(mode === 'scoreboard');
+	// How many levels each choice could serve in the chosen mode (the
+	// scoreboard only serves levels that already have a difficulty label).
+	const counts = $derived(
+		(isScoreboard ? status?.scoreboard.difficulties : status?.difficulties) ?? {}
+	);
+	// A scoreboard run is always the same length, so a free account needs
+	// a whole run's lives left in today's pool.
+	const scoreboardLives = $derived(status?.scoreboard.lives ?? 5);
+	const poolTooLow = $derived(
+		isScoreboard && pool !== null && pool.remaining < scoreboardLives
+	);
+	const cannotStart = $derived(isScoreboard ? poolTooLow : poolExhausted);
 
 	// A free account starts with 10 lives, or whatever's left of today's
 	// pool if that's less (see _starting_lives_for on the backend).
@@ -56,14 +74,21 @@
 
 		status = result.data;
 		paidLives = result.data.lives.default;
-		// Pre-select the first choice that can actually serve a level.
-		if ((result.data.difficulties[difficulty] ?? 0) === 0) {
-			const firstAvailable = ENDLESS_DIFFICULTY_CHOICES.find(
-				(choice) => (result.data!.difficulties[choice] ?? 0) > 0
-			);
-			if (firstAvailable) difficulty = firstAvailable;
-		}
+		preselectDifficulty();
 		loadState = 'ready';
+	}
+
+	/** Pre-selects the first choice that can actually serve a level in this mode. */
+	function preselectDifficulty() {
+		if ((counts[difficulty] ?? 0) > 0) return;
+		const firstAvailable = ENDLESS_DIFFICULTY_CHOICES.find((choice) => (counts[choice] ?? 0) > 0);
+		if (firstAvailable) difficulty = firstAvailable;
+	}
+
+	function chooseMode(next: EndlessMode) {
+		mode = next;
+		startError = '';
+		preselectDifficulty();
 	}
 
 	onMount(() => {
@@ -74,11 +99,14 @@
 			goto('/signup');
 			return;
 		}
+		if (new URLSearchParams(window.location.search).get('mode') === 'scoreboard') {
+			mode = 'scoreboard';
+		}
 		void loadStatus();
 	});
 
 	function levelCount(choice: EndlessDifficulty): number {
-		return status?.difficulties[choice] ?? 0;
+		return counts[choice] ?? 0;
 	}
 
 	function clampLives(value: number): number {
@@ -95,8 +123,12 @@
 
 		const result = await withSession((token) =>
 			startEndlessRun(token, {
+				mode,
 				difficulty,
-				startingLives: status!.lives.adjustable ? clampLives(paidLives) : undefined,
+				// A scoreboard run's length is fixed; only an endless run lets a
+				// paid account pick it.
+				startingLives:
+					!isScoreboard && status!.lives.adjustable ? clampLives(paidLives) : undefined,
 				replace: startingOver
 			})
 		);
@@ -121,7 +153,11 @@
 			return;
 		}
 
-		if (result.code === 'daily_pool_exhausted' && status && result.pool) {
+		if (
+			(result.code === 'daily_pool_exhausted' || result.code === 'daily_pool_too_low') &&
+			status &&
+			result.pool
+		) {
 			status = { ...status, pool: result.pool };
 		}
 
@@ -136,10 +172,16 @@
 <Navbar />
 
 <main>
-	<h1>Endless Mode</h1>
+	<h1>{isScoreboard ? 'Scoreboard Mode' : 'Endless Mode'}</h1>
 	<p class="subhead">
-		Play random levels back to back until you run out of lives. Clear a level to move on; every
-		death (or skip) costs a life.
+		{#if isScoreboard}
+			A run is {scoreboardLives} lives. Clear as many levels as you can: each clear scores points,
+			and every death (or skip) costs a life. When the run ends, your score goes on the board.
+		{:else}
+			Play random levels back to back until you run out of lives. Clear a level to move on; every
+			death (or skip) costs a life.
+		{/if}
+		<a class="board-link" href="/scoreboard">View the high scores</a>
 	</p>
 
 	{#if loadState === 'loading'}
@@ -152,8 +194,11 @@
 	{:else if status}
 		{#if hasActiveRun && !startingOver && status.active_run}
 			<section class="card">
-				<h2>You have a run in progress</h2>
+				<h2>You have {status.active_run.mode === 'scoreboard' ? 'a scoreboard' : 'a'} run in progress</h2>
 				<p class="muted">
+					{#if status.active_run.mode === 'scoreboard'}
+						Score {status.active_run.score} ·
+					{/if}
 					{status.active_run.lives_remaining}
 					{status.active_run.lives_remaining === 1 ? 'life' : 'lives'} left ·
 					{status.active_run.levels_cleared}
@@ -177,6 +222,25 @@
 					</p>
 				{/if}
 
+				<div class="mode-toggle" role="group" aria-label="Mode">
+					<button
+						class="mode"
+						class:selected={!isScoreboard}
+						aria-pressed={!isScoreboard}
+						onclick={() => chooseMode('endless')}
+					>
+						Endless
+					</button>
+					<button
+						class="mode"
+						class:selected={isScoreboard}
+						aria-pressed={isScoreboard}
+						onclick={() => chooseMode('scoreboard')}
+					>
+						Scoreboard
+					</button>
+				</div>
+
 				<h2>Difficulty</h2>
 				<div class="difficulty-grid">
 					{#each ENDLESS_DIFFICULTY_CHOICES as choice (choice)}
@@ -194,8 +258,20 @@
 					{/each}
 				</div>
 
+				{#if isScoreboard && difficulty === 'any'}
+					<p class="muted points-note">
+						In Any, a clear is worth the level's difficulty: {describeAnyPoints(status.scoreboard.points)}.
+					</p>
+				{:else if isScoreboard}
+					<p class="muted points-note">Every clear is worth 1 point.</p>
+				{/if}
+
 				<h2>Lives</h2>
-				{#if status.lives.adjustable}
+				{#if isScoreboard}
+					<p class="lives-fixed">
+						{scoreboardLives} lives this run
+					</p>
+				{:else if status.lives.adjustable}
 					<label class="lives-field">
 						<span>Start with</span>
 						<input
@@ -226,6 +302,11 @@
 						You've used all your endless lives for today. They refresh in
 						{formatTimeUntil(parseServerTime(pool!.resets_at))}.
 					</p>
+				{:else if poolTooLow}
+					<p class="warning">
+						A scoreboard run needs {scoreboardLives} lives and you have {pool!.remaining} left
+						today. They refresh in {formatTimeUntil(parseServerTime(pool!.resets_at))}.
+					</p>
 				{/if}
 
 				{#if startError}
@@ -236,9 +317,9 @@
 					<button
 						class="primary"
 						onclick={handleStart}
-						disabled={starting || poolExhausted || levelCount(difficulty) === 0}
+						disabled={starting || cannotStart || levelCount(difficulty) === 0}
 					>
-						{starting ? 'Starting…' : 'Start run'}
+						{starting ? 'Starting…' : isScoreboard ? 'Start scoreboard run' : 'Start run'}
 					</button>
 					{#if startingOver}
 						<button class="secondary" onclick={() => (startingOver = false)}>Cancel</button>
@@ -301,6 +382,42 @@
 
 	.pool {
 		margin: 16px 0 0;
+	}
+
+	.board-link {
+		display: inline-block;
+		margin-left: 6px;
+		color: #ffd23f;
+	}
+
+	.mode-toggle {
+		display: flex;
+		gap: 10px;
+		margin-bottom: 20px;
+	}
+
+	.mode {
+		flex: 1;
+		font-family: 'Baloo 2', sans-serif;
+		font-weight: 700;
+		font-size: 1rem;
+		padding: 8px 12px;
+		color: #f4f6ff;
+		background: transparent;
+		border: 3px solid #3a3d76;
+		border-radius: 10px;
+		cursor: pointer;
+	}
+
+	.mode.selected {
+		color: #142013;
+		background: #ffd23f;
+		border-color: #142013;
+	}
+
+	.points-note {
+		margin: -12px 0 20px;
+		line-height: 1.5;
 	}
 
 	.error {

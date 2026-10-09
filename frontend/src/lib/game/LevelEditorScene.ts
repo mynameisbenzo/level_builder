@@ -301,6 +301,14 @@ export class LevelEditorScene extends Phaser.Scene {
 	// gesture and locks to whichever axis the pointer first moves along -
 	// a plain click (no movement) stays 'horizontal' by default, matching
 	// pre-Y-axis behavior exactly for a single tile.
+	/**
+	 * The rotation new hazards are painted with - whichever way the last
+	 * spike clicked to rotate was left pointing (see rotateHazard), so a
+	 * row of sideways spikes can be painted without turning each one.
+	 * Starts upright; not saved with the level.
+	 */
+	private hazardPaintRotation: HazardRotation = 0;
+
 	private isDragPlacing = false;
 	private dragOrientation: PlatformOrientation = 'horizontal';
 	private dragOrientationLocked = false;
@@ -2404,8 +2412,11 @@ export class LevelEditorScene extends Phaser.Scene {
 			return;
 		}
 
-		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...existing, { type: 'hazard', x, y }]);
-		this.renderHazardTile(x, y, 0);
+		const rotation = this.hazardPaintRotation;
+		const hazard: HazardPlacedObject =
+			rotation === 0 ? { type: 'hazard', x, y } : { type: 'hazard', x, y, rotation };
+		this.registry.set(PLACED_OBJECTS_REGISTRY_KEY, [...existing, hazard]);
+		this.renderHazardTile(x, y, rotation);
 	}
 
 	/**
@@ -2460,7 +2471,10 @@ export class LevelEditorScene extends Phaser.Scene {
 		);
 		const image = this.tileImagesByKey.get(tileKey(x, y));
 		if (hazard && image) {
-			this.applyHazardRotation(image as Phaser.GameObjects.Image, x, y, getHazardRotation(hazard));
+			const rotation = getHazardRotation(hazard);
+			this.applyHazardRotation(image as Phaser.GameObjects.Image, x, y, rotation);
+			// Spikes painted from here on come out pointing the same way.
+			this.hazardPaintRotation = rotation;
 		}
 	}
 

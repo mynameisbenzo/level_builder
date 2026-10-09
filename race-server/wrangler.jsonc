@@ -1,0 +1,15 @@
+{
+    "name": "pixel-maker-race",
+    "main": "src/index.ts",
+    "compatibility_date": "2025-09-01",
+    "durable_objects": {
+      "bindings": [
+        { "name": "ROOM", "class_name": "Room" },
+        { "name": "BUDGET", "class_name": "Budget" }
+      ]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] }],
+    "vars": {
+      "FRONTEND_ORIGINS": "https://level-builder-frontend.onrender.com,http://localhost:5173"
+    }
+  }

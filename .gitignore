@@ -8,3 +8,8 @@ specs.md
 certs/
 
 .DS_Store
+
+node_modules/
+.wrangler/
+.dev.vars
+dist/

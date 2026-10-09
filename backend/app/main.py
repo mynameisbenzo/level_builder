@@ -64,6 +64,7 @@ def create_app(config_name: str = "development") -> Flask:
     from app.api.ghosts import ghosts_bp
     from app.api.levels import levels_bp
     from app.api.playtime import playtime_bp
+    from app.api.race import race_bp
     from app.api.users import users_bp
 
     app.register_blueprint(users_bp)
@@ -72,6 +73,7 @@ def create_app(config_name: str = "development") -> Flask:
     app.register_blueprint(endless_bp)
     app.register_blueprint(ghosts_bp)
     app.register_blueprint(playtime_bp)
+    app.register_blueprint(race_bp)
 
     from app.cli import register_cli
 

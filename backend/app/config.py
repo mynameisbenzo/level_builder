@@ -72,6 +72,13 @@ class Config:
     # is set independently rather than assumed from the other settings.
     THUMBNAIL_S3_PUBLIC_BASE_URL = os.environ.get("THUMBNAIL_S3_PUBLIC_BASE_URL", "")
 
+    # Shared secret with the race server (the Cloudflare Worker in
+    # race-server/). POST /api/race/ticket signs a short-lived ticket with
+    # it and the Worker verifies that ticket, so the Worker never needs the
+    # database or the login JWT secret. Blank means the endpoint answers
+    # 503 and races are simply off - nothing else is affected.
+    RACE_TICKET_SECRET = os.environ.get("RACE_TICKET_SECRET", "")
+
     # Randomly generated per process if not set - safe for local dev/
     # testing (a restart just means existing JWTs stop validating, no
     # real consequence), but this must never be relied on in production,

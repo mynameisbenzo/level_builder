@@ -23,11 +23,26 @@ and the design decisions behind them, and
       attempts, before/after/full ghosts and endless mode. What's left:
       - **Races.** Death currently means respawning at the start. With
         checkpoints, as soon as **any racer reaches the checkpoint it
-        becomes the respawn point for all racers**, so everyone who dies
-        afterward respawns there. A racer who is behind and hasn't
-        reached it yet also respawns there, skipping the part of the
-        level before it - deliberately a catch-up mechanic, so hard
-        levels stay raceable for players of different skill.
+        becomes the shared respawn point**, using the **first racer's
+        snapshot** (their color, held keys and swap-object colors), so a
+        racer who is behind and never reached it can still respawn there
+        without being stranded on a key level. This is deliberately a
+        catch-up mechanic, so hard levels stay raceable for players of
+        different skill.
+        - **Choice.** Once the checkpoint is claimed, every racer gets a
+          **Respawn: Checkpoint / Start** toggle (default Checkpoint),
+          changeable at any time and applied on their next respawn.
+        - **Own snapshot.** A racer who chose Start and then touches the
+          checkpoint themselves captures their own snapshot, which
+          replaces the first racer's for their own respawns only; nobody
+          else's respawns change.
+        - **Checks.** The server accepts a "reached checkpoint" claim
+          only if that racer's recent positions were near the flag, and
+          rejects a snapshot naming keys or colors the level doesn't
+          have. It can't prove a snapshot is reachable - the same limit
+          as the rest of the position stream.
+        - **Stage.** Built in stage 3, since it needs the position
+          stream.
 - [ ] Interactable objects beyond keys (coins, etc.)
 - [ ] Enemies, mini-enemies, bosses
 - [ ] Climb animation exists in the sprite atlas but isn't wired to
@@ -450,37 +465,62 @@ already have a link to:
 - [ ] **Live race** - everyone plays the same published level at once
       and sees each other as ghosts, no interaction. Design settled in
       conversation (no code yet).
-      - **Transport.** Flask-SocketIO inside the existing Render
-        backend: free, one codebase, no Redis (a free Render service is
-        a single instance, so room state lives in memory). Expected load
-        is a handful of races a day, mostly promoted on Twitch. Needs a
-        deploy change so the backend can serve WebSockets - a simple
-        threaded mode that avoids monkey-patching is preferred (check
-        Flask-SocketIO's deployment docs). Keep the race logic in its own
-        module behind a thin boundary (join, leave, position, finish) so
-        the transport could later move to something like Cloudflare
-        Durable Objects. Practical notes: the free service takes about a
-        minute to wake from idle (open the site before going live), and
-        a deploy or restart drops every live room, so don't deploy
-        mid-race.
-      - **Access.** Logged-in **paid** accounts only (the tier derivation
-        under "Account tiers & content restrictions" - staff roles count
-        as paid). `is_paid` doesn't exist yet and there is no payment
-        processor, so for now access is staff accounts plus accounts
-        granted `is_paid` by hand. Max 4 players per room. An empty or
+      - **Transport.** Cloudflare Workers + one Durable Object per
+        room, using **raw WebSockets** (not Socket.IO), separate from the
+        Flask backend. Chosen over Flask-SocketIO on Render's free tier
+        after a probe: Render held 0 disconnects but sat at its CPU cap
+        and only about one room fit (1.84% of updates stalled over 150
+        ms). The Cloudflare probe (4 players, 20 Hz, 120 s, free plan)
+        measured: ack RTT p50 17 / p99 30 ms, ghost gap p99 61 ms
+        (ideal 50), 0 of 28,800 updates stalled over 150 ms, 0
+        disconnects, flood cap held (200 msg/s sender limited to about
+        25/s), and 4 idle sockets held 300 s with the room waking in 30
+        ms (hibernation). Measured billing: about 485 billed requests per
+        2-minute 4-player race (incoming WebSocket messages bill 20:1).
+        Use the Hibernation API and SQLite-backed classes
+        (`new_sqlite_classes`, required on the free plan). The Worker
+        authenticates (JWT) before a request reaches a room. Keep the race
+        logic in Phaser-free, transport-free modules behind a thin
+        boundary (join, leave, position, finish). A deploy drops live
+        rooms, so don't deploy mid-race. The Flask backend stays the source
+        of truth for levels, accounts and stats (the Worker asks it, or
+        is handed signed data, rather than holding its own copy).
+      - **Daily-limit protection.** The Durable Objects free quota is
+        100,000 requests/day (resets 5:00 PM Pacific). A shared budget
+        object meters usage: a race may start only if used + worst-case
+        race cost (~600 billed requests) fits under a soft limit of about
+        70% of the quota (~70,000), roughly 100 races/day. Races in
+        progress are never cut off. Per-socket cap about 25 msg/s
+        sustained, burst 40, socket closed after sustained abuse. When
+        full, show "Races are at capacity today, resets at 5:00 PM
+        Pacific". Show "Races today: n/100" in the lobby and a staff
+        usage page. Upgrade path: Workers Paid is $5/month minimum (10M
+        Workers requests included, $0.30 per extra million; Durable
+        Objects 1M included, $0.15 per extra million), about $5.12/month
+        at 100 races/day.
+      - **Access.** The **host** must be a logged-in **paid** account
+        (the tier derivation under "Account tiers & content
+        restrictions" - staff roles count as paid); guests may be free
+        accounts (see **Free players**). `is_paid` exists, granted by
+        hand with `flask grant-paid <username>`, and there is no payment
+        processor yet, so for now hosts are staff accounts plus accounts
+        granted `is_paid`. **Max 4 players per room, full stop:** no
+        spectators beyond a benched player (see **Clutch or kick**) and
+        nobody waiting, so a full room can't be entered. An empty or
         idle room expires after about 10 minutes. Cap messages per
-        socket so nobody can flood a room.
-      - **Free players in paid rooms (future).** Not in the first
-        version, which stays paid-only. Later, free (logged-in) players
-        can join a room as long as its host is a paid account (staff
-        roles count as paid). The host must always be paid, so when a
-        paid host leaves, the room tries to hand the host role to the
-        longest-present paid player; if no paid player is left, the room
-        is shut down. If that happens mid-race, the room shows a notice
-        and shuts down **after the current race ends**, so nobody's
-        finish is wasted; between races it shuts down right away. Free
-        players are sent to their own profile with a "Paid host left"
-        modal.
+        socket so nobody can flood a room, and see **Daily-limit
+        protection** for the per-day race budget.
+      - **Free players.** Logged-in free accounts can join a room (by
+        invite, or when the room is public) as long as its host is a
+        paid account (staff roles count as paid). Logged-out visitors
+        get a "log in to join" page. The host must always be paid, so
+        when a paid host leaves, the room tries to hand the host role to
+        the longest-present paid player; if no paid player is left, the
+        room is shut down. If that happens mid-race, the room shows a
+        notice and shuts down **after the current race ends**, so
+        nobody's finish is wasted; between races it shuts down right
+        away. Free players are sent to their own profile with a "Paid
+        host left" modal.
       - **Joining, leaving and hosting.**
         - **Join mode**, set by the host and changeable from the lobby:
           (1) **host invite only** - only the host can invite;
@@ -489,32 +529,30 @@ already have a link to:
           and 2 an invite is sent to a specific account (by username)
           and the room link only admits someone on the invite list - a
           copied link alone doesn't get a stranger in; in public mode
-          the link alone is enough. Everyone still needs a paid account
-          and a free slot.
+          the link alone is enough. Every guest needs a free slot; only
+          the host must be paid (guests may be free accounts).
         - **Kicking.** The host can kick a player, and a kicked player
           can't rejoin the room through the link.
         - **Leaving.** A **Leave race** button works at any time, without
           closing the window or app. Leaving mid-race is a DNF, placed
           last, counted in the player's DNF total, and it breaks their
           win streak. Their ghost fades out for everyone else.
-        - **Joining mid-race.** A new player can fill a freed slot but
-          can't enter a race already under way: they wait in the room
-          ("race in progress, you're in the next one") and are included
-          in the next vote. Joining a room that is only voting or
-          showing results is allowed. If more people want in than there
-          are free slots it is first come, first served.
+        - **Joining mid-race.** Nobody waits and nobody joins a race
+          already under way. A freed slot can be filled only between
+          races (while the room is voting or showing results), first
+          come, first served; a full room can't be entered at all.
         - **Host leaving.** The host role passes to the longest-present
-          player, so the room survives.
+          paid player, so the room survives.
         - **Last racer left.** They can finish the level, but it only
           counts as a win in the stats if at least 2 players were
           present when the race started - so nobody can farm wins by
           having a friend join and quit.
-        - **Spectating.** A spectator watches a race live and can switch
-          between the active racers to choose whose ghost is the focus
-          of their screen. Spectators exist for clutch or kick (below).
-          A spectator is automatically ready, can still vote on the
-          level, and doesn't count toward the "at least 2 players
-          present" rule for stats.
+        - **Spectating.** There are no spectators beyond a benched
+          player (clutch or kick, below). A benched player keeps their
+          slot, watches the race live, can switch between the active
+          racers to choose whose ghost is the focus of their screen, is
+          automatically ready, can still vote on the level, and doesn't
+          count toward the "at least 2 players present" rule for stats.
       - **Flow.** (1) The host creates a room, which gets an invite link
         (`/race/<short code>`). (2) The host sets the join mode and
         invites players, or shares the public link. (3) Players **ready
@@ -531,9 +569,11 @@ already have a link to:
         room. Clicking Next Race on the results screen
         counts as readying up for the next round.
       - **Category.** The host picks the difficulty category (the same
-        choices as endless mode, including Any). It carries over from
-        round to round by default, and the host can change it between
-        races.
+        choices as endless mode, including Any). Unlike endless and
+        scoreboard modes, **every published level is eligible, labeled
+        or not**: Any draws from all of them, and a named category draws
+        only levels with that label. It carries over from round to round
+        by default, and the host can change it between races.
       - **Level vote.** Once everyone is ready, the server draws
         **1-4 random levels** from the chosen category as the
         candidates (fewer if the category doesn't have that many; no
@@ -578,7 +618,9 @@ already have a link to:
         continue as long as 2 or more players remain.
       - **Scoring and series.** Each race awards points by placement:
         **1st 4, 2nd 3, 3rd 2, 4th 1, DNF 0**, the same values however
-        many players race. The room keeps a points leaderboard across
+        many players race (the one exception is the lone racer's
+        double or nothing, under **Clutch or kick**). The room keeps a
+        points leaderboard across
         its races, shown on the results screen; it lives only while the
         room exists and is not saved. A series is at most **7 races**.
         After the 7th race's results there is no Next Race: the room
@@ -590,7 +632,9 @@ already have a link to:
         **sudden-death race** between just the tied racers: winner takes
         all, and the first to finish is the series winner. There is no
         vote - the level is chosen at random from the room's category.
-        The extra race goes beyond the 7-race cap. If every tied racer DNFs, the
+        The extra race goes beyond the 7-race cap. Clutch or kick is
+        ignored in it: only the tied racers take part, and nobody is
+        benched. If every tied racer DNFs, the
         series ends with no winner and the message "You can't win 'em
         all, I guess!"
       - **After the finale.** The room offers **New series** (points,
@@ -604,12 +648,31 @@ already have a link to:
         puts that player in clutch-or-kick for the next race they enter.
         In that race, if they finish, **CLUTCH!** is displayed as they
         finish and the status is removed; if they DNF again, they are
-        benched as a spectator for the following race, then return as a
-        normal racer. The status follows the player if they leave and
-        rejoin the room, a benched player keeps their slot for that
-        race, and while it is active a badge shows to the whole room
-        and the player gets a reminder before the race. The on-screen
-        banner is the only reward - no profile stat.
+        benched as a spectator for the following race (not kicked from
+        the room), then return as a normal racer. The status follows the
+        player if they leave and rejoin the room, a benched player keeps
+        their slot for that race, and while it is active a badge shows
+        to the whole room and the player gets a reminder before the
+        race. The on-screen banner is the only reward - no profile stat.
+        - **Not enough racers.** A race needs at least 2 unbenched
+          racers, so the room's headcount decides what the next round
+          does. A skipped round and a taken automatic 1st both still
+          use up one of the series' 7 races.
+          - **Nobody can race (everyone is benched).** The level is
+            skipped: it isn't played, every player loses 1 point (to a
+            minimum of 0), and everyone's clutch-or-kick status is
+            cleared. The room goes back to ready-up.
+          - **One racer left (everyone else benched): double or
+            nothing.** Before any level is drawn, the lone racer
+            chooses: **play the level** solo for **8 points** if they
+            finish (0 for a DNF), or **take the automatic 1st**: 4
+            points, the level is skipped and the room moves on. The
+            choice has a 20-second timer and defaults to the automatic
+            1st. Benched players watch a solo run, then return as
+            normal racers. These wins and points count on the room's
+            leaderboard but not toward profile stats (fewer than 2
+            players were present, and a benched player doesn't count
+            as present).
       - **Stored.** A race record plus one entry per player (placement,
         finish time, deaths, status), written when the race ends. Live
         room state stays in memory. Races stay out of `PlayAttempt`
@@ -637,15 +700,20 @@ already have a link to:
         the clutch-or-kick ladder) belong in
         Phaser-free modules with unit tests; the scene wiring is checked
         manually in the browser, as elsewhere in this project.
-        1. **Transport and bare rooms.** Flask-SocketIO deployed on the
-           backend in its threaded mode (confirm WebSockets work on
-           Render without disturbing the REST API), JWT check on
-           connect, the paid/staff gate, create a room and invite link,
+        1. **Transport and bare rooms.** *(Built: `race-server/` and
+           `POST /api/race/ticket`; frontend lobby UI still to do.)* The Cloudflare probe passed
+           (see **Transport** for the numbers), so this builds on it: a
+           TypeScript Worker plus a Durable Object per room with raw
+           WebSockets, JWT check at the Worker, the paid-host rule and
+           guest (free, logged-in) access, create a room and invite link,
            the three join modes with username invites, kick/ban, leave,
-           host handover, idle-room expiry, and the per-socket message
-           cap. Done when two paid accounts can open a room, see each
-           other join and leave, and hand off the host. Also the first
-           chance to check how iOS behaves when the app is backgrounded.
+           host handover to a paid player, idle-room expiry, the
+           4-player cap, the per-socket message cap, and the budget guard
+           with its "at capacity" state and lobby counter. Done when a
+           paid host can open a room, a paid and a free account can join
+           it, see each other join and leave, and the host hands off.
+           Also the first chance to check how iOS behaves when the app is
+           backgrounded.
         2. **Level choice and start.** Ready-up (the vote starts when
            every player present is ready, minimum 2, with the 1-minute
            inactivity kick), category pick, the 1-4 candidate draw, the 20-second vote with the tie-breaking spin animation
@@ -660,19 +728,24 @@ already have a link to:
            30-second and 2-minute endings, DNF handling, leaving
            mid-race, late joiners waiting for the next race, the
            results screen with Next Race / Leave (30-second rule),
-           per-race points (4/3/2/1/0) with the in-room leaderboard, and
-           the sanity checks on the position stream. The largest stage.
+           per-race points (4/3/2/1/0) with the in-room leaderboard, the
+           shared race checkpoint (first racer's snapshot, the
+           Checkpoint / Start toggle, own-snapshot override), and the
+           sanity checks on the position stream. The largest stage.
         4. **Storage and profiles.** The race and per-player entry
            tables with a migration, written when a race ends (a win
            counts only if at least 2 players were present at the start),
            then the totals, win streaks and recent-races list on
            `/u/[username]` and `/profile`.
-        5. **Spectating, clutch or kick, and the series finale.** Live
-           spectating with a camera that switches between the active
-           racers (it reuses stage 3's opponent stream), the
-           clutch-or-kick ladder with its host toggle, room badge,
-           pre-race reminder and CLUTCH! banner, the 7-race series cap,
-           and the finale podium animation.
+        5. **Benched spectating, clutch or kick, and the series
+           finale.** Live spectating for benched players with a camera
+           that switches between the active racers (it reuses stage 3's
+           opponent stream), the clutch-or-kick ladder with its host
+           toggle, room badge, pre-race reminder and CLUTCH! banner, the
+           not-enough-racers rules (everyone benched: level skipped,
+           -1 point each; one racer left: double or nothing, 8 points
+           to play or 4 to take the automatic 1st), the 7-race series
+           cap, and the finale podium animation.
 - [ ] **Co-op / competitive with interaction** - players collide and
       share keys, enemies and character swaps. Needs a server-
       authoritative simulation or deterministic lockstep; the heaviest

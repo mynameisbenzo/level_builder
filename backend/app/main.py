@@ -72,6 +72,10 @@ def create_app(config_name: str = "development") -> Flask:
     app.register_blueprint(endless_bp)
     app.register_blueprint(ghosts_bp)
     app.register_blueprint(playtime_bp)
+
+    from app.cli import register_cli
+
+    register_cli(app)
     
     @app.get("/")
     def landing_page():

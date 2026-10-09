@@ -1,3 +1,5 @@
+from app.services.tiers import get_account_tier
+
 def user_to_public_dict(user) -> dict:
     """
     Public-facing representation of a user - what anyone is allowed to
@@ -34,6 +36,8 @@ def user_to_full_dict(user) -> dict:
         "twitch_id": user.twitch_id,
         "twitch_display_name": user.twitch_display_name,
         "role": user.role.value,
+        # free or paid - see app/services/tiers.py.
+        "tier": get_account_tier(user),
         "hide_email": user.hide_email,
         "hide_twitch": user.hide_twitch,
         "is_suspended": user.is_suspended,

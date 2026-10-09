@@ -11,8 +11,6 @@ from tests.test_endless_api import (
     _player,
     _post,
     _start,
-    clock,  # noqa: F401 - the fixture
-    frozen_labels,  # noqa: F401 - the fixture
 )
 
 

@@ -53,6 +53,12 @@ class User(db.Model):
     hide_twitch = db.Column(db.Boolean, nullable=False, default=False)
 
     is_suspended = db.Column(db.Boolean, nullable=False, default=False)
+    # The one billing-state field. The paid tier is a one-time purchase,
+    # so there is no expiry to model. Not read directly: ask
+    # app/services/tiers.py, which also counts the staff roles as paid.
+    # Until a payment processor exists it is set by hand
+    # (`flask grant-paid <username>`).
+    is_paid = db.Column(db.Boolean, nullable=False, default=False, server_default=db.false())
     # Soft-delete: the row stays as a "deleted user" placeholder rather
     # than cascading deletes through everything they created. The
     # DELETE /api/users/<id> endpoint clears email/twitch_id/username to

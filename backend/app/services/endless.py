@@ -18,7 +18,8 @@ from app.models.endless import (
 from app.models.level import Level
 from app.models.play_attempt import PLAY_ATTEMPT_SOURCE_ENDLESS
 from app.services.difficulty import record_attempt_completion, record_attempt_start
-from app.models.user import User, UserRole
+from app.models.user import User
+from app.services.tiers import is_paid_account  # noqa: F401 - also used as endless_service.is_paid_account
 
 # ── Rules ───────────────────────────────────────────────────────────────
 
@@ -80,17 +81,6 @@ class EndlessError(Exception):
 
 
 # ── Accounts & the daily pool ───────────────────────────────────────────
-
-
-def is_paid_account(user: User) -> bool:
-    """
-    Paid-tier check. The full tier derivation (see "Account tiers" in
-    OPEN_TASKS.md) isn't built yet - there is no User.is_paid column -
-    so for now only staff roles count as paid, which is the same first
-    rule that derivation will have. When is_paid lands, extend this one
-    function.
-    """
-    return user.role != UserRole.USER
 
 
 def get_pool_window(user: User, now: datetime) -> tuple[datetime, datetime]:

@@ -52,11 +52,15 @@ Design settled, not yet built. Three tiers - anonymous (no account),
 free, and paid - restrict both how much of the level grid an editor can
 reach and which catalog content they can use.
 
-- [ ] **`User.is_paid`** (boolean, default `false`) - the only new
+- [x] **`User.is_paid`** (boolean, default `false`; **built**, granted by
+      hand with `flask grant-paid <username>`) - the only new
       billing-state field needed. No subscription/expiry fields: the
       paid tier is a one-time purchase, not a recurring plan, so
       there's no lapse to model.
-- [ ] **Tier derivation** - one function, called identically from the
+- [x] **Tier derivation** (**built** as `get_account_tier` in
+      `backend/app/services/tiers.py`; endless mode uses it, the editor
+      load response and the save/publish validator still need to call
+      it) - one function, called identically from the
       editor-load response and the save/publish validator (never
       computed independently client-side vs. server-side):
       `role in {OWNER, DEVELOPER, MODERATOR} -> paid`, else

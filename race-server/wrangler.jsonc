@@ -10,6 +10,7 @@
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] }],
     "vars": {
+    "BACKEND_URL": "https://level-builder-backend.onrender.com",
       "FRONTEND_ORIGINS": "https://pixelmaker.win,https://www.pixelmaker.win,https://level-builder-frontend.onrender.com,http://localhost:5173,https://localhost:5173"
     }
   }

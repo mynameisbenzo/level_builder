@@ -211,6 +211,19 @@ def count_eligible_levels(mode: str = RUN_MODE_ENDLESS) -> dict:
     return counts
 
 
+def random_published_levels(difficulty: str | None, count: int) -> list[Level]:
+    """
+    Up to `count` distinct published levels in random order, for a race's
+    level vote. Unlike endless and scoreboard runs, a race draws from every
+    published level, labeled or not: no label means it only turns up under
+    "any". `difficulty` None means any.
+    """
+    from sqlalchemy import func
+
+    query = _levels_for(RUN_MODE_ENDLESS, difficulty)
+    return query.order_by(func.random()).limit(count).all()
+
+
 # How many level ids a run's shuffled list holds at most. A random sample
 # of the eligible pool, so a big pool doesn't mean a big list.
 LEVEL_QUEUE_SIZE = 100

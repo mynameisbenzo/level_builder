@@ -3,27 +3,35 @@ import {
 	amHost,
 	applyServerMessage,
 	canInvite,
+	describeAbort,
 	describeClosed,
 	describeDenied,
 	describeError,
 	initialLobby,
 	isTerminal,
+	me,
+	voteCounts,
 	type LobbyState,
 	type RoomSnapshot
 } from './raceView';
+
+const player = { away: false, ready: false, readyBy: null, loaded: false };
 
 const room = (overrides: Partial<RoomSnapshot> = {}): RoomSnapshot => ({
 	code: 'ABC234',
 	joinMode: 'host',
 	phase: 'lobby',
+	category: 'any',
 	maxPlayers: 4,
 	hostId: 'h',
 	closing: false,
+	serverNow: 1000,
 	players: [
-		{ userId: 'h', username: 'Hosty', paid: true, isHost: true, joinedAt: 1, away: false },
-		{ userId: 'g', username: 'Guest', paid: false, isHost: false, joinedAt: 2, away: false }
+		{ ...player, userId: 'h', username: 'Hosty', paid: true, isHost: true, joinedAt: 1 },
+		{ ...player, userId: 'g', username: 'Guest', paid: false, isHost: false, joinedAt: 2 }
 	],
 	invites: [],
+	round: null,
 	...overrides
 });
 
@@ -131,3 +139,56 @@ describe('wording', () => {
 		expect(describeError('nope')).toBe('That did not work.');
 	});
 });
+
+
+describe('round helpers', () => {
+	const round = {
+		n: 1,
+		candidates: ['a', 'b', 'c'].map((slug) => ({ slug, title: slug, owner: 'o', difficulty: null, thumbnailUrl: null })),
+		votes: { h: 'a', g: 'a', x: 'zzz' },
+		deadline: 5000,
+		chosen: null,
+		tied: [],
+		revealUntil: 0,
+		goAt: null
+	};
+
+	it('counts votes per candidate, including zeros, ignoring unknown levels', () => {
+		expect(voteCounts(round)).toEqual({ a: 2, b: 0, c: 0 });
+	});
+
+	it('finds our own player row', () => {
+		const s = welcomedAs('g');
+		expect(me(s)?.username).toBe('Guest');
+		expect(me(initialLobby())).toBeNull();
+	});
+
+	it('being removed is final, with its own wording', () => {
+		const s = applyServerMessage(welcomedAs('g'), { t: 'removed', reason: 'idle' });
+		expect(s.status).toBe('removed');
+		expect(s.removedReason).toBe('idle');
+		expect(isTerminal(s)).toBe(true);
+	});
+
+	it('turns an aborted round into a notice that says why', () => {
+		let s = welcomedAs('g');
+		s = applyServerMessage(s, { t: 'event', event: { kind: 'roundAborted', reason: 'no_levels' } });
+		expect(s.notices.at(-1)?.text).toBe(describeAbort('no_levels'));
+		expect(describeAbort('draw_failed')).toMatch(/try again/i);
+		expect(describeAbort('at_capacity')).toMatch(/capacity/i);
+	});
+
+	it('explains idle and unloaded removals of other players', () => {
+		let s = welcomedAs('g');
+		s = applyServerMessage(s, { t: 'event', event: { kind: 'left', userId: 'h', username: 'Hosty', reason: 'idle' } });
+		s = applyServerMessage(s, { t: 'event', event: { kind: 'left', userId: 'h', username: 'Hosty', reason: 'unloaded' } });
+		expect(s.notices.map((n) => n.text)).toEqual([
+			'Hosty was removed for not readying up',
+			"Hosty was dropped (level didn't load in time)"
+		]);
+	});
+});
+
+function welcomedAs(userId: string) {
+	return welcomed(userId, userId === 'g' ? 'Guest' : 'Hosty');
+}

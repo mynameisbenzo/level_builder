@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { CLOSED_LINGER_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, USAGE_FLUSH_MESSAGES, WS_BILLING_RATIO } from "./config";
+import { fetchCandidates } from "./candidates";
 import { budgetStub, type Env } from "./env";
 import { newBucket, take, type Bucket } from "./rateLimit";
 import { RoomLogic, type RoomEvent, type RoomState, type Who } from "./room";
@@ -12,6 +13,7 @@ const CLOSE = {
   notFound: 4004,
   denied: 4005,
   closed: 4007,
+  removed: 4008,
 } as const;
 
 interface Attachment {
@@ -28,6 +30,7 @@ export class Room extends DurableObject<Env> {
   private buckets = new WeakMap<WebSocket, Bucket>();
   private pendingUnits = 0;
   private pendingMessages = 0;
+  private drawing = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -96,7 +99,7 @@ export class Room extends DurableObject<Env> {
     this.safeSend(server, {
       t: "welcome",
       you: { userId: who.userId, username: who.username, isHost: room.isHost(who.userId) },
-      room: room.snapshot(),
+      room: room.snapshot(Date.now()),
     });
     this.ctx.waitUntil(this.afterChange(joined.events));
     return new Response(null, { status: 101, webSocket: client });
@@ -130,8 +133,25 @@ export class Room extends DurableObject<Env> {
     }
 
     const now = Date.now();
+    // Clock sync: answer straight away, change nothing, save nothing.
+    if (msg.t === "sync") {
+      return this.safeSend(ws, { t: "sync", c: typeof msg.c === "number" ? msg.c : 0, s: now });
+    }
+
     let result: ReturnType<RoomLogic["leave"]> | null = null;
     switch (msg.t) {
+      case "ready":
+        result = room.setReady(who.userId, msg.ready === true, now);
+        break;
+      case "setCategory":
+        result = room.setCategory(who.userId, String(msg.category ?? ""), now);
+        break;
+      case "vote":
+        result = room.vote(who.userId, String(msg.slug ?? ""), now);
+        break;
+      case "loaded":
+        result = room.loaded(who.userId, String(msg.slug ?? ""), now);
+        break;
       case "setMode":
         result = room.setMode(who.userId, msg.mode as never, now);
         break;
@@ -211,6 +231,18 @@ export class Room extends DurableObject<Env> {
 
     for (const ev of events) {
       this.broadcast({ t: "event", event: ev });
+      if (ev.kind === "roundEnded" || ev.kind === "closed") {
+        // Hand the round's share of the daily budget back.
+        this.ctx.waitUntil(budgetStub(this.env).release(room.state.code));
+      }
+      if (ev.kind === "left" && (ev.reason === "idle" || ev.reason === "unloaded")) {
+        for (const ws of this.ctx.getWebSockets()) {
+          if (this.attachmentOf(ws)?.userId === ev.userId) {
+            this.safeSend(ws, { t: "removed", reason: ev.reason });
+            ws.close(CLOSE.removed, ev.reason);
+          }
+        }
+      }
       if (ev.kind === "kicked") {
         for (const ws of this.ctx.getWebSockets()) {
           if (this.attachmentOf(ws)?.userId === ev.userId) {
@@ -230,11 +262,35 @@ export class Room extends DurableObject<Env> {
       return;
     }
 
-    this.broadcast({ t: "roomState", room: room.snapshot() });
+    this.broadcast({ t: "roomState", room: room.snapshot(Date.now()) });
     await this.persist();
     const wake = room.nextWake();
     if (wake !== null) await this.ctx.storage.setAlarm(wake);
     else await this.ctx.storage.deleteAlarm();
+
+    if (room.needsDraw && !this.drawing) this.ctx.waitUntil(this.runDraw());
+  }
+
+  /**
+   * The room is waiting for candidate levels: check the daily budget, ask
+   * the backend, and hand the answer to the room. If this instance was
+   * evicted mid-draw, the next change or alarm finds `needsDraw` still set
+   * and runs it again (and the room's own draw timeout cleans up if not).
+   */
+  private async runDraw(): Promise<void> {
+    if (this.drawing) return;
+    this.drawing = true;
+    try {
+      const room = this.room;
+      if (!room || !room.needsDraw) return;
+      const reserved = await budgetStub(this.env).tryReserve(room.state.code, "ghost");
+      const result = reserved
+        ? room.finishDraw(await fetchCandidates(this.env, room.state.category), Date.now())
+        : room.abortRound("at_capacity", Date.now());
+      if (result.ok) await this.afterChange(result.events);
+    } finally {
+      this.drawing = false;
+    }
   }
 
   private async persist(): Promise<void> {

@@ -162,7 +162,8 @@ describe("host handover", () => {
     expect(r.isClosed).toBe(false);
     expect(r.state.closing).toBe(true);
     const end = r.endRace(T0 + 20);
-    expect(end).toMatchObject({ ok: true, events: [{ kind: "closed" }] });
+    expect(end).toMatchObject({ ok: true });
+    expect(end.ok && end.events.some((e) => e.kind === "closed")).toBe(true);
     expect(r.isClosed).toBe(true);
   });
 

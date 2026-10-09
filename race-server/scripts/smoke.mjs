@@ -182,5 +182,51 @@ const budgetAfter = await api("/api/budget");
 check("room traffic is counted against the daily budget", budgetAfter.body.usedUnits > 0, JSON.stringify(budgetAfter.body));
 console.log(`      usage counted so far: ${budgetAfter.body.usedUnits} units`);
 
+// ---- a round: clock sync, ready-up, the draw (Worker -> Flask), vote, load, countdown ----
+console.log("\n-- round (needs BACKEND_URL on the Worker to reach a backend with published levels) --");
+const r2 = await api("/api/rooms", { method: "POST", token: host.ticket });
+const code2 = r2.body.code;
+const rh = new Client(code2, host);
+await rh.opened;
+await rh.waitFor((m) => m.t === "welcome");
+rh.send({ t: "setMode", mode: "public" });
+const rg = new Client(code2, free1);
+await rg.opened;
+await rg.waitFor((m) => m.t === "welcome");
+
+const sentAt = Date.now();
+rg.send({ t: "sync", c: sentAt });
+const syncReply = await rg.waitFor((m) => m.t === "sync");
+check("sync echoes our timestamp and adds the server's clock", syncReply?.c === sentAt && Math.abs(syncReply.s - Date.now()) < 5000, JSON.stringify(syncReply));
+
+rh.send({ t: "ready", ready: true });
+await sleep(200);
+check("one player ready does not start the draw", rh.last("roomState")?.room.phase === "lobby");
+rg.send({ t: "ready", ready: true });
+const voting = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "voting", 30000);
+const aborted = rh.messages.find((m) => m.t === "event" && m.event.kind === "roundAborted");
+if (!voting && aborted?.event.reason === "no_levels") {
+  console.log("WARN  the backend answered but has no published levels; publish some and run again");
+} else {
+  check("everyone ready -> the Worker got candidates from the backend and opened a vote", !!voting, JSON.stringify(aborted ?? rh.messages.slice(-2)));
+}
+if (voting) {
+  const cands = voting.room.round.candidates;
+  check("1-4 candidates, each with slug and title", cands.length >= 1 && cands.length <= 4 && cands.every((c) => c.slug && c.title), JSON.stringify(cands));
+  const pick = cands[0].slug;
+  rh.send({ t: "vote", slug: pick });
+  rg.send({ t: "vote", slug: pick });
+  const loading = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "loading");
+  check("everyone voting ends the vote at once and picks the winner", loading?.room.round.chosen === pick, JSON.stringify(loading?.room.round));
+  rh.send({ t: "loaded", slug: pick });
+  rg.send({ t: "loaded", slug: pick });
+  const countdown = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "countdown", 6000);
+  check("everyone loaded -> countdown with a go time in the future", !!countdown && countdown.room.round.goAt > countdown.room.serverNow, JSON.stringify(countdown?.room.round));
+  const racing = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "racing", 8000);
+  check("the room reaches racing at the go time", !!racing);
+}
+rh.send({ t: "closeRoom" });
+await rh.done;
+
 console.log(failures ? `\n${failures} check(s) FAILED` : "\nall checks passed");
 process.exit(failures ? 1 : 0);

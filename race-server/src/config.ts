@@ -51,3 +51,33 @@ export function raceCost(mode: GameMode): number {
 export const RESERVATION_TTL_MS = 20 * 60 * 1000;
 // Rooms report usage to the budget in batches this big, not per message.
 export const USAGE_FLUSH_MESSAGES = 100;
+
+
+// ---- a round: ready-up, vote, load, countdown -------------------------
+// A player who hasn't readied up in this long is removed (the clock only
+// runs while at least two people are in the room).
+export const READY_TIMEOUT_MS = 60_000;
+// How many candidate levels are drawn for the vote (fewer if the category
+// has fewer).
+export const CANDIDATES = 4;
+export const VOTE_MS = 20_000;
+// How long the tie-breaking spin plays, and the pause when nothing needs
+// breaking. The countdown never starts before this has passed.
+export const SPIN_MS = 3_500;
+export const REVEAL_MS = 1_500;
+// Everyone must report their level loaded within this, counted from the
+// moment the winning level is announced (loading overlaps the spin).
+export const LOAD_TIMEOUT_MS = 15_000;
+// "3, 2, 1" and the extra margin so the slowest phone has the message
+// before the countdown has begun.
+export const COUNTDOWN_MS = 3_000;
+export const START_BUFFER_MS = 800;
+// Asking the backend for candidates: give up after this. Generous because
+// Render's free plan can take a while to wake a sleeping backend.
+export const DRAW_TIMEOUT_MS = 25_000;
+// Until stage 3 (the real race), "racing" just holds this long, then the
+// room goes back to ready-up.
+export const PLACEHOLDER_RACE_MS = 8_000;
+
+export const CATEGORIES = ["any", "easy", "normal", "hard", "very_hard", "tas"] as const;
+export type Category = (typeof CATEGORIES)[number];

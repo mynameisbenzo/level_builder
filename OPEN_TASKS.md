@@ -714,7 +714,14 @@ already have a link to:
            it, see each other join and leave, and the host hands off.
            Also the first chance to check how iOS behaves when the app is
            backgrounded.
-        2. **Level choice and start.** Ready-up (the vote starts when
+        2. **Level choice and start.** *(Built: the round logic in
+           `race-server/src/room.ts`, `POST /api/race/candidates`, and
+           `RaceRound.svelte` in the lobby. The race itself is still a
+           placeholder timer, so a round ends in "racing" for 8 seconds and
+           returns to ready-up until stage 3. Two choices made while building:
+           the 1-minute ready-up clock only runs while at least two people are
+           in the room, so a host waiting alone for friends isn't removed; and
+           a category with a single level skips the vote.)* Ready-up (the vote starts when
            every player present is ready, minimum 2, with the 1-minute
            inactivity kick), category pick, the 1-4 candidate draw, the 20-second vote with the tie-breaking spin animation
            and random fallback, the load-ready handshake (15-second

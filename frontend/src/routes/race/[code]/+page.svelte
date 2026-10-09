@@ -4,6 +4,7 @@
 	import { auth } from '$lib/auth.svelte';
 	import { withSession } from '$lib/endlessSession';
 	import Navbar from '$lib/Navbar.svelte';
+	import RaceRound from '$lib/RaceRound.svelte';
 	import { fetchRaceTicket, ROOM_CODE_PATTERN, type RaceResult } from '$lib/raceApi';
 	import { defaultDeps, RaceSession } from '$lib/raceSession';
 	import {
@@ -11,6 +12,7 @@
 		canInvite,
 		describeClosed,
 		describeDenied,
+		describeRemoved,
 		initialLobby,
 		JOIN_MODE_LABELS,
 		type JoinMode,
@@ -23,7 +25,7 @@
 	const validCode = $derived(ROOM_CODE_PATTERN.test(code));
 
 	let lobby = $state<LobbyState>(initialLobby());
-	let session: RaceSession | null = null;
+	let session = $state.raw<RaceSession | null>(null);
 	let inviteName = $state('');
 	let copied = $state(false);
 
@@ -126,6 +128,12 @@
 			<p>The host removed you from this room.</p>
 			<a class="secondary" href="/race">Back to Race</a>
 		</section>
+	{:else if lobby.status === 'removed'}
+		<section class="card">
+			<h1>You were removed</h1>
+			<p>{describeRemoved(lobby.removedReason)}</p>
+			<a class="secondary" href="/race">Back to Race</a>
+		</section>
 	{:else if lobby.status === 'closed'}
 		<section class="card">
 			<h1>Room closed</h1>
@@ -180,6 +188,7 @@
 							{#if player.isHost}<span class="tag host-tag">host</span>{/if}
 							{#if player.userId === lobby.you?.userId}<span class="tag you-tag">you</span>{/if}
 							{#if player.away}<span class="tag away-tag">reconnecting</span>{/if}
+							{#if player.ready && lobby.room.phase === 'lobby'}<span class="tag ready-tag">ready</span>{/if}
 						</span>
 						{#if host && player.userId !== lobby.you?.userId}
 							<button class="danger" onclick={() => kick(player.userId, player.username)}>Remove</button>
@@ -199,6 +208,8 @@
 				</ul>
 			{/if}
 		</section>
+
+		<RaceRound {lobby} {session} />
 
 		<section class="card">
 			<h2>Who can join</h2>
@@ -256,10 +267,6 @@
 
 			{#if lobby.lastError}<p class="error">{lobby.lastError}</p>{/if}
 		</section>
-
-		<p class="muted note">
-			Races start in a later update. For now you can set up the room and meet your racers.
-		</p>
 
 		<div class="row actions">
 			<button class="secondary" onclick={leave}>Leave race</button>
@@ -337,10 +344,6 @@
 		color: #8b8fc7;
 	}
 
-	.note {
-		margin: 8px 0 16px;
-	}
-
 	.error {
 		color: #ff8a7a;
 		font-size: 0.9rem;
@@ -415,6 +418,10 @@
 	}
 
 	.you-tag {
+		background: #4ecb71;
+	}
+
+	.ready-tag {
 		background: #4ecb71;
 	}
 

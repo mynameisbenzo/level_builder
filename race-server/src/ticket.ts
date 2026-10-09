@@ -62,3 +62,32 @@ export interface Ticket {
     if (typeof c.paid !== "boolean") return null;
     return { userId: c.sub, username: c.username, paid: c.paid };
   }
+
+
+// ---- the other direction: the Worker proves itself to the backend -------
+
+function bytesToB64url(bytes: Uint8Array): string {
+    let binary = "";
+    for (const b of bytes) binary += String.fromCharCode(b);
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  
+  const jsonB64 = (value: unknown) => bytesToB64url(encoder.encode(JSON.stringify(value)));
+  
+  export const INTERNAL_AUDIENCE = "race-internal";
+  
+  /**
+   * A 60-second HS256 token for the Worker's calls to the Flask backend
+   * (asking for candidate levels). Same shared secret as the tickets, but a
+   * different audience, so a player's ticket can't be used to call the
+   * backend's internal route and vice versa.
+   */
+  export async function signInternalToken(secret: string, nowSeconds: number): Promise<string> {
+    const head = jsonB64({ alg: "HS256", typ: "JWT" });
+    const body = jsonB64({ aud: INTERNAL_AUDIENCE, iss: "race-worker", iat: nowSeconds, exp: nowSeconds + 60 });
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+      "sign",
+    ]);
+    const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${head}.${body}`)));
+    return `${head}.${body}.${bytesToB64url(sig)}`;
+  }

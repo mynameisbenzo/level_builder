@@ -38,6 +38,7 @@ RACE_TICKET_SECRET=... node scripts/smoke.mjs https://<your-worker>.workers.dev
 | --- | --- | --- |
 | `RACE_TICKET_SECRET` | Worker secret **and** backend env var, same value | signs/verifies tickets |
 | `FRONTEND_ORIGINS` | `wrangler.jsonc` vars | browser origins allowed to call the Worker |
+| `BACKEND_URL` | `wrangler.jsonc` vars | the Flask backend the Worker asks for candidate levels (`POST /api/race/candidates`, signed with the same secret, audience `race-internal`) |
 
 Make a secret with `python3 -c "import secrets; print(secrets.token_hex(32))"`.
 
@@ -49,7 +50,14 @@ Make a secret with `python3 -c "import secrets; print(secrets.token_hex(32))"`.
 - `GET  /api/rooms/:code` (optional Bearer ticket) -> public room info, plus `canJoin` when signed in
 - `GET  /api/rooms/:code/ws?ticket=...` - the socket
 
-Client -> server messages: `setMode`, `invite`, `uninvite`, `kick`, `closeRoom`, `leave`.
-Server -> client: `welcome`, `roomState`, `event`, `kicked`, `closed`, `denied`,
-`replaced`, `limited`, `error`. Every message carries `v` (protocol version).
-Close codes: 4000 replaced, 4001 unauthorized, 4003 kicked, 4005 denied, 4007 closed.
+Client -> server messages: `setMode`, `invite`, `uninvite`, `kick`, `closeRoom`, `leave`,
+and for a round `ready {ready}`, `setCategory {category}`, `vote {slug}`, `loaded {slug}`,
+`sync {c}` (answered with `sync {c, s}`, the server's clock, for the client's offset estimate).
+Server -> client: `welcome`, `roomState`, `event`, `kicked`, `removed`, `closed`, `denied`,
+`replaced`, `limited`, `error`, `sync`. Every message carries `v` (protocol version).
+Close codes: 4000 replaced, 4001 unauthorized, 4003 kicked, 4005 denied, 4007 closed,
+4008 removed (not ready in a minute, or the level didn't load in 15 s).
+
+A round runs `lobby` (ready-up) -> `drawing` (asking the backend) -> `voting` -> `loading`
+-> `countdown` -> `racing`. Until the real race exists, `racing` just holds for
+`PLACEHOLDER_RACE_MS` and the room returns to ready-up. Every timer is in `src/config.ts`.

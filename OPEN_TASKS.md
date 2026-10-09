@@ -700,8 +700,8 @@ already have a link to:
         the clutch-or-kick ladder) belong in
         Phaser-free modules with unit tests; the scene wiring is checked
         manually in the browser, as elsewhere in this project.
-        1. **Transport and bare rooms.** *(Built: `race-server/` and
-           `POST /api/race/ticket`; frontend lobby UI still to do.)* The Cloudflare probe passed
+        1. **Transport and bare rooms.** *(Built: `race-server/`,
+           `POST /api/race/ticket`, and the `/race` and `/race/<code>` pages.)* The Cloudflare probe passed
            (see **Transport** for the numbers), so this builds on it: a
            TypeScript Worker plus a Durable Object per room with raw
            WebSockets, JWT check at the Worker, the paid-host rule and

@@ -10,6 +10,6 @@
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room", "Budget"] }],
     "vars": {
-      "FRONTEND_ORIGINS": "https://level-builder-frontend.onrender.com,http://localhost:5173"
+      "FRONTEND_ORIGINS": "https://level-builder-frontend.onrender.com,http://localhost:5173,https://localhost:5173"
     }
   }

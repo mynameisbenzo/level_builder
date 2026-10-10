@@ -66,6 +66,8 @@ export class RaceSession {
 	private syncTimer: unknown = null;
 	private samples: SyncSample[] = [];
 	private stopped = false;
+	/** Set by the race page: called for every opponent position that arrives. */
+	onPosition: ((p: { slot: number; x: number; y: number; state: number }) => void) | null = null;
 
 	constructor(
 		private code: string,
@@ -112,6 +114,16 @@ export class RaceSession {
 			}
 			if (msg.t === 'sync') {
 				this.onSync(msg);
+				return;
+			}
+			if (msg.t === 'pos') {
+				// Twenty a second per opponent: straight to the game, never through state.
+				this.onPosition?.({
+					slot: Number(msg.i),
+					x: Number(msg.x),
+					y: Number(msg.y),
+					state: Number(msg.s)
+				});
 				return;
 			}
 			const before = this.state.room?.phase;
@@ -176,6 +188,21 @@ export class RaceSession {
 	/** Tell the room the winning level has finished loading here. */
 	loaded(slug: string): void {
 		this.send({ t: 'loaded', slug });
+	}
+
+	/** Our position, packed like a ghost sample. Only counts while racing. */
+	sendPosition(x: number, y: number, state: number): void {
+		this.send({ t: 'pos', x: Math.round(x), y: Math.round(y), s: state });
+	}
+
+	/** We reached the goal. */
+	finish(): void {
+		this.send({ t: 'finish' });
+	}
+
+	/** We died (and are respawning). */
+	death(): void {
+		this.send({ t: 'death' });
 	}
 
 	/** Our best guess at the server's clock right now, in ms. */

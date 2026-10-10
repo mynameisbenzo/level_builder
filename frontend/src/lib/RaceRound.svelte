@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
-	import { getLevelForPlay } from './api';
 	import DifficultyBadge from './DifficultyBadge.svelte';
 	import { countdownFace, secondsLeft, SPIN_MS, spinFrames, spinSlugAt } from './raceRound';
 	import type { RaceSession } from './raceSession';
@@ -14,7 +13,11 @@
 		type LobbyState
 	} from './raceView';
 
-	let { lobby, session }: { lobby: LobbyState; session: RaceSession | null } = $props();
+	let {
+		lobby,
+		session,
+		loadError = null
+	}: { lobby: LobbyState; session: RaceSession | null; loadError?: string | null } = $props();
 
 	const room = $derived(lobby.room!);
 	const round = $derived(room.round);
@@ -65,27 +68,8 @@
 
 	const chosenCandidate = $derived(round?.candidates.find((c) => c.slug === round.chosen) ?? null);
 
-	// ---- loading the winner ----------------------------------------------
-	let loadError = $state<string | null>(null);
-	let startedLoadFor = '';
-
-	$effect(() => {
-		if (room.phase !== 'loading' || !round?.chosen || !mine || mine.loaded) return;
-		const key = `${round.n}:${round.chosen}`;
-		if (startedLoadFor === key) return;
-		startedLoadFor = key;
-		loadError = null;
-		const slug = round.chosen;
-		void getLevelForPlay(slug).then((result) => {
-			if (result.success && result.content) {
-				// Stage 3 hands this level to the game scene; for now loading
-				// it successfully is the whole job.
-				session?.loaded(slug);
-			} else {
-				loadError = result.error ?? "The level couldn't be loaded.";
-			}
-		});
-	});
+	// Loading the winner is RaceGame's job now: it builds the level in the
+	// game and reports "loaded" once the scene is on screen.
 
 	// ---- countdown ---------------------------------------------------------
 	const face = $derived(
@@ -143,7 +127,7 @@
 		<h2>Picking levels…</h2>
 		<p class="muted">Everyone is ready. Drawing {CATEGORY_LABELS[room.category]} levels.</p>
 	</section>
-{:else if round}
+{:else if round && (room.phase === 'voting' || room.phase === 'loading' || room.phase === 'countdown')}
 	<section class="card">
 		{#if room.phase === 'voting'}
 			<h2>
@@ -152,10 +136,8 @@
 			</h2>
 		{:else if room.phase === 'loading'}
 			<h2>{spinning ? 'A tie! Spinning…' : 'Level chosen'}</h2>
-		{:else if room.phase === 'countdown'}
-			<h2>Get ready</h2>
 		{:else}
-			<h2>Race</h2>
+			<h2>Get ready</h2>
 		{/if}
 
 		<ul class="levels" class:locked={room.phase !== 'voting'}>
@@ -206,24 +188,17 @@
 			{#if loadError}<p class="error">{loadError} You'll be dropped from the race if it can't load.</p>{/if}
 		{/if}
 	</section>
+{/if}
 
-	{#if room.phase === 'countdown' || room.phase === 'racing'}
-		{#if face !== null || room.phase === 'countdown'}
-			<div class="overlay" aria-live="assertive">
-				{#if face === null}
-					<p class="getready">Get ready…</p>
-				{:else}
-					<p class="face" class:go={face === 'go'}>{face === 'go' ? 'GO!' : face}</p>
-				{/if}
-				{#if chosenCandidate}<p class="title">{chosenCandidate.title}</p>{/if}
-			</div>
+{#if round && (room.phase === 'countdown' || room.phase === 'racing') && (face !== null || room.phase === 'countdown')}
+	<div class="overlay" aria-live="assertive">
+		{#if face === null}
+			<p class="getready">Get ready…</p>
+		{:else}
+			<p class="face" class:go={face === 'go'}>{face === 'go' ? 'GO!' : face}</p>
 		{/if}
-		{#if room.phase === 'racing'}
-			<p class="muted note">
-				The race itself arrives in the next update. This room returns to ready-up in a few seconds.
-			</p>
-		{/if}
-	{/if}
+		{#if chosenCandidate && room.phase === 'countdown'}<p class="title">{chosenCandidate.title}</p>{/if}
+	</div>
 {/if}
 
 <style>
@@ -461,7 +436,8 @@
 		display: grid;
 		place-content: center;
 		text-align: center;
-		background: rgba(26, 27, 58, 0.88);
+		/* Light enough to see the level waiting underneath. */
+		background: rgba(26, 27, 58, 0.5);
 		z-index: 50;
 		pointer-events: none;
 	}
@@ -490,9 +466,5 @@
 		color: #f4f6ff;
 		font-size: 1.2rem;
 		margin: 8px 0 0;
-	}
-
-	.note {
-		margin: 8px 0 16px;
 	}
 </style>

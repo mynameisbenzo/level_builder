@@ -7,7 +7,7 @@ backend signs (`POST /api/race/ticket`).
 
 Stage 1 covers rooms only: create, join modes, invites, kick/ban, leave, host
 handover, the 4-player cap, idle expiry, a per-socket message cap, and the
-daily request budget. Racing itself arrives in later stages.
+daily request budget. Stage 3a adds the race itself; the shared race checkpoint and the sanity checks on positions are stage 3b.
 
 ## Layout
 

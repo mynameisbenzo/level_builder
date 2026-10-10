@@ -3,6 +3,13 @@ import { PlatformerScene } from './PlatformerScene';
 import { LevelEditorScene } from './LevelEditorScene';
 import { deserializeLevelContent, type LevelContent } from './levelContent';
 import { GHOSTS_REGISTRY_KEY, type GhostSet } from './ghost';
+import {
+	OpponentBuffer,
+	RACE_LOCKED_KEY,
+	RACE_MODE_KEY,
+	RACE_OPPONENTS_KEY,
+	RACE_ROSTER_KEY
+} from './raceOpponents';
 import { writeCheckpointCarry, type CheckpointCarry } from './checkpoints';
 
 export interface CreateGameConfigOptions {
@@ -28,6 +35,10 @@ export interface CreateGameConfigOptions {
 	 * run, which boots a brand-new game after every death, keeps the
 	 * player's checkpoint across the restart. */
 	checkpoint?: CheckpointCarry;
+	/** A live race: the player starts locked (until the page unlocks it at GO),
+	 * the other racers are drawn from a position buffer the page fills, and the
+	 * scene reports finishing instead of showing the result modal. */
+	race?: boolean;
 }
 
 export function createGameConfig(
@@ -92,6 +103,17 @@ export function createGameConfig(
 				}
 				if (options.checkpoint) {
 					writeCheckpointCarry(game.registry, options.checkpoint);
+				}
+				if (options.race) {
+					// The race page may already have set some of these (it runs
+					// on its own timers, e.g. an unlock for a race already under
+					// way), so only fill in what is missing.
+					game.registry.set(RACE_MODE_KEY, true);
+					if (!game.registry.has(RACE_LOCKED_KEY)) game.registry.set(RACE_LOCKED_KEY, true);
+					if (!game.registry.has(RACE_OPPONENTS_KEY)) {
+						game.registry.set(RACE_OPPONENTS_KEY, new OpponentBuffer());
+					}
+					if (!game.registry.has(RACE_ROSTER_KEY)) game.registry.set(RACE_ROSTER_KEY, []);
 				}
 			}
 		}

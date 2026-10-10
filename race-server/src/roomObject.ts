@@ -1,5 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
-import { CLOSED_LINGER_MS, MAX_MESSAGE_BYTES, PROTOCOL_VERSION, USAGE_FLUSH_MESSAGES, WS_BILLING_RATIO } from "./config";
+import {
+  CLOSED_LINGER_MS,
+  MAX_MESSAGE_BYTES,
+  POS_LIMIT,
+  PROTOCOL_VERSION,
+  USAGE_FLUSH_MESSAGES,
+  WS_BILLING_RATIO,
+} from "./config";
 import { fetchCandidates } from "./candidates";
 import { budgetStub, type Env } from "./env";
 import { newBucket, take, type Bucket } from "./rateLimit";
@@ -138,8 +145,35 @@ export class Room extends DurableObject<Env> {
       return this.safeSend(ws, { t: "sync", c: typeof msg.c === "number" ? msg.c : 0, s: now });
     }
 
+    // Positions: relay to the others and change nothing, save nothing.
+    if (msg.t === "pos") {
+      const slot = room.racingSlot(who.userId);
+      const { x, y, s: packed } = msg as { x?: unknown; y?: unknown; s?: unknown };
+      if (
+        slot === null ||
+        typeof x !== "number" ||
+        typeof y !== "number" ||
+        typeof packed !== "number" ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        Math.abs(x) > POS_LIMIT ||
+        Math.abs(y) > POS_LIMIT
+      ) {
+        return;
+      }
+      const out = { t: "pos", i: slot, x: Math.round(x), y: Math.round(y), s: packed | 0 };
+      for (const other of this.ctx.getWebSockets()) if (other !== ws) this.safeSend(other, out);
+      return;
+    }
+
     let result: ReturnType<RoomLogic["leave"]> | null = null;
     switch (msg.t) {
+      case "finish":
+        result = room.finish(who.userId, now);
+        break;
+      case "death":
+        result = room.death(who.userId, now);
+        break;
       case "ready":
         result = room.setReady(who.userId, msg.ready === true, now);
         break;
@@ -231,7 +265,7 @@ export class Room extends DurableObject<Env> {
 
     for (const ev of events) {
       this.broadcast({ t: "event", event: ev });
-      if (ev.kind === "roundEnded" || ev.kind === "closed") {
+      if (ev.kind === "raceEnded" || ev.kind === "roundEnded" || ev.kind === "closed") {
         // Hand the round's share of the daily budget back.
         this.ctx.waitUntil(budgetStub(this.env).release(room.state.code));
       }

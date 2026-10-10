@@ -44,6 +44,18 @@ export const LEVEL_BEATEN_EVENT = 'level-beaten';
  * outcome for that case and didn't need a modal of its own.
  */
 export const LEVEL_DIED_EVENT = 'level-died';
+import {
+	RACE_FINISHED_EVENT,
+	RACE_LOCKED_KEY,
+	RACE_MODE_KEY,
+	RACE_OPPONENTS_KEY,
+	RACE_READY_EVENT,
+	RACE_ROSTER_KEY,
+	SLOT_CSS,
+	SLOT_TINTS,
+	type OpponentBuffer,
+	type RosterEntry
+} from './raceOpponents';
 import { canFloat, canPhase, getJumpHeightMultiplier, getSpeedMultiplier } from './characterAbilities';
 import { getSceneKeyForMode, toggleMode, type GameMode } from './mode';
 import { ensureSounds, playSfx } from './sounds';
@@ -408,6 +420,14 @@ export class PlatformerScene extends Phaser.Scene {
 	 * because a full ghost keeps running past the moment the player touches
 	 * the checkpoint, while the after ghost starts over at that moment. */
 	private ghostClockMs = 0;
+	/** Live race mode (see raceOpponents.ts): set from the registry in create(). */
+	private raceMode = false;
+	private raceReadyEmitted = false;
+	private raceSnapshot: { x: number; y: number; state: number } | null = null;
+	private raceSprites = new Map<
+		number,
+		{ sprite: Phaser.GameObjects.Sprite; label: Phaser.GameObjects.Text }
+	>();
 	private ghostSprite: Phaser.GameObjects.Sprite | null = null;
 	private ghostLabel: Phaser.GameObjects.Text | null = null;
 	/** The player's real time spent on this level, reported to the server
@@ -502,6 +522,10 @@ export class PlatformerScene extends Phaser.Scene {
 		// movement, not even Tab - on every session after the first win.
 		this.hasWon = false;
 		this.hasDied = false;
+		this.raceMode = this.registry.get(RACE_MODE_KEY) === true;
+		this.raceSnapshot = null;
+		this.raceReadyEmitted = false;
+		this.raceSprites = new Map();
 		this.runElapsedMs = 0;
 		this.ghostRecorder.reset();
 		this.ghostSet = emptyGhostSet();
@@ -1369,6 +1393,11 @@ export class PlatformerScene extends Phaser.Scene {
 	 */
 	private triggerWin() {
 		this.hasWon = true;
+		if (this.raceMode) {
+			// The race page tells the room straight away; the usual delayed
+			// result event below isn't listened to there.
+			this.game.events.emit(RACE_FINISHED_EVENT);
+		}
 		this.player.setVelocity(0, 0);
 		const body = this.player.body as Phaser.Physics.Arcade.Body | null;
 		if (body) {
@@ -1538,7 +1567,7 @@ export class PlatformerScene extends Phaser.Scene {
 		// With a checkpoint reached the host respawns the player straight
 		// away (no result modal), so there's nothing to leave room for -
 		// the freeze and fall already paced the death.
-		if (readCheckpointState(this.registry) !== null) {
+		if (this.raceMode || readCheckpointState(this.registry) !== null) {
 			this.game.events.emit(LEVEL_DIED_EVENT);
 			return;
 		}
@@ -1723,7 +1752,76 @@ export class PlatformerScene extends Phaser.Scene {
 		}
 	}
 
+	/** Where this player is, packed like a ghost sample, as of the last unlocked frame; null before GO. */
+	getRaceSnapshot(): { x: number; y: number; state: number } | null {
+		return this.raceSnapshot;
+	}
+
+	/**
+	 * Draws the other racers from the buffer the race page fills: a tinted,
+	 * name-tagged copy of each, a little behind real time. Racers who have
+	 * finished, dropped out or not been heard from are hidden.
+	 */
+	private updateRaceOpponents() {
+		const buffer = this.registry.get(RACE_OPPONENTS_KEY) as OpponentBuffer | undefined;
+		const roster = (this.registry.get(RACE_ROSTER_KEY) as RosterEntry[] | undefined) ?? [];
+		if (!buffer) {
+			return;
+		}
+		const now = performance.now();
+		for (const entry of roster) {
+			let drawn = this.raceSprites.get(entry.slot);
+			const pose = entry.status === 'racing' ? buffer.sample(entry.slot, now) : null;
+			if (!pose) {
+				drawn?.sprite.setVisible(false);
+				drawn?.label.setVisible(false);
+				continue;
+			}
+			if (!drawn) {
+				const tint = SLOT_TINTS[entry.slot % SLOT_TINTS.length];
+				drawn = {
+					sprite: this.add
+						.sprite(pose.x, pose.y, CHARACTERS_ATLAS_KEY)
+						.setDepth(PLAYER_DEPTH - 0.2)
+						.setDisplaySize(PLAYER_DISPLAY_SIZE, PLAYER_DISPLAY_SIZE)
+						.setAlpha(0.9)
+						.setTint(tint),
+					label: this.add
+						.text(pose.x, pose.y, entry.username, {
+							font: '12px monospace',
+							color: SLOT_CSS[entry.slot % SLOT_CSS.length]
+						})
+						.setOrigin(0.5, 1)
+						.setDepth(PLAYER_DEPTH - 0.2)
+				};
+				this.raceSprites.set(entry.slot, drawn);
+			}
+			const state = decodeGhostState(pose.state);
+			drawn.sprite
+				.setVisible(true)
+				.setPosition(pose.x, pose.y)
+				.setTexture(CHARACTERS_ATLAS_KEY, getPlayerFrameForPose(state.color, state.pose, now))
+				.setFlipX(state.facingLeft);
+			drawn.label
+				.setVisible(true)
+				.setPosition(pose.x, pose.y - PLAYER_DISPLAY_SIZE / 2 - 4);
+		}
+	}
+
 	update(time: number, delta: number) {
+		if (this.raceMode) {
+			if (!this.raceReadyEmitted) {
+				this.raceReadyEmitted = true;
+				this.game.events.emit(RACE_READY_EVENT);
+			}
+			this.updateRaceOpponents();
+			// Before GO: nothing moves (the enemies patrol from update(), so
+			// they hold too), and the clocks stand still.
+			if (this.registry.get(RACE_LOCKED_KEY) === true) {
+				return;
+			}
+		}
+
 		if (this.hasWon || this.hasDied) {
 			return;
 		}
@@ -1914,6 +2012,13 @@ export class PlatformerScene extends Phaser.Scene {
 			encodeGhostState(currentPlayerColor ?? 'green', pose, this.player.flipX)
 		);
 		this.updateGhost();
+		if (this.raceMode) {
+			this.raceSnapshot = {
+				x: this.player.x,
+				y: this.player.y,
+				state: encodeGhostState(currentPlayerColor ?? 'green', pose, this.player.flipX)
+			};
+		}
 		this.runElapsedMs += delta;
 		this.ghostClockMs += delta;
 

@@ -728,7 +728,12 @@ already have a link to:
            timeout), per-client clock offset, and the synchronized 3-2-1
            countdown with controls locked until go. Done when every
            client in a room reaches the same "go" on the same level.
-        3. **The race.** Position streaming at about 20 Hz, the single
+        3. **The race.** *(Stage 3a built: `race-server/src/race.ts`, the
+           `results` phase in `room.ts`, position relay in `roomObject.ts`,
+           `RaceGame.svelte` and `raceOpponents.ts` on the frontend, and
+           small hooks in `PlatformerScene.ts`. Left for 3b: the shared
+           race checkpoint and the sanity checks on the position stream.
+           A death currently respawns at the level's start.)* Position streaming at about 20 Hz, the single
            ghost generalized into several interpolated live opponents
            with name tags and slot tints, respawn-on-death with a death
            count, finish messages and placements by arrival, the

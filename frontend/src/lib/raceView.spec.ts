@@ -9,8 +9,12 @@ import {
 	describeError,
 	initialLobby,
 	isTerminal,
+	formatRaceTime,
 	me,
+	ordinal,
+	resultsOrder,
 	voteCounts,
+	type RacerView,
 	type LobbyState,
 	type RoomSnapshot
 } from './raceView';
@@ -32,6 +36,7 @@ const room = (overrides: Partial<RoomSnapshot> = {}): RoomSnapshot => ({
 	],
 	invites: [],
 	round: null,
+	scores: [],
 	...overrides
 });
 
@@ -150,7 +155,8 @@ describe('round helpers', () => {
 		chosen: null,
 		tied: [],
 		revealUntil: 0,
-		goAt: null
+		goAt: null,
+		race: null
 	};
 
 	it('counts votes per candidate, including zeros, ignoring unknown levels', () => {
@@ -192,3 +198,63 @@ describe('round helpers', () => {
 function welcomedAs(userId: string) {
 	return welcomed(userId, userId === 'g' ? 'Guest' : 'Hosty');
 }
+
+
+describe('race helpers', () => {
+	const racer = (over: Partial<RacerView>): RacerView => ({
+		userId: 'u',
+		username: 'U',
+		slot: 0,
+		status: 'racing',
+		deaths: 0,
+		place: null,
+		finishMs: null,
+		points: null,
+		...over
+	});
+
+	it('writes places as ordinals', () => {
+		expect([1, 2, 3, 4, 11, 12, 13, 21, 22].map(ordinal)).toEqual([
+			'1st',
+			'2nd',
+			'3rd',
+			'4th',
+			'11th',
+			'12th',
+			'13th',
+			'21st',
+			'22nd'
+		]);
+	});
+
+	it('formats race times as m:ss.t', () => {
+		expect(formatRaceTime(0)).toBe('0:00.0');
+		expect(formatRaceTime(34_250)).toBe('0:34.2');
+		expect(formatRaceTime(125_900)).toBe('2:05.9');
+		expect(formatRaceTime(-5)).toBe('0:00.0');
+	});
+
+	it('orders results: finishers by arrival, then the rest by fewest deaths', () => {
+		const order = resultsOrder([
+			racer({ userId: 'a', slot: 0, status: 'dnf', deaths: 5 }),
+			racer({ userId: 'b', slot: 1, status: 'finished', place: 2, finishMs: 9000 }),
+			racer({ userId: 'c', slot: 2, status: 'dnf', deaths: 1 }),
+			racer({ userId: 'd', slot: 3, status: 'finished', place: 1, finishMs: 8000 })
+		]);
+		expect(order.map((r) => r.userId)).toEqual(['d', 'b', 'c', 'a']);
+	});
+
+	it('announces a finish for everyone, including us', () => {
+		let s = welcomed('h', 'Hosty');
+		s = applyServerMessage(s, {
+			t: 'event',
+			event: { kind: 'finished', userId: 'g', username: 'Guest', place: 2, ms: 1 }
+		});
+		expect(s.notices.at(-1)?.text).toBe('Guest finished 2nd');
+	});
+
+	it('does not tell a race position to the reducer: positions bypass state', () => {
+		const s = welcomed('h', 'Hosty');
+		expect(applyServerMessage(s, { t: 'pos', i: 1, x: 1, y: 2, s: 3 })).toBe(s);
+	});
+});

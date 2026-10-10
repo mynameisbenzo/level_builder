@@ -213,6 +213,34 @@ describe('RaceSession', () => {
 			{ t: 'loaded', slug: 'lvl-1' }
 		]);
 	});
+
+	it('hands opponent positions to the game without touching state', async () => {
+		const h = harness();
+		h.session.start();
+		await flush();
+		h.sockets[0].say(welcome);
+		const seen: { slot: number; x: number; y: number; state: number }[] = [];
+		h.session.onPosition = (p) => seen.push(p);
+		const statesBefore = h.states.length;
+		h.sockets[0].say({ t: 'pos', i: 2, x: 120, y: 340, s: 17 });
+		expect(seen).toEqual([{ slot: 2, x: 120, y: 340, state: 17 }]);
+		expect(h.states.length).toBe(statesBefore);
+	});
+
+	it('sends position, finish and death in the wire format the room expects', async () => {
+		const h = harness();
+		h.session.start();
+		await flush();
+		h.sockets[0].say(welcome);
+		h.session.sendPosition(10.4, 20.6, 9);
+		h.session.finish();
+		h.session.death();
+		expect(sentMessages(h.sockets[0])).toEqual([
+			{ t: 'pos', x: 10, y: 21, s: 9 },
+			{ t: 'finish' },
+			{ t: 'death' }
+		]);
+	});
 });
 
 describe('clock sync', () => {

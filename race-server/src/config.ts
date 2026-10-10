@@ -14,8 +14,8 @@ export const AWAY_GRACE_MS = 20_000;
 export const CLOSED_LINGER_MS = 60_000;
 
 // ---- per-socket message cap (token bucket) --------------------------
-export const RATE_PER_SEC = 25;
-export const BURST = 40;
+export const RATE_PER_SEC = 30;
+export const BURST = 60;
 export const CLOSE_AFTER_DROPPED = 500;
 export const MAX_MESSAGE_BYTES = 2048;
 
@@ -75,9 +75,20 @@ export const START_BUFFER_MS = 800;
 // Asking the backend for candidates: give up after this. Generous because
 // Render's free plan can take a while to wake a sleeping backend.
 export const DRAW_TIMEOUT_MS = 25_000;
-// Until stage 3 (the real race), "racing" just holds this long, then the
-// room goes back to ready-up.
-export const PLACEHOLDER_RACE_MS = 8_000;
+
+// ---- the race ----------------------------------------------------------
+// Once someone finishes, everyone still running has this long.
+export const AFTER_FIRST_FINISH_MS = 30_000;
+// The whole race never runs longer than this, finish or not.
+export const RACE_CAP_MS = 120_000;
+// How long the results screen waits for "Next Race" before treating
+// anyone who hasn't clicked as having left.
+export const RESULTS_MS = 30_000;
+// Points by arrival order (1st..4th); a DNF scores 0.
+export const POINTS = [4, 3, 2, 1] as const;
+// Position messages: largest believable coordinate (the editor's world is
+// far smaller) - anything else is dropped.
+export const POS_LIMIT = 100_000;
 
 export const CATEGORIES = ["any", "easy", "normal", "hard", "very_hard", "tas"] as const;
 export type Category = (typeof CATEGORIES)[number];

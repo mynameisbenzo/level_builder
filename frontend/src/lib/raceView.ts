@@ -4,7 +4,14 @@
 
 export type JoinMode = 'host' | 'party' | 'public';
 
-export type RacePhase = 'lobby' | 'drawing' | 'voting' | 'loading' | 'countdown' | 'racing';
+export type RacePhase =
+	| 'lobby'
+	| 'drawing'
+	| 'voting'
+	| 'loading'
+	| 'countdown'
+	| 'racing'
+	| 'results';
 
 export const CATEGORY_VALUES = ['any', 'easy', 'normal', 'hard', 'very_hard', 'tas'] as const;
 export type Category = (typeof CATEGORY_VALUES)[number];
@@ -39,6 +46,41 @@ export interface Candidate {
 	thumbnailUrl: string | null;
 }
 
+export type RacerStatus = 'racing' | 'finished' | 'dnf';
+
+export interface RacerView {
+	userId: string;
+	username: string;
+	/** 0-3: which colour the others see this player as. */
+	slot: number;
+	status: RacerStatus;
+	deaths: number;
+	/** Arrival order among finishers (1 = first), or null. */
+	place: number | null;
+	/** Server-measured time from GO to arriving, or null. */
+	finishMs: number | null;
+	/** Points earned; null until the race ends. */
+	points: number | null;
+}
+
+export interface RaceView {
+	/** Server time (ms) of GO. */
+	startedAt: number;
+	firstFinishAt: number | null;
+	/** Server time (ms) the race ends at the latest, given what has happened so far. */
+	endsAt: number;
+	racers: RacerView[];
+}
+
+/** One player's running total in this room. */
+export interface ScoreRow {
+	userId: string;
+	username: string;
+	points: number;
+	wins: number;
+	races: number;
+}
+
 export interface RoundView {
 	n: number;
 	candidates: Candidate[];
@@ -53,6 +95,8 @@ export interface RoundView {
 	revealUntil: number;
 	/** Server time (ms) of the start, once the countdown is running. */
 	goAt: number | null;
+	/** Present from GO on, and through the results. */
+	race: RaceView | null;
 }
 
 export interface RoomSnapshot {
@@ -68,6 +112,8 @@ export interface RoomSnapshot {
 	players: RoomPlayer[];
 	invites: string[];
 	round: RoundView | null;
+	/** The room leaderboard, best first. */
+	scores: ScoreRow[];
 }
 
 export type LobbyStatus =
@@ -164,6 +210,42 @@ export function canInvite(state: LobbyState): boolean {
 	return amHost(state) || state.room.joinMode === 'party';
 }
 
+/** 1 -> "1st", 2 -> "2nd", 11 -> "11th". */
+export function ordinal(n: number): string {
+	const mod100 = n % 100;
+	if (mod100 >= 11 && mod100 <= 13) return `${n}th`;
+	switch (n % 10) {
+		case 1:
+			return `${n}st`;
+		case 2:
+			return `${n}nd`;
+		case 3:
+			return `${n}rd`;
+		default:
+			return `${n}th`;
+	}
+}
+
+/** m:ss.t for a race time in ms. */
+export function formatRaceTime(ms: number): string {
+	const clamped = Math.max(0, Math.floor(ms));
+	const minutes = Math.floor(clamped / 60000);
+	const seconds = Math.floor((clamped % 60000) / 1000);
+	const tenths = Math.floor((clamped % 1000) / 100);
+	return `${minutes}:${String(seconds).padStart(2, '0')}.${tenths}`;
+}
+
+/** Finishers by arrival, then everyone who didn't finish, fewest deaths first. */
+export function resultsOrder(racers: RacerView[]): RacerView[] {
+	return [...racers].sort((a, b) => {
+		const af = a.status === 'finished';
+		const bf = b.status === 'finished';
+		if (af !== bf) return af ? -1 : 1;
+		if (af && bf) return (a.place ?? 99) - (b.place ?? 99);
+		return a.deaths - b.deaths || a.slot - b.slot;
+	});
+}
+
 // ---- wording ----------------------------------------------------------
 
 export const JOIN_MODE_LABELS: Record<JoinMode, { title: string; hint: string }> = {
@@ -194,7 +276,7 @@ export function describeDenied(code: string | null): string {
 export function describeRemoved(reason: string | null): string {
 	switch (reason) {
 		case 'idle':
-			return 'You were removed from the room for not readying up within a minute. You can rejoin from the invite link.';
+			return "You were removed from the room for not readying up in time. You can rejoin from the invite link.";
 		case 'unloaded':
 			return "You were dropped from the race because your level didn't finish loading in time. You can rejoin from the invite link.";
 		default:
@@ -288,6 +370,10 @@ function noticeForEvent(event: { kind?: string; username?: string; reason?: stri
 			return 'The host left. The room will close when the current race ends.';
 		case 'roundAborted':
 			return describeAbort(event.reason);
+		case 'finished': {
+			const place = Number((event as { place?: number }).place);
+			return Number.isFinite(place) ? `${name} finished ${ordinal(place)}` : null;
+		}
 		default:
 			return null;
 	}

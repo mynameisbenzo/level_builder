@@ -169,6 +169,7 @@ h.send({ t: "leave" });
 await h.done;
 const hostChanged = await flood.waitFor((m) => m.t === "event" && m.event.kind === "hostChanged");
 check("host leaving hands the room to the paid player", hostChanged?.event.userId === "u-paid2");
+await sleep(150); // the roomState follows the event
 check("room stays open", flood.last("roomState")?.room.hostId === "u-paid2");
 
 // paid host leaves, only a free player is left -> room closes
@@ -190,6 +191,7 @@ const rh = new Client(code2, host);
 await rh.opened;
 await rh.waitFor((m) => m.t === "welcome");
 rh.send({ t: "setMode", mode: "public" });
+await rh.waitFor((m) => m.t === "roomState" && m.room.joinMode === "public"); // before the guest knocks
 const rg = new Client(code2, free1);
 await rg.opened;
 await rg.waitFor((m) => m.t === "welcome");
@@ -224,6 +226,49 @@ if (voting) {
   check("everyone loaded -> countdown with a go time in the future", !!countdown && countdown.room.round.goAt > countdown.room.serverNow, JSON.stringify(countdown?.room.round));
   const racing = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "racing", 8000);
   check("the room reaches racing at the go time", !!racing);
+
+  if (racing) {
+    const slots = racing.room.round.race.racers.map((r) => r.slot).sort();
+    check("every racer gets a slot 0-1 and starts with no deaths", JSON.stringify(slots) === "[0,1]" && racing.room.round.race.racers.every((r) => r.deaths === 0 && r.status === "racing"), JSON.stringify(racing.room.round.race));
+
+    rh.send({ t: "pos", x: 100, y: 200, s: 5 });
+    const relayed = await rg.waitFor((m) => m.t === "pos" && m.i === 0);
+    check("a position reaches the other racer tagged with the sender's slot", relayed?.x === 100 && relayed?.y === 200 && relayed?.s === 5, JSON.stringify(relayed));
+    await sleep(200);
+    check("positions are not echoed back to the sender", !rh.messages.some((m) => m.t === "pos"));
+    const seen = rg.messages.filter((m) => m.t === "pos").length;
+    rh.send({ t: "pos", x: 1e9, y: 0, s: 0 });
+    rh.send({ t: "pos", x: "left", y: 0, s: 0 });
+    await sleep(300);
+    check("nonsense positions are dropped", rg.messages.filter((m) => m.t === "pos").length === seen);
+
+    rg.send({ t: "death" });
+    const died = await rh.waitFor((m) => m.t === "roomState" && m.room.round?.race?.racers.some((r) => r.slot === 1 && r.deaths === 1));
+    check("a death is counted and shown to everyone", !!died);
+
+    rh.send({ t: "finish" });
+    const first = await rg.waitFor((m) => m.t === "roomState" && m.room.round?.race?.racers.some((r) => r.slot === 0 && r.status === "finished"));
+    const firstRacer = first?.room.round.race.racers.find((r) => r.slot === 0);
+    check("the first finisher is placed 1st with a server-measured time", firstRacer?.place === 1 && firstRacer?.finishMs > 0, JSON.stringify(firstRacer));
+    check("the first finish starts a 30 s clock", first?.room.round.race.endsAt - first?.room.round.race.firstFinishAt === 30000, JSON.stringify(first?.room.round.race));
+    const before = rg.messages.filter((m) => m.t === "pos").length;
+    rh.send({ t: "pos", x: 300, y: 300, s: 1 });
+    await sleep(300);
+    check("a finished racer's positions are no longer relayed", rg.messages.filter((m) => m.t === "pos").length === before);
+
+    rg.send({ t: "finish" });
+    const results = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "results", 4000);
+    const racers = results?.room.round.race.racers ?? [];
+    check("everyone finished -> results, 4 points for 1st and 3 for 2nd", racers.find((r) => r.slot === 0)?.points === 4 && racers.find((r) => r.slot === 1)?.points === 3, JSON.stringify(racers));
+    check("the room leaderboard has both players, best first", results?.room.scores.length === 2 && results.room.scores[0].points === 4 && results.room.scores[0].wins === 1, JSON.stringify(results?.room.scores));
+
+    rh.send({ t: "ready", ready: true });
+    await sleep(200);
+    check("one Next Race click waits for the other player", rh.last("roomState")?.room.phase === "results");
+    rg.send({ t: "ready", ready: true });
+    const again = await rh.waitFor((m) => m.t === "roomState" && m.room.phase === "drawing" && m.room.round?.n === 2, 4000);
+    check("both clicking Next Race starts round 2 with no lobby in between", !!again);
+  }
 }
 rh.send({ t: "closeRoom" });
 await rh.done;

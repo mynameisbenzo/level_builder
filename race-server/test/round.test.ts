@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   COUNTDOWN_MS,
   LOAD_TIMEOUT_MS,
-  PLACEHOLDER_RACE_MS,
+  RACE_CAP_MS,
+  RESULTS_MS,
   READY_TIMEOUT_MS,
   REVEAL_MS,
   SPIN_MS,
@@ -313,7 +314,7 @@ describe("loading and the countdown", () => {
     });
   });
 
-  it("goes to racing at the go time, and the placeholder race then returns everyone to ready-up", () => {
+  it("goes to racing at the go time, and the race ends at the cap if nobody finishes", () => {
     const { r, t } = toLoading();
     const tl = t + REVEAL_MS;
     r.loaded("h", "a", tl);
@@ -324,10 +325,20 @@ describe("loading and the countdown", () => {
     expect(r.state.phase).toBe("countdown");
     r.tick(goAt);
     expect(r.state.phase).toBe("racing");
-    expect(r.nextWake()).toBe(goAt + PLACEHOLDER_RACE_MS);
-    const events = r.tick(goAt + PLACEHOLDER_RACE_MS);
-    expect(events).toContainEqual({ kind: "roundEnded", n: 1 });
+    expect(r.nextWake()).toBe(goAt + RACE_CAP_MS);
+    const events = r.tick(goAt + RACE_CAP_MS);
+    expect(events).toContainEqual({ kind: "raceEnded", n: 1 });
+    expect(r.state.phase).toBe("results");
+    // Nobody finished: everyone is a DNF on 0 points, and the results wait for "Next Race".
+    expect(r.state.round?.race?.racers.map((x) => [x.status, x.points])).toEqual([
+      ["dnf", 0],
+      ["dnf", 0],
+    ]);
+    expect(r.nextWake()).toBe(goAt + RACE_CAP_MS + RESULTS_MS);
+    const later = r.tick(goAt + RACE_CAP_MS + RESULTS_MS);
+    expect(later).toContainEqual({ kind: "roundEnded", n: 1 });
     expect(r.state.phase).toBe("lobby");
+    expect(r.state.members.length).toBe(0); // nobody clicked Next Race in time
     expect(r.state.members.every((m) => !m.ready && !m.loaded)).toBe(true);
   });
 
@@ -353,11 +364,13 @@ describe("rounds and the paid-host rule", () => {
     r.loaded("p2", "a", tl);
     const goAt = r.state.round!.goAt!;
     r.tick(goAt);
-    r.tick(goAt + PLACEHOLDER_RACE_MS);
-    t = goAt + PLACEHOLDER_RACE_MS + 100;
-    everyoneReady(r, t);
+    r.tick(goAt + RACE_CAP_MS);
+    t = goAt + RACE_CAP_MS + 100;
+    everyoneReady(r, t); // Next Race counts as readying up
+    expect(r.state.phase).toBe("drawing");
     expect(r.state.round?.n).toBe(2);
     expect(r.state.round?.votes).toEqual({});
+    expect(r.state.round?.race).toBeNull();
   });
 
   it("when the host (the only paid player) leaves mid-countdown, the room closes after the round", () => {
@@ -372,7 +385,11 @@ describe("rounds and the paid-host rule", () => {
     expect(r.isClosed).toBe(false);
     const goAt = r.state.round!.goAt!;
     r.tick(goAt);
-    r.tick(goAt + PLACEHOLDER_RACE_MS);
+    r.finish("p2", goAt + 2000);
+    r.finish("p3", goAt + 3000);
+    expect(r.state.phase).toBe("results");
+    expect(r.isClosed).toBe(false);
+    r.tick(goAt + 3000 + RESULTS_MS);
     expect(r.state.closed).toBe("paid_host_left");
   });
 

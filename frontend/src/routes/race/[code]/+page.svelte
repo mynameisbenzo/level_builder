@@ -4,6 +4,7 @@
 	import { auth } from '$lib/auth.svelte';
 	import { withSession } from '$lib/endlessSession';
 	import Navbar from '$lib/Navbar.svelte';
+	import RaceGame from '$lib/RaceGame.svelte';
 	import RaceRound from '$lib/RaceRound.svelte';
 	import { fetchRaceTicket, ROOM_CODE_PATTERN, type RaceResult } from '$lib/raceApi';
 	import { defaultDeps, RaceSession } from '$lib/raceSession';
@@ -28,6 +29,7 @@
 	let session = $state.raw<RaceSession | null>(null);
 	let inviteName = $state('');
 	let copied = $state(false);
+	let loadError = $state<string | null>(null);
 
 	const host = $derived(amHost(lobby));
 	const mayInvite = $derived(canInvite(lobby));
@@ -209,7 +211,13 @@
 			{/if}
 		</section>
 
-		<RaceRound {lobby} {session} />
+		<RaceRound {lobby} {session} {loadError} />
+
+		{#if ['loading', 'countdown', 'racing', 'results'].includes(lobby.room.phase) && lobby.room.round?.chosen}
+			{#key lobby.room.round.n}
+				<RaceGame {lobby} {session} bind:loadError onLeave={leave} />
+			{/key}
+		{/if}
 
 		<section class="card">
 			<h2>Who can join</h2>

@@ -38,7 +38,10 @@ export const WS_BILLING_RATIO = 1;
 // (e.g. contact mode) gets its own row here.
 export type GameMode = "ghost";
 export const RACE_COST_ASSUMPTIONS: Record<GameMode, { players: number; hz: number; maxSeconds: number }> = {
-  ghost: { players: 4, hz: 20, maxSeconds: 150 },
+  // Sized for a typical race (2 players, ~90 s), not the worst case. A full
+  // 4-player 2-minute race can use ~9,600 units; the gap between the soft
+  // limit and the hard quota absorbs those. Measured: ~791 units per 2-player race.
+  ghost: { players: 2, hz: 20, maxSeconds: 90 },
 };
 
 export function raceCost(mode: GameMode): number {
